@@ -76,7 +76,7 @@ void genlog(int level, const char* s, Args... args)
   std::ostringstream str;
   dolog(str, s, args...);
   if(g_syslog)
-    syslog(level, "%s", str.str().c_str());
+    syslog(level|LOG_LOCAL6, "%s", str.str().c_str());
   std::cout<<str.str()<<std::endl;
 }
 
