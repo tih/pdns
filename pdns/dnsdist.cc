@@ -2548,6 +2548,12 @@ try
     }
   }
 
+#ifdef __NetBSD__
+  if(g_cmdLine.beSupervised) {
+    daemon(0, 0);
+  }
+#endif
+
   warnlog("dnsdist %s comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it according to the terms of the GPL version 2", VERSION);
   vector<string> vec;
   std::string acls;
