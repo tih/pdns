@@ -1,0 +1,5 @@
+Here: ./configure --with-modules='gpgsql' --with-dynmodules=''
+In pdns/recursordist: ./configure
+In pdns/dnsdistdist: ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit"
+...or...
+./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dns-over-tls
