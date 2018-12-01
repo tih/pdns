@@ -249,8 +249,8 @@ install_auth() {
     jq"
 
   run "cd .."
-  run "wget https://www.monshouwer.eu/download/3rd_party/jdnssec-tools-0.13.ecdsafix.tar.gz"
-  run "sudo tar xfz jdnssec-tools-0.13.ecdsafix.tar.gz --strip-components=1 -C /"
+  run "wget https://github.com/dblacka/jdnssec-tools/releases/download/0.14/jdnssec-tools-0.14.tar.gz"
+  run "sudo tar xfz jdnssec-tools-0.14.tar.gz --strip-components=1 -C /"
   run "cd ${TRAVIS_BUILD_DIR}"
 
   # pkcs11 test requirements / setup
@@ -395,7 +395,7 @@ build_auth() {
     --with-dynmodules='bind gmysql geoip gpgsql gsqlite3 ldap lua mydns opendbx pipe random remote tinydns godbc lua2' \
     --with-modules='' \
     --with-sqlite3 \
-    --enable-libsodium \
+    --with-libsodium \
     --enable-experimental-pkcs11 \
     --enable-remotebackend-zeromq \
     --enable-tools \
@@ -419,6 +419,7 @@ build_ixfrdist() {
     --enable-unit-tests \
     --disable-dependency-tracking \
     --disable-silent-rules"
+  run "make -C ext -k -j3"
   run "cd pdns"
   run "make -k -j3 ixfrdist"
   run "cd .."
@@ -438,7 +439,7 @@ build_recursor() {
   run "./configure \
     ${sanitizerflags} \
     --prefix=$PDNS_RECURSOR_DIR \
-    --enable-libsodium \
+    --with-libsodium \
     --enable-unit-tests \
     --enable-nod \
     --disable-silent-rules"
@@ -459,10 +460,10 @@ build_dnsdist(){
   run "./configure \
     ${sanitizerflags} \
     --enable-unit-tests \
-    --enable-libsodium \
+    --with-libsodium \
     --enable-dnscrypt \
     --enable-dns-over-tls \
-    --enable-fstrm \
+    --enable-dnstap \
     --prefix=$HOME/dnsdist \
     --disable-silent-rules"
   run "make -k -j3"
@@ -595,7 +596,7 @@ test_auth() {
 
   ### Lua rec tests ###
   run "cd regression-tests.auth-py"
-  run "./runtests"
+  run "./runtests -v || (cat pdns.log; false)"
   run "cd .."
 
   run "rm -f regression-tests/zones/*-slave.*" #FIXME
@@ -643,7 +644,6 @@ run "sudo apt-get -qq --no-install-recommends install \
   libluajit-5.1-dev \
   libedit-dev \
   libprotobuf-dev \
-  pandoc\
   protobuf-compiler"
 
 run "cd .."

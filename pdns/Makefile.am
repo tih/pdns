@@ -220,6 +220,7 @@ pdns_server_SOURCES = \
 	tcpreceiver.cc tcpreceiver.hh \
 	threadname.hh threadname.cc \
 	tsigverifier.cc tsigverifier.hh \
+	tsigutils.hh tsigutils.cc \
 	tkey.cc \
 	ueberbackend.cc ueberbackend.hh \
 	unix_semaphore.cc \
@@ -329,6 +330,7 @@ pdnsutil_SOURCES = \
 	statbag.cc \
 	stubresolver.cc stubresolver.hh \
 	threadname.hh threadname.cc \
+	tsigutils.hh tsigutils.cc \
 	ueberbackend.cc \
 	unix_utility.cc \
 	zoneparser-tng.cc
@@ -622,6 +624,8 @@ ixfrdist_SOURCES = \
 	ixfr.cc ixfr.hh \
 	ixfrdist.cc \
 	ixfrutils.cc ixfrutils.hh \
+	ixfrdist-stats.hh ixfrdist-stats.cc \
+	ixfrdist-web.hh ixfrdist-web.cc \
 	logger.cc logger.hh\
 	misc.cc misc.hh \
 	mplexer.hh \
@@ -635,11 +639,16 @@ ixfrdist_SOURCES = \
 	statbag.cc \
 	threadname.hh threadname.cc \
 	tsigverifier.cc tsigverifier.hh \
-	unix_utility.cc zoneparser-tng.cc
+	unix_utility.cc \
+	webserver.hh webserver.cc \
+	zoneparser-tng.cc
+
 
 ixfrdist_LDADD = \
 	$(BOOST_PROGRAM_OPTIONS_LIBS) \
+	$(JSON11_LIBS) \
 	$(LIBCRYPTO_LIBS) \
+	$(YAHTTP_LIBS) \
 	$(YAML_LIBS)
 
 ixfrdist_LDFLAGS = \
@@ -1252,6 +1261,7 @@ testrunner_SOURCES = \
 	dnssecsigner.cc \
 	dnswriter.cc \
 	ednsoptions.cc ednsoptions.hh \
+	ednscookies.cc ednscookies.hh \
 	ednssubnet.cc \
 	gettime.cc gettime.hh \
 	gss_context.cc gss_context.hh \
@@ -1291,6 +1301,7 @@ testrunner_SOURCES = \
 	test-misc_hh.cc \
 	test-nameserver_cc.cc \
 	test-packetcache_cc.cc \
+	test-packetcache_hh.cc \
 	test-rcpgenerator_cc.cc \
 	test-signers.cc \
 	test-sha_hh.cc \

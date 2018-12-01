@@ -383,20 +383,18 @@ bool PacketHandler::getBestWildcard(DNSPacket *p, SOAData& sd, const DNSName &ta
         DLOG(g_log<<"Have a wildcard LUA match"<<endl);
         
         auto rec=getRR<LUARecordContent>(rr.dr);
-        if(rec->d_type == QType::CNAME || rec->d_type == p->qtype.getCode()) {
+        if (!rec) {
+          continue;
+        }
+        if(rec->d_type == QType::CNAME || rec->d_type == p->qtype.getCode() || (p->qtype.getCode() == QType::ANY && rec->d_type != QType::RRSIG)) {
           //    noCache=true;
           DLOG(g_log<<"Executing Lua: '"<<rec->getCode()<<"'"<<endl);
-          try {
-            auto recvec=luaSynth(rec->getCode(), target, sd.qname, sd.domain_id, *p, rec->d_type);
-            for(const auto& r : recvec) {
-              rr.dr.d_type = rec->d_type; // might be CNAME
-              rr.dr.d_content = r;
-              rr.scopeMask = p->getRealRemote().getBits(); // this makes sure answer is a specific as your question
-              ret->push_back(rr);
-            }
-          }
-          catch(std::exception &e) {
-            ;
+          auto recvec=luaSynth(rec->getCode(), target, sd.qname, sd.domain_id, *p, rec->d_type);
+          for(const auto& r : recvec) {
+            rr.dr.d_type = rec->d_type; // might be CNAME
+            rr.dr.d_content = r;
+            rr.scopeMask = p->getRealRemote().getBits(); // this makes sure answer is a specific as your question
+            ret->push_back(rr);
           }
         }
       }
@@ -457,18 +455,17 @@ int PacketHandler::doAdditionalProcessingAndDropAA(DNSPacket *p, DNSPacket *r, c
         lookup = getRR<NSRecordContent>(i->dr)->getNS();
       else
         continue;
-      B.lookup(QType(d_doIPv6AdditionalProcessing ? QType::ANY : QType::A), lookup, p);
+
+      B.lookup(QType(d_doIPv6AdditionalProcessing ? QType::ANY : QType::A), lookup, p, sd.domain_id);
 
       while(B.get(rr)) {
         if(rr.dr.d_type != QType::A && rr.dr.d_type!=QType::AAAA)
           continue;
-        if(rr.domain_id!=i->domain_id && ::arg()["out-of-zone-additional-processing"]=="no") {
-          DLOG(g_log<<Logger::Warning<<"Not including out-of-zone additional processing of "<<i->dr.d_name<<" ("<<rr.dr.d_name<<")"<<endl);
-          continue; // not adding out-of-zone additional data
+        if(!rr.dr.d_name.isPartOf(soadata.qname)) {
+          // FIXME we might still pass on the record if it is occluded and the
+          // backend uses a single id for all zones
+          continue;
         }
-        
-        if(rr.auth && !rr.dr.d_name.isPartOf(soadata.qname)) // don't sign out of zone data using the main key 
-          rr.auth=false;
         rr.dr.d_place=DNSResourceRecord::ADDITIONAL;
         toAdd.push_back(rr);
       }
@@ -979,7 +976,6 @@ void PacketHandler::makeNXDomain(DNSPacket* p, DNSPacket* r, const DNSName& targ
   rr.domain_id=sd.domain_id;
   rr.dr.d_place=DNSResourceRecord::AUTHORITY;
   rr.auth = 1;
-  rr.scopeMask = sd.scopeMask;
   r->addRecord(rr);
 
   if(d_dk.isSecuredZone(sd.qname))
@@ -1363,7 +1359,10 @@ DNSPacket *PacketHandler::doQuestion(DNSPacket *p)
         if(!doLua)
           continue;
         auto rec=getRR<LUARecordContent>(rr.dr);
-        if(rec->d_type == QType::CNAME || rec->d_type == p->qtype.getCode()) {
+        if (!rec) {
+          continue;
+        }
+        if(rec->d_type == QType::CNAME || rec->d_type == p->qtype.getCode() || (p->qtype.getCode() == QType::ANY && rec->d_type != QType::RRSIG)) {
           noCache=true;
           try {
             auto recvec=luaSynth(rec->getCode(), target, sd.qname, sd.domain_id, *p, rec->d_type);

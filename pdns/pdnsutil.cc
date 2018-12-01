@@ -11,6 +11,7 @@
 #include <boost/program_options.hpp>
 #include <boost/assign/std/vector.hpp>
 #include <boost/assign/list_of.hpp>
+#include "tsigutils.hh"
 #include "dnsbackend.hh"
 #include "ueberbackend.hh"
 #include "arguments.hh"
@@ -252,7 +253,8 @@ int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, const vect
 
   bool isSecure=dk.isSecuredZone(zone);
   bool presigned=dk.isPresigned(zone);
-  bool validKeys=dk.checkKeys(zone);
+  vector<string> checkKeyErrors;
+  bool validKeys=dk.checkKeys(zone, &checkKeyErrors);
 
   uint64_t numerrors=0, numwarnings=0;
 
@@ -279,6 +281,9 @@ int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, const vect
   if (!validKeys) {
     numerrors++;
     cout<<"[Error] zone '" << zone << "' has at least one invalid DNS Private Key." << endl;
+    for (const auto &msg : checkKeyErrors) {
+      cout<<"\t"<<msg<<endl;
+    }
   }
 
   // Check for delegation in parent zone
@@ -428,35 +433,15 @@ int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, const vect
         checkOcclusion.insert({rr.qname, rr.qtype});
       }
     }
-
     if((rr.qtype.getCode() == QType::A || rr.qtype.getCode() == QType::AAAA) && !rr.qname.isWildcard() && !rr.qname.isHostname())
       cout<<"[Info] "<<rr.qname.toString()<<" record for '"<<rr.qtype.getName()<<"' is not a valid hostname."<<endl;
 
     // Check if the DNSNames that should be hostnames, are hostnames
-    if (rr.qtype.getCode() == QType::NS || rr.qtype.getCode() == QType::MX || rr.qtype.getCode() == QType::SRV) {
-      DNSName toCheck;
-      if (rr.qtype.getCode() == QType::SRV) {
-        vector<string> parts;
-        stringtok(parts, rr.getZoneRepresentation());
-        if (parts.size() == 4) toCheck = DNSName(parts[3]);
-      } else if (rr.qtype.getCode() == QType::MX) {
-        vector<string> parts;
-        stringtok(parts, rr.getZoneRepresentation());
-        if (parts.size() == 2) toCheck = DNSName(parts[1]);
-      } else {
-        toCheck = DNSName(rr.content);
-      }
-
-      if (toCheck.empty()) {
-        cout<<"[Warning] "<<rr.qtype.getName()<<" record in zone '"<<zone<<"': unable to extract hostname from content."<<endl;
-        numwarnings++;
-      }
-      else if ((rr.qtype.getCode() == QType::MX || rr.qtype.getCode() == QType::SRV) && toCheck == g_rootdnsname) {
-        // allow null MX/SRV
-      } else if(!toCheck.isHostname()) {
-        cout<<"[Warning] "<<rr.qtype.getName()<<" record in zone '"<<zone<<"' has non-hostname content '"<<toCheck.toString()<<"'."<<endl;
-        numwarnings++;
-      }
+    try {
+      checkHostnameCorrectness(rr);
+    } catch (const std::exception& e) {
+      cout << "[Warning] " << rr.qtype.getName() << " record in zone '" << zone << ": " << e.what() << endl;
+      numwarnings++;
     }
 
     if (rr.qtype.getCode() == QType::CNAME) {
@@ -1186,7 +1171,9 @@ int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
     if(std::to_string(rr.ttl)==cmds[4]) {
       contentStart++;
     }
-    else rr.ttl = ::arg().asNum("default-ttl");
+    else {
+      rr.ttl = ::arg().asNum("default-ttl");
+    }
   }
 
   di.backend->lookup(QType(QType::ANY), rr.qname, 0, di.id);
@@ -1217,7 +1204,7 @@ int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
     cout<<"Current records for "<<rr.qname<<" IN "<<rr.qtype.getName()<<" will be replaced"<<endl;
   }
   for(auto i = contentStart ; i < cmds.size() ; ++i) {
-    rr.content = DNSRecordContent::mastermake(rr.qtype.getCode(), 1, cmds[i])->getZoneRepresentation(true);
+    rr.content = DNSRecordContent::mastermake(rr.qtype.getCode(), QClass::IN, cmds[i])->getZoneRepresentation(true);
 
     newrrs.push_back(rr);
   }
@@ -2779,34 +2766,14 @@ try
       return 0;
     }
     DNSName name(cmds[1]);
-    string algo = cmds[2];
+    DNSName algo(cmds[2]);
     string key;
-    char tmpkey[64];
-
-    size_t klen = 0;
-    if (algo == "hmac-md5") {
-      klen = 32;
-    } else if (algo == "hmac-sha1") {
-      klen = 32;
-    } else if (algo == "hmac-sha224") {
-      klen = 32;
-    } else if (algo == "hmac-sha256") {
-      klen = 64;
-    } else if (algo == "hmac-sha384") {
-      klen = 64;
-    } else if (algo == "hmac-sha512") {
-      klen = 64;
-    } else {
-      cerr << "Cannot generate key for " << algo << endl;
-      cerr << usage << endl;
+    try {
+      key = makeTSIGKey(algo);
+    } catch(const PDNSException& e) {
+      cerr << "Could not create new TSIG key " << name << " " << algo << ": "<< e.reason << endl;
       return 1;
     }
-
-    cerr << "Generating new key with " << klen << " bytes" << endl;
-    for(size_t i = 0; i < klen; i+=4) {
-      *(unsigned int*)(tmpkey+i) = dns_random(0xffffffff);
-    }
-    key = Base64Encode(std::string(tmpkey, klen));
 
     UeberBackend B("default");
     if (B.setTSIGKey(name, DNSName(algo), key)) { // you are feeling bored, put up DNSName(algo) up earlier
