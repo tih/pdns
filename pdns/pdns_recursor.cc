@@ -67,6 +67,7 @@
 #include "malloctrace.hh"
 #endif
 #include <netinet/tcp.h>
+#include "capabilities.hh"
 #include "dnsparser.hh"
 #include "dnswriter.hh"
 #include "dnsrecords.hh"
@@ -87,6 +88,7 @@
 #include "rec-lua-conf.hh"
 #include "ednsoptions.hh"
 #include "gettime.hh"
+#include "pubsuffix.hh"
 #ifdef NOD_ENABLED
 #include "nod.hh"
 #endif /* NOD_ENABLED */
@@ -837,7 +839,7 @@ static void handleRPZCustom(const DNSRecord& spoofed, const QType& qtype, SyncRe
     bool oldWantsRPZ = sr.getWantsRPZ();
     sr.setWantsRPZ(false);
     vector<DNSRecord> ans;
-    res = sr.beginResolve(DNSName(spoofed.d_content->getZoneRepresentation()), qtype, 1, ans);
+    res = sr.beginResolve(DNSName(spoofed.d_content->getZoneRepresentation()), qtype, QClass::IN, ans);
     for (const auto& rec : ans) {
       if(rec.d_place == DNSResourceRecord::ANSWER) {
         ret.push_back(rec);
@@ -1110,6 +1112,21 @@ static void startDoResolve(void *p)
         DNSSECOK=true;
         g_stats.dnssecQueries++;
       }
+      if (dc->d_mdp.d_header.cd) {
+        /* Per rfc6840 section 5.9, "When processing a request with
+           the Checking Disabled (CD) bit set, a resolver SHOULD attempt
+           to return all response data, even data that has failed DNSSEC
+           validation. */
+        ++g_stats.dnssecCheckDisabledQueries;
+      }
+      if (dc->d_mdp.d_header.ad) {
+        /* Per rfc6840 section 5.7, "the AD bit in a query as a signal
+           indicating that the requester understands and is interested in the
+           value of the AD bit in the response.  This allows a requester to
+           indicate that it understands the AD bit without also requesting
+           DNSSEC data via the DO bit. */
+        ++g_stats.dnssecAuthenticDataQueries;
+      }
     } else {
       // Ignore the client-set CD flag
       pw.getHeader()->cd=0;
@@ -1129,7 +1146,7 @@ static void startDoResolve(void *p)
     /* preresolve expects res (dq.rcode) to be set to RCode::NoError by default */
     int res = RCode::NoError;
     DNSFilterEngine::Policy appliedPolicy;
-    DNSRecord spoofed;
+    std::vector<DNSRecord> spoofed;
     RecursorLua4::DNSQuestion dq(dc->d_source, dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_tcp, variableAnswer, wantsRPZ, logResponse);
     dq.ednsFlags = &edo.d_extFlags;
     dq.ednsOptions = &ednsOpts;
@@ -1207,9 +1224,11 @@ static void startDoResolve(void *p)
           case DNSFilterEngine::PolicyKind::Custom:
             g_stats.policyResults[appliedPolicy.d_kind]++;
             res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecord(dc->d_mdp.d_qname);
-            ret.push_back(spoofed);
-            handleRPZCustom(spoofed, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
+            for (const auto& dr : spoofed) {
+              ret.push_back(dr);
+              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            }
             goto haveAnswer;
           case DNSFilterEngine::PolicyKind::Truncate:
             if(!dc->d_tcp) {
@@ -1267,9 +1286,11 @@ static void startDoResolve(void *p)
           case DNSFilterEngine::PolicyKind::Custom:
             ret.clear();
             res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecord(dc->d_mdp.d_qname);
-            ret.push_back(spoofed);
-            handleRPZCustom(spoofed, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
+            for (const auto& dr : spoofed) {
+              ret.push_back(dr);
+              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            }
             goto haveAnswer;
         }
       }
@@ -1325,9 +1346,11 @@ static void startDoResolve(void *p)
           case DNSFilterEngine::PolicyKind::Custom:
             ret.clear();
             res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecord(dc->d_mdp.d_qname);
-            ret.push_back(spoofed);
-            handleRPZCustom(spoofed, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
+            for (const auto& dr : spoofed) {
+              ret.push_back(dr);
+              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
+            }
             goto haveAnswer;
         }
       }
@@ -1469,6 +1492,18 @@ static void startDoResolve(void *p)
     }
   sendit:;
 
+    if(g_useIncomingECS && dc->d_ecsFound && !sr.wasVariable() && !variableAnswer) {
+      //      cerr<<"Stuffing in a 0 scope because answer is static"<<endl;
+      EDNSSubnetOpts eo;
+      eo.source = dc->d_ednssubnet.source;
+      ComboAddress sa;
+      sa.reset();
+      sa.sin4.sin_family = eo.source.getNetwork().sin4.sin_family;
+      eo.scope = Netmask(sa, 0);
+
+      returnedEdnsOptions.push_back(make_pair(EDNSOptionCode::ECS, makeEDNSSubnetOptsString(eo)));
+    }
+
     if (haveEDNS) {
       /* we try to add the EDNS OPT RR even for truncated answers,
          as rfc6891 states:
@@ -1538,6 +1573,9 @@ static void startDoResolve(void *p)
       if(sendmsg(dc->d_socket, &msgh, 0) < 0 && g_logCommonErrors) 
         g_log<<Logger::Warning<<"Sending UDP reply to client "<<dc->getRemote()<<" failed with: "<<strerror(errno)<<endl;
 
+      if(variableAnswer || sr.wasVariable()) {
+        g_stats.variableResponses++;
+      }
       if(!SyncRes::s_nopacketcache && !variableAnswer && !sr.wasVariable() ) {
         t_packetCache->insertResponsePacket(dc->d_tag, dc->d_qhash, std::move(dc->d_query), dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_mdp.d_qclass,
                                             string((const char*)&*packet.begin(), packet.size()),
@@ -2407,7 +2445,7 @@ static void makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tcp
 #ifdef TCP_DEFER_ACCEPT
     if(setsockopt(fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &tmp, sizeof tmp) >= 0) {
       if(i==locals.begin())
-        g_log<<Logger::Error<<"Enabled TCP data-ready filter for (slight) DoS protection"<<endl;
+        g_log<<Logger::Info<<"Enabled TCP data-ready filter for (slight) DoS protection"<<endl;
     }
 #endif
 
@@ -2446,9 +2484,9 @@ static void makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tcp
     // we don't need to update g_listenSocketsAddresses since it doesn't work for TCP/IP:
     //  - fd is not that which we know here, but returned from accept()
     if(sin.sin4.sin_family == AF_INET)
-      g_log<<Logger::Error<<"Listening for TCP queries on "<< sin.toString() <<":"<<st.port<<endl;
+      g_log<<Logger::Info<<"Listening for TCP queries on "<< sin.toString() <<":"<<st.port<<endl;
     else
-      g_log<<Logger::Error<<"Listening for TCP queries on ["<< sin.toString() <<"]:"<<st.port<<endl;
+      g_log<<Logger::Info<<"Listening for TCP queries on ["<< sin.toString() <<"]:"<<st.port<<endl;
   }
 }
 
@@ -2520,9 +2558,9 @@ static void makeUDPServerSockets(deferredAdd_t& deferredAdds)
     deferredAdds.push_back(make_pair(fd, handleNewUDPQuestion));
     g_listenSocketsAddresses[fd]=sin;  // this is written to only from the startup thread, not from the workers
     if(sin.sin4.sin_family == AF_INET)
-      g_log<<Logger::Error<<"Listening for UDP queries on "<< sin.toString() <<":"<<st.port<<endl;
+      g_log<<Logger::Info<<"Listening for UDP queries on "<< sin.toString() <<":"<<st.port<<endl;
     else
-      g_log<<Logger::Error<<"Listening for UDP queries on ["<< sin.toString() <<"]:"<<st.port<<endl;
+      g_log<<Logger::Info<<"Listening for UDP queries on ["<< sin.toString() <<"]:"<<st.port<<endl;
   }
 }
 
@@ -3125,7 +3163,7 @@ static string* doReloadLuaScript()
   try {
     if(fname.empty()) {
       t_pdl.reset();
-      g_log<<Logger::Error<<t_id<<" Unloaded current lua script"<<endl;
+      g_log<<Logger::Info<<t_id<<" Unloaded current lua script"<<endl;
       return new string("unloaded\n");
     }
     else {
@@ -3285,7 +3323,7 @@ void parseACLs()
   }
   else {
     if(::arg()["local-address"]!="127.0.0.1" && ::arg().asNum("local-port")==53)
-      g_log<<Logger::Error<<"WARNING: Allowing queries from all IP addresses - this can be a security risk!"<<endl;
+      g_log<<Logger::Warning<<"WARNING: Allowing queries from all IP addresses - this can be a security risk!"<<endl;
     allowFrom = nullptr;
   }
 
@@ -3517,7 +3555,7 @@ static int serviceMain(int argc, char*argv[])
   }
 
   parseACLs();
-  sortPublicSuffixList();
+  initPublicSuffixList(::arg()["public-suffix-list-file"]);
 
   if(!::arg()["dont-query"].empty()) {
     vector<string> ips;
@@ -3757,7 +3795,7 @@ static int serviceMain(int argc, char*argv[])
       exit(1);
     }
     else
-      g_log<<Logger::Error<<"Chrooted to '"<<::arg()["chroot"]<<"'"<<endl;
+      g_log<<Logger::Info<<"Chrooted to '"<<::arg()["chroot"]<<"'"<<endl;
   }
 
   s_pidfname=::arg()["socket-dir"]+"/"+s_programname+".pid";
@@ -3768,6 +3806,16 @@ static int serviceMain(int argc, char*argv[])
   makeControlChannelSocket( ::arg().asNum("processes") > 1 ? forks : -1);
 
   Utility::dropUserPrivs(newuid);
+  try {
+    /* we might still have capabilities remaining, for example if we have been started as root
+       without --setuid (please don't do that) or as an unprivileged user with ambient capabilities
+       like CAP_NET_BIND_SERVICE.
+    */
+    dropCapabilities();
+  }
+  catch(const std::exception& e) {
+    g_log<<Logger::Warning<<e.what()<<endl;
+  }
 
   startLuaConfigDelayedThreads(delayedLuaThreads, g_luaconfs.getCopy().generation);
 
@@ -3956,7 +4004,7 @@ try
         exit(99);
       }
     }
-    g_log<<Logger::Error<<"Enabled '"<< t_fdm->getName() << "' multiplexer"<<endl;
+    g_log<<Logger::Info<<"Enabled '"<< t_fdm->getName() << "' multiplexer"<<endl;
   }
   else {
 
@@ -4097,7 +4145,7 @@ int main(int argc, char **argv)
     ::arg().set("trace","if we should output heaps of logging. set to 'fail' to only log failing domains")="off";
     ::arg().set("dnssec", "DNSSEC mode: off/process-no-validate (default)/process/log-fail/validate")="process-no-validate";
     ::arg().set("dnssec-log-bogus", "Log DNSSEC bogus validations")="no";
-    ::arg().set("signature-inception-skew", "Allow the signture inception to be off by this number of seconds")="60";
+    ::arg().set("signature-inception-skew", "Allow the signature inception to be off by this number of seconds")="60";
     ::arg().set("daemon","Operate as a daemon")="no";
     ::arg().setSwitch("write-pid","Write a PID file")="yes";
     ::arg().set("loglevel","Amount of logging. Higher is more. Do not set below 3")="6";
@@ -4185,8 +4233,8 @@ int main(int argc, char **argv)
     ::arg().setSwitch( "any-to-tcp","Answer ANY queries with tc=1, shunting to TCP" )="no";
     ::arg().setSwitch( "lowercase-outgoing","Force outgoing questions to lowercase")="no";
     ::arg().setSwitch("gettag-needs-edns-options", "If EDNS Options should be extracted before calling the gettag() hook")="no";
-    ::arg().set("udp-truncation-threshold", "Maximum UDP response size before we truncate")="1680";
-    ::arg().set("edns-outgoing-bufsize", "Outgoing EDNS buffer size")="1680";
+    ::arg().set("udp-truncation-threshold", "Maximum UDP response size before we truncate")="1232";
+    ::arg().set("edns-outgoing-bufsize", "Outgoing EDNS buffer size")="1232";
     ::arg().set("minimum-ttl-override", "Set under adverse conditions, a minimum TTL")="0";
     ::arg().set("max-qperq", "Maximum outgoing queries per query")="50";
     ::arg().set("max-total-msec", "Maximum total wall-clock time per query in milliseconds, 0 for unlimited")="7000";
@@ -4215,6 +4263,7 @@ int main(int argc, char **argv)
     ::arg().set("udp-source-port-max", "Maximum UDP port to bind on")="65535";
     ::arg().set("udp-source-port-avoid", "List of comma separated UDP port number to avoid")="11211";
     ::arg().set("rng", "Specify random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
+    ::arg().set("public-suffix-list-file", "Path to the Public Suffix List file, if any")="";
 #ifdef NOD_ENABLED
     ::arg().set("new-domain-tracking", "Track newly observed domains (i.e. never seen before).")="no";
     ::arg().set("new-domain-log", "Log newly observed domains.")="yes";

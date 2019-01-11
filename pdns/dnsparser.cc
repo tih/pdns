@@ -63,7 +63,7 @@ public:
     str<<"\\# "<<(unsigned int)d_record.size()<<" ";
     char hex[4];
     for(size_t n=0; n<d_record.size(); ++n) {
-      snprintf(hex,sizeof(hex)-1, "%02x", d_record.at(n));
+      snprintf(hex, sizeof(hex), "%02x", d_record.at(n));
       str << hex;
     }
     return str.str();
@@ -496,10 +496,15 @@ string PacketReader::getUnquotedText(bool lenField)
 void PacketReader::xfrBlob(string& blob)
 try
 {
-  if(d_recordlen && !(d_pos == (d_startrecordpos + d_recordlen)))
+  if(d_recordlen && !(d_pos == (d_startrecordpos + d_recordlen))) {
+    if (d_pos > (d_startrecordpos + d_recordlen)) {
+      throw std::out_of_range("xfrBlob out of record range");
+    }
     blob.assign(&d_content.at(d_pos), &d_content.at(d_startrecordpos + d_recordlen - 1 ) + 1);
-  else
+  }
+  else {
     blob.clear();
+  }
 
   d_pos = d_startrecordpos + d_recordlen;
 }
@@ -515,12 +520,17 @@ void PacketReader::xfrBlobNoSpaces(string& blob, int length) {
 void PacketReader::xfrBlob(string& blob, int length)
 {
   if(length) {
+    if (length < 0) {
+      throw std::out_of_range("xfrBlob out of range (negative length)");
+    }
+
     blob.assign(&d_content.at(d_pos), &d_content.at(d_pos + length - 1 ) + 1 );
-    
+
     d_pos += length;
   }
-  else 
+  else {
     blob.clear();
+  }
 }
 
 

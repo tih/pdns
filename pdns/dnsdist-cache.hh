@@ -23,6 +23,8 @@
 
 #include <atomic>
 #include <unordered_map>
+
+#include "iputils.hh"
 #include "lock.hh"
 
 struct DNSQuestion;
@@ -51,9 +53,11 @@ public:
   uint64_t getTTLTooShorts() const { return d_ttlTooShorts; }
   uint64_t getEntriesCount();
   uint64_t dump(int fd);
+  bool isECSParsingEnabled() const { return d_parseECS; }
 
   static uint32_t getMinTTL(const char* packet, uint16_t length, bool* seenNoDataSOA);
   static uint32_t getKey(const std::string& qname, uint16_t consumed, const unsigned char* packet, uint16_t packetLen, bool tcp);
+  static bool getClientSubnet(const char* packet, unsigned int consumed, uint16_t len, boost::optional<Netmask>& subnet);
 
 private:
 
@@ -95,7 +99,6 @@ private:
     std::atomic<uint64_t> d_entriesCount;
   };
 
-  static bool getClientSubnet(const char* packet, unsigned int consumed, uint16_t len, boost::optional<Netmask>& subnet);
   bool cachedValueMatches(const CacheValue& cachedValue, uint16_t queryFlags, const DNSName& qname, uint16_t qtype, uint16_t qclass, bool tcp, bool dnssecOK, const boost::optional<Netmask>& subnet) const;
   uint32_t getShardIndex(uint32_t key) const;
   void insertLocked(CacheShard& shard, uint32_t key, CacheValue& newValue);

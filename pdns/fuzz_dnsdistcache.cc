@@ -19,18 +19,29 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef _MD5_H
-#define _MD5_H
 
-#include <string>
-#include <stdint.h>
-#include <openssl/md5.h>
+#include "dnsdist-cache.hh"
 
-inline std::string pdns_md5sum(const std::string& input)
-{
-  unsigned char result[16] = {0};
-  MD5(reinterpret_cast<const unsigned char*>(input.c_str()), input.length(), result);
-  return std::string(result, result + sizeof result);
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+
+  if (size > std::numeric_limits<uint16_t>::max()) {
+    return 0;
+  }
+
+  /* dnsdist's version */
+  try {
+    uint16_t qtype;
+    uint16_t qclass;
+    unsigned int consumed;
+    DNSName qname(reinterpret_cast<const char*>(data), size, sizeof(dnsheader), false, &qtype, &qclass, &consumed);
+    DNSDistPacketCache::getKey(qname.toString(), consumed, data, size, false);
+    boost::optional<Netmask> subnet;
+    DNSDistPacketCache::getClientSubnet(reinterpret_cast<const char*>(data), consumed, size, subnet);
+  }
+  catch(const std::exception& e) {
+  }
+  catch(const PDNSException& e) {
+  }
+
+  return 0;
 }
-
-#endif /* md5.h */

@@ -312,6 +312,7 @@ install_auth() {
     ruby-json \
     rubygems-integration \
     socat"
+  run "gem update --system"
   run "gem install bundler --no-rdoc --no-ri"
   run "cd modules/remotebackend"
   run "ruby -S bundle install"
@@ -401,6 +402,7 @@ build_auth() {
     --enable-tools \
     --enable-unit-tests \
     --enable-backend-unit-tests \
+    --enable-fuzz-targets \
     --disable-dependency-tracking \
     --disable-silent-rules"
   run "make -k dist"
@@ -596,7 +598,7 @@ test_auth() {
 
   ### Lua rec tests ###
   run "cd regression-tests.auth-py"
-  run "./runtests -v || (cat pdns.log; false)"
+  run "./runtests -v || (cat ./configs/auth/pdns.log; false)"
   run "cd .."
 
   run "rm -f regression-tests/zones/*-slave.*" #FIXME
@@ -638,6 +640,11 @@ test_repo(){
   run "git status | grep -q clean"
 }
 
+test_none() {
+  run "build-scripts/test-spelling-unknown-words"
+}
+
+if [ $PDNS_BUILD_PRODUCT != "none" ]; then
 # global build requirements
 run "sudo apt-get -qq --no-install-recommends install \
   libboost-all-dev \
@@ -662,17 +669,21 @@ then
   elif [ "${PDNS_BUILD_PRODUCT}" = "dnsdist" ]; then
     sanitizerflags="${sanitizerflags} --enable-asan --enable-ubsan"
   elif [ "${PDNS_BUILD_PRODUCT}" = "ixfrdist" ]; then
-    sanitizerflags="${sanitizerflags} --enable-asan"
+    sanitizerflags="${sanitizerflags} --enable-asan --enable-ubsan"
   fi
 fi
 export CFLAGS=$compilerflags
 export CXXFLAGS=$compilerflags
 export sanitizerflags
-export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+# We need a suppression for UndefinedBehaviorSanitizer with ixfrdist,
+# because of a vptr bug fixed in Boost 1.57.0:
+# https://github.com/boostorg/any/commit/c92ab03ab35775b6aab30f6cdc3d95b7dd8fc5c6
+export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:suppressions=${TRAVIS_BUILD_DIR}/build-scripts/UBSan.supp"
 
 install_$PDNS_BUILD_PRODUCT
 
 build_$PDNS_BUILD_PRODUCT
+fi
 
 test_$PDNS_BUILD_PRODUCT
 

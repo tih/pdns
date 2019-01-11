@@ -336,6 +336,10 @@ void setupLuaConfig(bool client)
 			  ret->checkFunction= boost::get<DownstreamState::checkfunc_t>(vars["checkFunction"]);
 			}
 
+			if(vars.count("checkTimeout")) {
+			  ret->checkTimeout = std::stoi(boost::get<string>(vars["checkTimeout"]));
+			}
+
 			if(vars.count("setCD")) {
 			  ret->setCD=boost::get<bool>(vars["setCD"]);
 			}
@@ -346,6 +350,10 @@ void setupLuaConfig(bool client)
 
 			if(vars.count("useClientSubnet")) {
 			  ret->useECS=boost::get<bool>(vars["useClientSubnet"]);
+			}
+
+			if(vars.count("disableZeroScope")) {
+			  ret->disableZeroScope=boost::get<bool>(vars["disableZeroScope"]);
 			}
 
 			if(vars.count("ipBindAddrNoPort")) {
@@ -1625,11 +1633,11 @@ void setupLuaConfig(bool client)
           }
 
           if (vars->count("ticketsKeysRotationDelay")) {
-            frontend->d_ticketsKeyRotationDelay = std::stoi(boost::get<const string>((*vars)["ticketsKeysRotationDelay"]));
+            frontend->d_ticketsKeyRotationDelay = boost::get<int>((*vars)["ticketsKeysRotationDelay"]);
           }
 
           if (vars->count("numberOfTicketsKeys")) {
-            frontend->d_numberOfTicketsKeys = std::stoi(boost::get<const string>((*vars)["numberOfTicketsKeys"]));
+            frontend->d_numberOfTicketsKeys = boost::get<int>((*vars)["numberOfTicketsKeys"]);
           }
 
           if (vars->count("sessionTickets")) {

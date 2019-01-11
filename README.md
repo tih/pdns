@@ -1,4 +1,4 @@
-PowerDNS is copyright © 2001-2018 by PowerDNS.COM BV and lots of
+PowerDNS is copyright © 2001-2019 by PowerDNS.COM BV and lots of
 contributors, using the GNU GPLv2 license (see NOTICE for the
 exact license and exception used).
 
@@ -211,7 +211,7 @@ brew install boost lua pkg-config ragel openssl
 make -j4
 ```
 
-Additionally, for PostgreSQL support, run `brew install postgresql` and add `--with-modules="gpsql"` to `./configure`.
+Additionally, for PostgreSQL support, run `brew install postgresql` and add `--with-modules="gpgsql"` to `./configure`.
 For MySQL support, run `brew install mariadb` and add `--with-modules="gmysql"` to `./configure`.
 
 Linux notes

@@ -98,7 +98,18 @@ class RPZServer(object):
                     dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % oldSerial),
                     dns.rrset.from_text('d.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.A, '192.0.2.1'),
                     dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % newSerial),
-                    dns.rrset.from_text('e.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.A, '192.0.2.1'),
+                    dns.rrset.from_text('e.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.A, '192.0.2.1', '192.0.2.2'),
+                    dns.rrset.from_text('e.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.MX, '10 mx.example.'),
+                    dns.rrset.from_text('f.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.CNAME, 'e.example.'),
+                    dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % newSerial)
+                    ]
+            elif newSerial == 7:
+                records = [
+                    dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % newSerial),
+                    dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % oldSerial),
+                    dns.rrset.from_text('e.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.A, '192.0.2.1', '192.0.2.2'),
+                    dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % newSerial),
+                    dns.rrset.from_text('e.example.zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.A, '192.0.2.2'),
                     dns.rrset.from_text('zone.rpz.', 60, dns.rdataclass.IN, dns.rdatatype.SOA, 'ns.zone.rpz. hostmaster.zone.rpz. %d 3600 3600 3600 1' % newSerial)
                     ]
 
@@ -177,6 +188,17 @@ class RPZRecursorTest(RecursorTest):
     _wsPassword = 'secretpassword'
     _apiKey = 'secretapikey'
     _confdir = 'RPZ'
+    _lua_dns_script_file = """
+
+    function prerpz(dq)
+      -- disable the RPZ policy named 'zone.rpz' for AD=1 queries
+      if dq:getDH():getAD() then
+        dq:discardPolicy('zone.rpz.')
+      end
+      return false
+    end
+    """
+
     _config_template = """
 auth-zones=example=configs/%s/example.zone
 webserver=yes
@@ -217,9 +239,11 @@ e 3600 IN A 192.0.2.42
     def tearDownClass(cls):
         cls.tearDownRecursor()
 
-    def checkBlocked(self, name, shouldBeBlocked=True):
+    def checkBlocked(self, name, shouldBeBlocked=True, adQuery=False):
         query = dns.message.make_query(name, 'A', want_dnssec=True)
         query.flags |= dns.flags.CD
+        if adQuery:
+            query.flags |= dns.flags.AD
         res = self.sendUDPQuery(query)
         if shouldBeBlocked:
             expected = dns.rrset.from_text(name, 0, dns.rdataclass.IN, 'A', '192.0.2.1')
@@ -228,8 +252,22 @@ e 3600 IN A 192.0.2.42
 
         self.assertRRsetInAnswer(res, expected)
 
-    def checkNotBlocked(self, name):
-        self.checkBlocked(name, False)
+    def checkNotBlocked(self, name, adQuery=False):
+        self.checkBlocked(name, False, adQuery)
+
+    def checkCustom(self, qname, qtype, expected):
+        query = dns.message.make_query(qname, qtype, want_dnssec=True)
+        query.flags |= dns.flags.CD
+        res = self.sendUDPQuery(query)
+
+        self.assertRRsetInAnswer(res, expected)
+
+    def checkNoData(self, qname, qtype):
+        query = dns.message.make_query(qname, qtype, want_dnssec=True)
+        query.flags |= dns.flags.CD
+        res = self.sendUDPQuery(query)
+
+        self.assertEqual(len(res.answer), 0)
 
     def waitUntilCorrectSerialIsLoaded(self, serial, timeout=5):
         global rpzServer
@@ -305,11 +343,28 @@ e 3600 IN A 192.0.2.42
         self.checkNotBlocked('c.example.')
         self.checkBlocked('d.example.')
 
-        # sixth zone, only e should be blocked
+        # sixth zone, only e should be blocked, f is a local data record
         self.waitUntilCorrectSerialIsLoaded(6)
-        self.checkRPZStats(6, 1, 2, self._xfrDone)
+        self.checkRPZStats(6, 2, 2, self._xfrDone)
         self.checkNotBlocked('a.example.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
         self.checkNotBlocked('d.example.')
-        self.checkBlocked('e.example.')
+        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.1', '192.0.2.2'))
+        self.checkCustom('e.example.', 'MX', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'MX', '10 mx.example.'))
+        self.checkNoData('e.example.', 'AAAA')
+        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'))
+
+        # seventh zone, e should only have one A
+        self.waitUntilCorrectSerialIsLoaded(7)
+        self.checkRPZStats(7, 2, 2, self._xfrDone)
+        self.checkNotBlocked('a.example.')
+        self.checkNotBlocked('b.example.')
+        self.checkNotBlocked('c.example.')
+        self.checkNotBlocked('d.example.')
+        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.2'))
+        self.checkCustom('e.example.', 'MX', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'MX', '10 mx.example.'))
+        self.checkNoData('e.example.', 'AAAA')
+        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'))
+        # check that the policy is disabled for AD=1 queries
+        self.checkNotBlocked('e.example.', True)

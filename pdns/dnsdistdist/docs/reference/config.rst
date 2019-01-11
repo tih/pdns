@@ -310,6 +310,8 @@ Servers
     - Added ``sockets`` to server_table
     - Added ``checkFunction`` to server_table
 
+  .. versionchanged:: 1.3.4
+    - Added ``checkTimeout`` to server_table
 
   Add a new backend server. Call this function with either a string::
 
@@ -338,6 +340,7 @@ Servers
       checkName=STRING,      -- Use STRING as QNAME in the health-check query, default: "a.root-servers.net."
       checkType=STRING,      -- Use STRING as QTYPE in the health-check query, default: "A"
       checkFunction=FUNCTION -- Use this function to dynamically set the QNAME, QTYPE and QCLASS to use in the health-check query (see :ref:`Healthcheck`)
+      checkTimeout=NUM       -- The timeout (in milliseconds) of a health-check query, default: 1000 (1s)
       setCD=BOOL,            -- Set the CD (Checking Disabled) flag in the health-check query, default: false
       maxCheckFailures=NUM,  -- Allow NUM check failures before declaring the backend down, default: 1
       mustResolve=BOOL,      -- Set to true when the health check MUST return a NOERROR RCODE and an answer
@@ -349,7 +352,8 @@ Servers
                              --   "address@interface", e.g. "192.0.2.2@eth0"
       addXPF=NUM,            -- Add the client's IP address and port to the query, along with the original destination address and port,
                              -- using the experimental XPF record from `draft-bellis-dnsop-xpf <https://datatracker.ietf.org/doc/draft-bellis-dnsop-xpf/>`_ and the specified option code. Default is disabled (0)
-      sockets=NUM            -- Number of sockets (and thus source ports) used toward the backend server, defaults to a single one
+      sockets=NUM,           -- Number of sockets (and thus source ports) used toward the backend server, defaults to a single one
+      disableZeroScope       -- Disable the EDNS Client Subnet 'zero scope' feature, which does a cache lookup for an answer valid for all subnets (ECS scope of 0) before adding ECS information to the query and doing the regular lookup
     })
 
   :param str server_string: A simple IP:PORT string.
@@ -480,17 +484,15 @@ Pools are automatically created when a server is added to a pool (with :func:`ne
 
   :param string name: The name of the pool
 
-.. function:: rmPool(name)
-
-   Remove the pool named `name`.
-
-  :param string name: The name of the pool to remove
-
 .. function:: getPoolServers(name) -> [ Server ]
 
   Returns a list of :class:`Server`\ s or nil.
 
   :param string name: The name of the pool
+
+.. function:: showPools()
+
+   Display the name, associated cache, server policy and associated servers for every pool.
 
 .. class:: ServerPool
 
