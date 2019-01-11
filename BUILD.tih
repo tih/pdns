@@ -1,5 +1,13 @@
 Here: ./configure --with-modules='gpgsql' --with-dynmodules=''
+
 In pdns/recursordist: ./configure
+
 In pdns/dnsdistdist: ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit"
 ...or...
+./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dnscrypt
+...or...
 ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dns-over-tls
+...or indeed...
+./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dnscrypt --enable-dns-over-tls
+
+Also, for some reason, on tara I have to add "--with-boost=/usr/pkg" to everything.
