@@ -19,6 +19,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#include "config.h"
 #include "threadname.hh"
 #include "dnsdist.hh"
 #include "dnsdist-ecs.hh"
@@ -30,7 +31,12 @@
 #include "ednsoptions.hh"
 #include "fstrm_logger.hh"
 #include "remote_logger.hh"
-#include "boost/optional/optional_io.hpp"
+
+#include <boost/optional/optional_io.hpp>
+
+#ifdef HAVE_LIBCRYPTO
+#include "ipcipher.hh"
+#endif /* HAVE_LIBCRYPTO */
 
 class DropAction : public DNSAction
 {
@@ -310,6 +316,26 @@ private:
   uint8_t d_rcode;
 };
 
+class ERCodeAction : public DNSAction
+{
+public:
+  ERCodeAction(uint8_t rcode) : d_rcode(rcode) {}
+  DNSAction::Action operator()(DNSQuestion* dq, string* ruleresult) const override
+  {
+    dq->dh->rcode = (d_rcode & 0xF);
+    dq->ednsRCode = ((d_rcode & 0xFFF0) >> 4);
+    dq->dh->qr = true; // for good measure
+    return Action::HeaderModify;
+  }
+  string toString() const override
+  {
+    return "set ercode "+ERCode::to_s(d_rcode);
+  }
+
+private:
+  uint8_t d_rcode;
+};
+
 class TCAction : public DNSAction
 {
 public:
@@ -462,7 +488,7 @@ DNSAction::Action SpoofAction::operator()(DNSQuestion* dq, string* ruleresult) c
   dq->dh->ancount = htons(dq->dh->ancount);
 
   if (hadEDNS) {
-    addEDNS(dq->dh, dq->len, dq->size, dnssecOK, g_PayloadSizeSelfGenAnswers);
+    addEDNS(dq->dh, dq->len, dq->size, dnssecOK, g_PayloadSizeSelfGenAnswers, 0);
   }
 
   return Action::HeaderModify;
@@ -486,7 +512,7 @@ public:
     generateEDNSOption(d_code, mac, optRData);
 
     string res;
-    generateOptRR(optRData, res, g_EdnsUDPPayloadSize, false);
+    generateOptRR(optRData, res, g_EdnsUDPPayloadSize, 0, false);
 
     if ((dq->size - dq->len) < res.length())
       return Action::None;
@@ -751,20 +777,27 @@ private:
 class RemoteLogAction : public DNSAction, public boost::noncopyable
 {
 public:
-  RemoteLogAction(std::shared_ptr<RemoteLoggerInterface>& logger, boost::optional<std::function<void(const DNSQuestion&, DNSDistProtoBufMessage*)> > alterFunc, const std::string& serverID): d_logger(logger), d_alterFunc(alterFunc), d_serverID(serverID)
+  RemoteLogAction(std::shared_ptr<RemoteLoggerInterface>& logger, boost::optional<std::function<void(const DNSQuestion&, DNSDistProtoBufMessage*)> > alterFunc, const std::string& serverID, const std::string& ipEncryptKey): d_logger(logger), d_alterFunc(alterFunc), d_serverID(serverID), d_ipEncryptKey(ipEncryptKey)
   {
   }
   DNSAction::Action operator()(DNSQuestion* dq, string* ruleresult) const override
   {
 #ifdef HAVE_PROTOBUF
     if (!dq->uniqueId) {
-      dq->uniqueId = t_uuidGenerator();
+      dq->uniqueId = getUniqueID();
     }
 
     DNSDistProtoBufMessage message(*dq);
     if (!d_serverID.empty()) {
       message.setServerIdentity(d_serverID);
     }
+
+#if HAVE_LIBCRYPTO
+    if (!d_ipEncryptKey.empty())
+    {
+      message.setRequestor(encryptCA(*dq->remote, d_ipEncryptKey));
+    }
+#endif /* HAVE_LIBCRYPTO */
 
     if (d_alterFunc) {
       std::lock_guard<std::mutex> lock(g_luamutex);
@@ -785,6 +818,7 @@ private:
   std::shared_ptr<RemoteLoggerInterface> d_logger;
   boost::optional<std::function<void(const DNSQuestion&, DNSDistProtoBufMessage*)> > d_alterFunc;
   std::string d_serverID;
+  std::string d_ipEncryptKey;
 };
 
 class SNMPTrapAction : public DNSAction
@@ -871,20 +905,27 @@ private:
 class RemoteLogResponseAction : public DNSResponseAction, public boost::noncopyable
 {
 public:
-  RemoteLogResponseAction(std::shared_ptr<RemoteLoggerInterface>& logger, boost::optional<std::function<void(const DNSResponse&, DNSDistProtoBufMessage*)> > alterFunc, const std::string& serverID, bool includeCNAME): d_logger(logger), d_alterFunc(alterFunc), d_serverID(serverID), d_includeCNAME(includeCNAME)
+  RemoteLogResponseAction(std::shared_ptr<RemoteLoggerInterface>& logger, boost::optional<std::function<void(const DNSResponse&, DNSDistProtoBufMessage*)> > alterFunc, const std::string& serverID, const std::string& ipEncryptKey, bool includeCNAME): d_logger(logger), d_alterFunc(alterFunc), d_serverID(serverID), d_ipEncryptKey(ipEncryptKey), d_includeCNAME(includeCNAME)
   {
   }
   DNSResponseAction::Action operator()(DNSResponse* dr, string* ruleresult) const override
   {
 #ifdef HAVE_PROTOBUF
     if (!dr->uniqueId) {
-      dr->uniqueId = t_uuidGenerator();
+      dr->uniqueId = getUniqueID();
     }
 
     DNSDistProtoBufMessage message(*dr, d_includeCNAME);
     if (!d_serverID.empty()) {
       message.setServerIdentity(d_serverID);
     }
+
+#if HAVE_LIBCRYPTO
+    if (!d_ipEncryptKey.empty())
+    {
+      message.setRequestor(encryptCA(*dr->remote, d_ipEncryptKey));
+    }
+#endif /* HAVE_LIBCRYPTO */
 
     if (d_alterFunc) {
       std::lock_guard<std::mutex> lock(g_luamutex);
@@ -905,6 +946,7 @@ private:
   std::shared_ptr<RemoteLoggerInterface> d_logger;
   boost::optional<std::function<void(const DNSResponse&, DNSDistProtoBufMessage*)> > d_alterFunc;
   std::string d_serverID;
+  std::string d_ipEncryptKey;
   bool d_includeCNAME;
 };
 
@@ -1163,6 +1205,10 @@ void setupLuaActions()
       return std::shared_ptr<DNSAction>(new RCodeAction(rcode));
     });
 
+  g_lua.writeFunction("ERCodeAction", [](uint8_t rcode) {
+      return std::shared_ptr<DNSAction>(new ERCodeAction(rcode));
+    });
+
   g_lua.writeFunction("SkipCacheAction", []() {
       return std::shared_ptr<DNSAction>(new SkipCacheAction);
     });
@@ -1197,14 +1243,18 @@ void setupLuaActions()
       }
 
       std::string serverID;
+      std::string ipEncryptKey;
       if (vars) {
         if (vars->count("serverID")) {
           serverID = boost::get<std::string>((*vars)["serverID"]);
         }
+        if (vars->count("ipEncryptKey")) {
+          ipEncryptKey = boost::get<std::string>((*vars)["ipEncryptKey"]);
+        }
       }
 
 #ifdef HAVE_PROTOBUF
-      return std::shared_ptr<DNSAction>(new RemoteLogAction(logger, alterFunc, serverID));
+      return std::shared_ptr<DNSAction>(new RemoteLogAction(logger, alterFunc, serverID, ipEncryptKey));
 #else
       throw std::runtime_error("Protobuf support is required to use RemoteLogAction");
 #endif
@@ -1219,14 +1269,18 @@ void setupLuaActions()
       }
 
       std::string serverID;
+      std::string ipEncryptKey;
       if (vars) {
         if (vars->count("serverID")) {
           serverID = boost::get<std::string>((*vars)["serverID"]);
         }
+        if (vars->count("ipEncryptKey")) {
+          ipEncryptKey = boost::get<std::string>((*vars)["ipEncryptKey"]);
+        }
       }
 
 #ifdef HAVE_PROTOBUF
-      return std::shared_ptr<DNSResponseAction>(new RemoteLogResponseAction(logger, alterFunc, serverID, includeCNAME ? *includeCNAME : false));
+      return std::shared_ptr<DNSResponseAction>(new RemoteLogResponseAction(logger, alterFunc, serverID, ipEncryptKey, includeCNAME ? *includeCNAME : false));
 #else
       throw std::runtime_error("Protobuf support is required to use RemoteLogResponseAction");
 #endif

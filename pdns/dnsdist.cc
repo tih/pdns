@@ -64,8 +64,6 @@
 #include "sstuff.hh"
 #include "threadname.hh"
 
-thread_local boost::uuids::random_generator t_uuidGenerator;
-
 /* Known sins:
 
    Receiver is currently single threaded
@@ -89,6 +87,7 @@ uint16_t g_maxOutstanding{10240};
 bool g_verboseHealthChecks{false};
 uint32_t g_staleCacheEntriesTTL{0};
 bool g_syslog{true};
+bool g_allowEmptyResponse{false};
 
 GlobalStateHolder<NetmaskGroup> g_ACL;
 string g_outputBuffer;
@@ -162,7 +161,7 @@ try
   dh->ancount = dh->arcount = dh->nscount = 0;
 
   if (hadEDNS) {
-    addEDNS(dh, *len, responseSize, z & EDNS_HEADER_FLAG_DO, payloadSize);
+    addEDNS(dh, *len, responseSize, z & EDNS_HEADER_FLAG_DO, payloadSize, 0);
   }
 }
 catch(...)
@@ -224,7 +223,7 @@ bool responseContentMatches(const char* response, const uint16_t responseLen, co
   }
 
   if (dh->qdcount == 0) {
-    if (dh->rcode != RCode::NoError && dh->rcode != RCode::NXDomain) {
+    if ((dh->rcode != RCode::NoError && dh->rcode != RCode::NXDomain) || g_allowEmptyResponse) {
       return true;
     }
     else {
@@ -568,8 +567,17 @@ try {
         gettime(&ts);
         g_rings.insertResponse(ts, ids->origRemote, ids->qname, ids->qtype, (unsigned int)udiff, (unsigned int)got, *dh, dss->remote);
 
-        if(dh->rcode == RCode::ServFail) {
+        switch (dh->rcode) {
+        case RCode::NXDomain:
+          ++g_stats.frontendNXDomain;
+          break;
+        case RCode::ServFail:
           ++g_stats.servfailResponses;
+          ++g_stats.frontendServFail;
+          break;
+        case RCode::NoError:
+          ++g_stats.frontendNoError;
+          break;
         }
         dss->latencyUsec = (127.0 * dss->latencyUsec / 128.0) + udiff/128.0;
 
@@ -702,7 +710,7 @@ void DownstreamState::setWeight(int newWeight)
 DownstreamState::DownstreamState(const ComboAddress& remote_, const ComboAddress& sourceAddr_, unsigned int sourceItf_, size_t numberOfSockets): remote(remote_), sourceAddr(sourceAddr_), sourceItf(sourceItf_)
 {
   pthread_rwlock_init(&d_lock, nullptr);
-  id = t_uuidGenerator();
+  id = getUniqueID();
   threadStarted.clear();
 
   mplexer = std::unique_ptr<FDMultiplexer>(FDMultiplexer::getMultiplexerSilent());
@@ -1353,6 +1361,17 @@ static int sendAndEncryptUDPResponse(LocalHolders& holders, ClientState& cs, con
   if (cacheHit) {
     ++g_stats.cacheHits;
   }
+  switch (dr.dh->rcode) {
+  case RCode::NXDomain:
+    ++g_stats.frontendNXDomain;
+    break;
+  case RCode::ServFail:
+    ++g_stats.frontendServFail;
+    break;
+  case RCode::NoError:
+    ++g_stats.frontendNoError;
+    break;
+  }
   doLatencyStats(0);  // we're not going to measure this
   return 0;
 }
@@ -1375,9 +1394,9 @@ static void processUDPQuery(ClientState& cs, LocalHolders& holders, const struct
     gettime(&now);
     gettime(&queryRealTime, true);
 
-#ifdef HAVE_DNSCRYPT
     std::shared_ptr<DNSCryptQuery> dnsCryptQuery = nullptr;
 
+#ifdef HAVE_DNSCRYPT
     if (!checkDNSCryptQuery(cs, query, len, dnsCryptQuery, dest, remote, queryRealTime.tv_sec)) {
       return;
     }
@@ -1883,14 +1902,42 @@ void maintThread()
 
     counter++;
     if (counter >= g_cacheCleaningDelay) {
+      /* keep track, for each cache, of whether we should keep
+       expired entries */
+      std::map<std::shared_ptr<DNSDistPacketCache>, bool> caches;
+
+      /* gather all caches actually used by at least one pool, and see
+         if something prevents us from cleaning the expired entries */
       auto localPools = g_pools.getLocal();
-      std::shared_ptr<DNSDistPacketCache> packetCache = nullptr;
       for (const auto& entry : *localPools) {
-        packetCache = entry.second->packetCache;
-        if (packetCache) {
-          size_t upTo = (packetCache->getMaxEntries()* (100 - g_cacheCleaningPercentage)) / 100;
-          packetCache->purgeExpired(upTo);
+        auto& pool = entry.second;
+
+        auto packetCache = pool->packetCache;
+        if (!packetCache) {
+          continue;
         }
+
+        auto pair = caches.insert({packetCache, false});
+        auto& iter = pair.first;
+        /* if we need to keep stale data for this cache (ie, not clear
+           expired entries when at least one pool using this cache
+           has all its backends down) */
+        if (packetCache->keepStaleData() && iter->second == false) {
+          /* so far all pools had at least one backend up */
+          if (pool->countServers(true) == 0) {
+            iter->second = true;
+          }
+        }
+      }
+
+      for (auto pair : caches) {
+        /* shall we keep expired entries ? */
+        if (pair.second == true) {
+          continue;
+        }
+        auto& packetCache = pair.first;
+        size_t upTo = (packetCache->getMaxEntries()* (100 - g_cacheCleaningPercentage)) / 100;
+        packetCache->purgeExpired(upTo);
       }
       counter = 0;
     }
@@ -1927,17 +1974,38 @@ static void healthChecksThread()
 
     auto states = g_dstates.getLocal(); // this points to the actual shared_ptrs!
     for(auto& dss : *states) {
+      if(++dss->lastCheck < dss->checkInterval)
+        continue;
+      dss->lastCheck = 0;
       if(dss->availability==DownstreamState::Availability::Auto) {
         bool newState=upCheck(*dss);
         if (newState) {
-          if (dss->currentCheckFailures != 0) {
-            dss->currentCheckFailures = 0;
+          /* check succeeded */
+          dss->currentCheckFailures = 0;
+
+          if (!dss->upStatus) {
+            /* we were marked as down */
+            dss->consecutiveSuccessfulChecks++;
+            if (dss->consecutiveSuccessfulChecks < dss->minRiseSuccesses) {
+              /* if we need more than one successful check to rise
+                 and we didn't reach the threshold yet,
+                 let's stay down */
+              newState = false;
+            }
           }
         }
-        else if (!newState && dss->upStatus) {
-          dss->currentCheckFailures++;
-          if (dss->currentCheckFailures < dss->maxCheckFailures) {
-            newState = true;
+        else {
+          /* check failed */
+          dss->consecutiveSuccessfulChecks = 0;
+
+          if (dss->upStatus) {
+            /* we are currently up */
+            dss->currentCheckFailures++;
+            if (dss->currentCheckFailures < dss->maxCheckFailures) {
+              /* we need more than one failure to be marked as down,
+                 and we did not reach the threshold yet, let's stay down */
+              newState = true;
+            }
           }
         }
 
@@ -1954,6 +2022,7 @@ static void healthChecksThread()
 
           dss->upStatus = newState;
           dss->currentCheckFailures = 0;
+          dss->consecutiveSuccessfulChecks = 0;
           if (g_snmpAgent && g_snmpTrapsEnabled) {
             g_snmpAgent->sendBackendStatusChangeTrap(dss);
           }
@@ -2280,6 +2349,9 @@ try
 #endif
 #ifdef HAVE_FSTRM
       cout<<"fstrm ";
+#endif
+#ifdef HAVE_LIBCRYPTO
+      cout<<"ipcipher ";
 #endif
 #ifdef HAVE_LIBSODIUM
       cout<<"libsodium ";
@@ -2660,8 +2732,8 @@ try
       tcpBindsCount++;
     }
     else {
-      delete cs;
       errlog("Error while setting up TLS on local address '%s', exiting", cs->local.toStringWithPort());
+      delete cs;
       _exit(EXIT_FAILURE);
     }
   }

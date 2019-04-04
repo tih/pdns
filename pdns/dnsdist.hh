@@ -47,10 +47,7 @@
 #include "mplexer.hh"
 #include "sholder.hh"
 #include "tcpiohandler.hh"
-
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/uuid_io.hpp>
+#include "uuid-utils.hh"
 
 void carbonDumpThread();
 uint64_t uptimeOfProcess(const std::string& str);
@@ -58,8 +55,6 @@ uint64_t uptimeOfProcess(const std::string& str);
 extern uint16_t g_ECSSourcePrefixV4;
 extern uint16_t g_ECSSourcePrefixV6;
 extern bool g_ECSOverride;
-
-extern thread_local boost::uuids::random_generator t_uuidGenerator;
 
 typedef std::unordered_map<string, string> QTag;
 
@@ -84,6 +79,7 @@ struct DNSQuestion
   unsigned int consumed{0};
   uint16_t len;
   uint16_t ecsPrefixLength;
+  uint8_t ednsRCode{0};
   boost::optional<uint32_t> tempFailureTTL;
   const bool tcp;
   const struct timespec* queryTime;
@@ -212,6 +208,9 @@ struct DNSDistStats
   stat_t responses{0};
   stat_t servfailResponses{0};
   stat_t queries{0};
+  stat_t frontendNXDomain{0};
+  stat_t frontendServFail{0};
+  stat_t frontendNoError{0};
   stat_t nonCompliantQueries{0};
   stat_t nonCompliantResponses{0};
   stat_t rdQueries{0};
@@ -239,6 +238,9 @@ struct DNSDistStats
     {"responses", &responses},
     {"servfail-responses", &servfailResponses},
     {"queries", &queries},
+    {"frontend-nxdomain", &frontendNXDomain},
+    {"frontend-servfail", &frontendServFail},
+    {"frontend-noerror", &frontendNoError},
     {"acl-drops", &aclDrops},
     {"rule-drop", &ruleDrop},
     {"rule-nxdomain", &ruleNXDomain},
@@ -261,6 +263,7 @@ struct DNSDistStats
     {"latency-avg1000000", &latencyAvg1000000},
     {"uptime", uptimeOfProcess},
     {"real-memory-usage", getRealMemoryUsage},
+    {"special-memory-usage", getSpecialMemoryUsage},
     {"noncompliant-queries", &nonCompliantQueries},
     {"noncompliant-responses", &nonCompliantResponses},
     {"rdqueries", &rdQueries},
@@ -327,6 +330,9 @@ struct MetricDefinitionStorage {
     { "responses",              MetricDefinition(PrometheusMetricType::counter, "Number of responses received from backends") },
     { "servfail-responses",     MetricDefinition(PrometheusMetricType::counter, "Number of SERVFAIL answers received from backends") },
     { "queries",                MetricDefinition(PrometheusMetricType::counter, "Number of received queries")},
+    { "frontend-nxdomain",      MetricDefinition(PrometheusMetricType::counter, "Number of NXDomain answers sent to clients")},
+    { "frontend-servfail",      MetricDefinition(PrometheusMetricType::counter, "Number of SERVFAIL answers sent to clients")},
+    { "frontend-noerror",       MetricDefinition(PrometheusMetricType::counter, "Number of NoError answers sent to clients")},
     { "acl-drops",              MetricDefinition(PrometheusMetricType::counter, "Number of packets dropped because of the ACL")},
     { "rule-drop",              MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of a rule")},
     { "rule-nxdomain",          MetricDefinition(PrometheusMetricType::counter, "Number of NXDomain answers returned because of a rule")},
@@ -706,12 +712,16 @@ struct DownstreamState
   int tcpConnectTimeout{5};
   int tcpRecvTimeout{30};
   int tcpSendTimeout{30};
+  unsigned int checkInterval{1};
+  unsigned int lastCheck{0};
   const unsigned int sourceItf{0};
   uint16_t retries{5};
   uint16_t xpfRRCode{0};
   uint16_t checkTimeout{1000}; /* in milliseconds */
   uint8_t currentCheckFailures{0};
+  uint8_t consecutiveSuccessfulChecks{0};
   uint8_t maxCheckFailures{1};
+  uint8_t minRiseSuccesses{1};
   StopWatch sw;
   set<string> pools;
   enum class Availability { Up, Down, Auto} availability{Availability::Auto};
@@ -826,8 +836,8 @@ struct ServerPool
     for (const auto& server : d_servers) {
       if (!upOnly || std::get<1>(server)->isUp() ) {
         count++;
-      };
-    };
+      }
+    }
     return count;
   }
 
@@ -961,6 +971,7 @@ extern bool g_useTCPSinglePipe;
 extern std::atomic<uint16_t> g_downstreamTCPCleanupInterval;
 extern size_t g_udpVectorSize;
 extern bool g_preserveTrailingData;
+extern bool g_allowEmptyResponse;
 
 #ifdef HAVE_EBPF
 extern shared_ptr<BPFFilter> g_defaultBPFFilter;

@@ -91,7 +91,9 @@ valid TSIG signature. It will accept any existing key on slave.
 
 -  IP ranges, separated by commas
 -  Default: 0.0.0.0/0
--  Removed in: 4.1.0
+
+.. deprecated:: 4.1.0
+  Recursion has been removed, see :doc:`guides/recursion`
 
 By specifying ``allow-recursion``, recursion can be restricted to
 netmasks specified. The default is to allow recursion from everywhere.
@@ -152,6 +154,8 @@ Static pre-shared authentication key for access to the REST API.
 -  Default: no
 
 .. versionadded:: 4.0.0
+.. versionchanged:: 4.2.0
+This setting has been removed in 4.2.0.
 
 Disallow data modification through the REST API when set.
 
@@ -226,7 +230,9 @@ See :ref:`metricscarbon`
 
 Send all available metrics to this server via the carbon protocol, which
 is used by graphite and metronome. It has to be an address (no
-hostnames). You may specify an alternate port by appending :port, ex:
+hostnames). Moreover you can specify more than one server using a comma delimited list, ex:
+carbon-server=10.10.10.10,10.10.10.20.
+You may specify an alternate port by appending :port, ex:
 127.0.0.1:2004. See :ref:`metricscarbon`.
 
 .. _setting-carbon-interval:
@@ -605,7 +611,8 @@ Entropy source file to use.
 
 -  Boolean
 -  Default: no
--  Since: 4.1.0
+
+.. versionadded:: 4.1.0
 
 If this is enabled, ALIAS records are expanded (synthesised to their
 A/AAAA).
@@ -889,10 +896,13 @@ Turn on master support. See :ref:`master-operation`.
 -  Integer
 -  Default: 1000000
 
+.. versionchanged:: 4.1.0
+  The packet and query caches are distinct. Previously, this setting was used for
+  both the packet and query caches. See ref:`setting-max-packet-cache-entries` for
+  the packet-cache setting.
+
 Maximum number of entries in the query cache. 1 million (the default)
-will generally suffice for most installations. Starting with 4.1, the
-packet and query caches are distinct so you might also want to see
-``max-packet-cache-entries``.
+will generally suffice for most installations.
 
 .. _setting-max-ent-entries:
 
@@ -923,10 +933,10 @@ Limit the number of NSEC3 hash iterations
 -  Integer
 -  Default: 1000000
 
+.. versionadded:: 4.1.0
+
 Maximum number of entries in the packet cache. 1 million (the default)
-will generally suffice for most installations. This setting has been
-introduced in 4.1, previous used the ``max-cache-entries`` setting for
-both the packet and query caches.
+will generally suffice for most installations.
 
 .. _setting-max-queue-length:
 
@@ -1138,13 +1148,13 @@ To notify all IP addresses apart from the 192.168.0.0/24 subnet use the followin
   :ref:`metadata-also-notify` domain metadata to avoid this potential bottleneck.
 
 .. note::
-  If your slaves support Internet Protocol version, which your master does not, 
-  then set ``only-notify`` to include only supported protocol version. 
+  If your slaves support Internet Protocol version, which your master does not,
+  then set ``only-notify`` to include only supported protocol version.
   Otherwise there will be error trying to resolve address.
-  
-  For example, slaves support both IPv4 and IPv6, but PowerDNS master have only IPv4, 
+
+  For example, slaves support both IPv4 and IPv6, but PowerDNS master have only IPv4,
   so allow only IPv4 with ``only-notify``::
-  
+
     only-notify=0.0.0.0/0
 
 .. _setting-out-of-zone-additional-processing:
@@ -1152,7 +1162,7 @@ To notify all IP addresses apart from the 192.168.0.0/24 subnet use the followin
 ``out-of-zone-additional-processing``
 -------------------------------------
 
-.. versionchanged:: 4.2.0
+.. deprecated:: 4.2.0
   This setting has been removed.
 
 -  Boolean
@@ -1265,7 +1275,9 @@ Number of receiver (listening) threads to start. See :doc:`performance`.
 
 -  Integer
 -  Default: 10
--  Removed in: 4.1.0
+
+.. deprecated:: 4.1.0
+  Recursion has been removed, see :doc:`guides/recursion`
 
 Seconds to store recursive packets in the :ref:`packet-cache`.
 
@@ -1277,6 +1289,7 @@ Seconds to store recursive packets in the :ref:`packet-cache`.
 -  IP Address
 
 .. deprecated:: 4.1.0
+  Recursion has been removed, see :doc:`guides/recursion`
 
 If set, recursive queries will be handed to the recursor specified here.
 
@@ -1286,7 +1299,8 @@ If set, recursive queries will be handed to the recursor specified here.
 ------------
 
 -  IP Addresses with optional port, separated by commas
--  Added in: 4.1.0
+
+.. versionadded:: 4.1.0
 
 Use these resolver addresses for ALIAS and the internal stub resolver.
 If this is not set, ``/etc/resolv.conf`` is parsed for upstream
@@ -1535,15 +1549,17 @@ IP address of incoming notification proxy
 ----------------------------
 
 -  Integer
--  Default: 1680
+-  Default: 1232
 
 EDNS0 allows for large UDP response datagrams, which can potentially
 raise performance. Large responses however also have downsides in terms
-of reflection attacks. Up till PowerDNS Authoritative Server 3.3, the
-truncation limit was set at 1680 bytes, regardless of EDNS0 buffer size
-indications from the client. Beyond 3.3, this setting makes our
-truncation limit configurable. Maximum value is 65535, but values above
+of reflection attacks. Maximum value is 65535, but values above
 4096 should probably not be attempted.
+
+.. note:: Why 1232?
+
+  1232 is the largest number of payload bytes that can fit in the smallest IPv6 packet.
+  IPv6 has a minimum MTU of 1280 bytes (:rfc:`RFC 8200, section 5 <8200#section-5>`), minus 40 bytes for the IPv6 header, minus 8 bytes for the UDP header gives 1232, the maximum payload size for the DNS response.
 
 .. _setting-version-string:
 
@@ -1599,6 +1615,47 @@ IP Address for webserver/API to listen on.
 
 Webserver/API access is only allowed from these subnets.
 
+.. _setting-webserver-loglevel:
+
+``webserver-loglevel``
+----------------------
+.. versionadded:: 4.2.0
+
+-  String, one of "none", "normal", "detailed"
+
+The amount of logging the webserver must do. "none" means no useful webserver information will be logged.
+When set to "normal", the webserver will log a line per request that should be familiar::
+
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e 127.0.0.1:55376 "GET /api/v1/servers/localhost/bla HTTP/1.1" 404 196
+
+When set to "detailed", all information about the request and response are logged::
+
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e Request Details:
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Headers:
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   accept-encoding: gzip, deflate
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   accept-language: en-US,en;q=0.5
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   connection: keep-alive
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   dnt: 1
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   host: 127.0.0.1:8081
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   upgrade-insecure-requests: 1
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:64.0) Gecko/20100101 Firefox/64.0
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  No body
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e Response details:
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Headers:
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Connection: close
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Length: 49
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Type: text/html; charset=utf-8
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Server: PowerDNS/0.0.15896.0.gaba8bab3ab
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Full body: 
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e   <!html><title>Not Found</title><h1>Not Found</h1>
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e 127.0.0.1:55376 "GET /api/v1/servers/localhost/bla HTTP/1.1" 404 196
+
+The value between the hooks is a UUID that is generated for each request. This can be used to find all lines related to a single request.
+
+.. note::
+  The webserver logs these line on the NOTICE level. The :ref:`settings-loglevel` seting must be 5 or higher for these lines to end up in the log.
+
 .. _setting-webserver-password:
 
 ``webserver-password``
@@ -1614,7 +1671,7 @@ The plaintext password required for accessing the webserver.
 ------------------
 
 -  Integer
--  Default: 8001
+-  Default: 8081
 
 The port where webserver/API will listen on.
 
@@ -1626,7 +1683,7 @@ The port where webserver/API will listen on.
 -  Boolean
 -  Default: no
 
-If the webserver should print arguments. 
+If the webserver should print arguments.
 
 .. _setting-write-pid:
 
