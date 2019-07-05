@@ -205,7 +205,32 @@ void setupLuaBindings(bool client)
   g_lua.registerFunction("empty",(bool (DNSNameSet::*)()) &DNSNameSet::empty);
 
   /* SuffixMatchNode */
-  g_lua.registerFunction("add",(void (SuffixMatchNode::*)(const DNSName&)) &SuffixMatchNode::add);
+  g_lua.registerFunction<void (SuffixMatchNode::*)(const boost::variant<DNSName, string, vector<pair<int, DNSName>>, vector<pair<int, string>>> &name)>("add", [](SuffixMatchNode &smn, const boost::variant<DNSName, string, vector<pair<int, DNSName>>, vector<pair<int, string>>> &name) {
+      if (name.type() == typeid(DNSName)) {
+          auto n = boost::get<DNSName>(name);
+          smn.add(n);
+          return;
+      }
+      if (name.type() == typeid(string)) {
+          auto n = boost::get<string>(name);
+          smn.add(n);
+          return;
+      }
+      if (name.type() == typeid(vector<pair<int, DNSName>>)) {
+          auto names = boost::get<vector<pair<int, DNSName>>>(name);
+          for (auto const n : names) {
+            smn.add(n.second);
+          }
+          return;
+      }
+      if (name.type() == typeid(vector<pair<int, string>>)) {
+          auto names = boost::get<vector<pair<int, string>>>(name);
+          for (auto const n : names) {
+            smn.add(n.second);
+          }
+          return;
+      }
+  });
   g_lua.registerFunction("check",(bool (SuffixMatchNode::*)(const DNSName&) const) &SuffixMatchNode::check);
 
   /* NetmaskGroup */
@@ -248,9 +273,18 @@ void setupLuaBindings(bool client)
 #endif /* HAVE_EBPF */
 
   /* PacketCache */
-  g_lua.writeFunction("newPacketCache", [](size_t maxEntries, boost::optional<uint32_t> maxTTL, boost::optional<uint32_t> minTTL, boost::optional<uint32_t> tempFailTTL, boost::optional<uint32_t> staleTTL, boost::optional<bool> dontAge, boost::optional<size_t> numberOfShards, boost::optional<bool> deferrableInsertLock, boost::optional<uint32_t> maxNegativeTTL, boost::optional<bool> ecsParsing, boost::optional<std::unordered_map<std::string, boost::variant<bool, size_t>>> vars) {
+  g_lua.writeFunction("newPacketCache", [](size_t maxEntries, boost::optional<std::unordered_map<std::string, boost::variant<bool, size_t>>> vars) {
 
       bool keepStaleData = false;
+      size_t maxTTL = 86400;
+      size_t minTTL = 0;
+      size_t tempFailTTL = 60;
+      size_t maxNegativeTTL = 3600;
+      size_t staleTTL = 60;
+      size_t numberOfShards = 1;
+      bool dontAge = false;
+      bool deferrableInsertLock = true;
+      bool ecsParsing = false;
 
       if (vars) {
 
@@ -264,10 +298,6 @@ void setupLuaBindings(bool client)
 
         if (vars->count("keepStaleData")) {
           keepStaleData = boost::get<bool>((*vars)["keepStaleData"]);
-        }
-
-        if (vars->count("maxEntries")) {
-          maxEntries = boost::get<size_t>((*vars)["maxEntries"]);
         }
 
         if (vars->count("maxNegativeTTL")) {
@@ -297,10 +327,9 @@ void setupLuaBindings(bool client)
         if (vars->count("temporaryFailureTTL")) {
           tempFailTTL = boost::get<size_t>((*vars)["temporaryFailureTTL"]);
         }
-
       }
 
-      auto res = std::make_shared<DNSDistPacketCache>(maxEntries, maxTTL ? *maxTTL : 86400, minTTL ? *minTTL : 0, tempFailTTL ? *tempFailTTL : 60, maxNegativeTTL ? *maxNegativeTTL : 3600, staleTTL ? *staleTTL : 60, dontAge ? *dontAge : false, numberOfShards ? *numberOfShards : 1, deferrableInsertLock ? *deferrableInsertLock : true, ecsParsing ? *ecsParsing : false);
+      auto res = std::make_shared<DNSDistPacketCache>(maxEntries, maxTTL, minTTL, tempFailTTL, maxNegativeTTL, staleTTL, dontAge, numberOfShards, deferrableInsertLock, ecsParsing);
 
       res->setKeepStaleData(keepStaleData);
 
@@ -316,7 +345,7 @@ void setupLuaBindings(bool client)
               boost::optional<uint16_t> qtype,
               boost::optional<bool> suffixMatch) {
                 if (cache) {
-                  cache->expungeByName(dname, qtype ? *qtype : QType(QType::ANY).getCode(), suffixMatch ? *suffixMatch : false);
+                  g_outputBuffer="Expunged " + std::to_string(cache->expungeByName(dname, qtype ? *qtype : QType(QType::ANY).getCode(), suffixMatch ? *suffixMatch : false)) + " records\n";
                 }
     });
   g_lua.registerFunction<void(std::shared_ptr<DNSDistPacketCache>::*)()>("printStats", [](const std::shared_ptr<DNSDistPacketCache> cache) {

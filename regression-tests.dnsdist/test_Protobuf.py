@@ -80,7 +80,7 @@ class DNSDistProtobufTest(DNSDistTest):
         self.assertEquals(msg.id, query.id)
         self.assertTrue(msg.HasField('inBytes'))
         self.assertTrue(msg.HasField('serverIdentity'))
-        self.assertEquals(msg.serverIdentity, self._protobufServerID)
+        self.assertEquals(msg.serverIdentity, self._protobufServerID.encode('utf-8'))
 
         if normalQueryResponse:
           # compare inBytes with length of query/response
@@ -198,7 +198,7 @@ class TestProtobuf(DNSDistProtobufTest):
         protobuf:setTagArray(tablePB)				-- store table in protobuf
         protobuf:setTag("Query,123")				-- add another tag entry in protobuf
 
-        protobuf:setResponseCode(dnsdist.NXDOMAIN)        	-- set protobuf response code to be NXDOMAIN
+        protobuf:setResponseCode(DNSRCode.NXDOMAIN)        	-- set protobuf response code to be NXDOMAIN
 
         local strReqName = dq.qname:toString()		  	-- get request dns name
 
@@ -292,7 +292,7 @@ class TestProtobuf(DNSDistProtobufTest):
         self.assertEquals(len(msg.response.rrs), 2)
         rr = msg.response.rrs[0]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.CNAME, name, 3600)
-        self.assertEquals(rr.rdata, target)
+        self.assertEquals(rr.rdata.decode('utf-8'), target)
         rr = msg.response.rrs[1]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.A, target, 3600)
         self.assertEquals(socket.inet_ntop(socket.AF_INET, rr.rdata), '127.0.0.1')
@@ -320,7 +320,7 @@ class TestProtobuf(DNSDistProtobufTest):
         self.assertEquals(len(msg.response.rrs), 2)
         rr = msg.response.rrs[0]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.CNAME, name, 3600)
-        self.assertEquals(rr.rdata, target)
+        self.assertEquals(rr.rdata.decode('utf-8'), target)
         rr = msg.response.rrs[1]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.A, target, 3600)
         self.assertEquals(socket.inet_ntop(socket.AF_INET, rr.rdata), '127.0.0.1')
@@ -450,7 +450,7 @@ class TestProtobufIPCipher(DNSDistProtobufTest):
         self.assertEquals(len(msg.response.rrs), 2)
         rr = msg.response.rrs[0]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.CNAME, name, 3600)
-        self.assertEquals(rr.rdata, target)
+        self.assertEquals(rr.rdata.decode('ascii'), target)
         rr = msg.response.rrs[1]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.A, target, 3600)
         self.assertEquals(socket.inet_ntop(socket.AF_INET, rr.rdata), '127.0.0.1')
@@ -476,7 +476,7 @@ class TestProtobufIPCipher(DNSDistProtobufTest):
         self.assertEquals(len(msg.response.rrs), 2)
         rr = msg.response.rrs[0]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.CNAME, name, 3600)
-        self.assertEquals(rr.rdata, target)
+        self.assertEquals(rr.rdata.decode('ascii'), target)
         rr = msg.response.rrs[1]
         self.checkProtobufResponseRecord(rr, dns.rdataclass.IN, dns.rdatatype.A, target, 3600)
         self.assertEquals(socket.inet_ntop(socket.AF_INET, rr.rdata), '127.0.0.1')

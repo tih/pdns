@@ -43,6 +43,17 @@ Overrides the `allow-from`_ setting. To use this feature, supply one netmask per
 Answer questions for the ANY type on UDP with a truncated packet that refers the remote server to TCP.
 Useful for mitigating ANY reflection attacks.
 
+.. _setting-allow-trust-anchor-query:
+
+``allow-trust-anchor-query``
+----------------------------
+.. versionadded:: 4.3.0
+
+-  Boolean
+-  Default: no
+
+Allow ``trustanchor.server CH TXT`` and ``negativetrustanchor.server CH TXT`` queries to view the configured :doc:`DNSSEC <dnssec>` (negative) trust anchors.
+
 .. _setting-api-config-dir:
 
 ``api-config-dir``
@@ -257,6 +268,40 @@ Operate in the background.
 
 Which domains we only accept delegations from (a Verisign special).
 
+.. _setting-dont-throttle-names:
+
+``dont-throttle-names``
+----------------------------
+.. versionadded:: 4.2.0
+
+-  Comma separated list of domain-names
+-  Default: (empty)
+
+When an authoritative server does not answer a query or sends a reply the recursor does not like, it is throttled.
+Any servers' name suffix-matching the supplied names will never be throttled.
+
+.. warning::
+  Most servers on the internet do not respond for a good reason (overloaded or unreachable), ``dont-throttle-names`` could make this load on the upstream server even higher, resulting in further service degradation.
+
+.. _setting-dont-throttle-netmasks:
+
+``dont-throttle-netmasks``
+----------------------------
+.. versionadded:: 4.2.0
+
+-  Comma separated list of netmasks
+-  Default: (empty)
+
+When an authoritative server does not answer a query or sends a reply the recursor does not like, it is throttled.
+Any servers matching the supplied netmasks will never be throttled.
+
+This can come in handy on lossy networks when forwarding, where the same server is configured multiple times (e.g. with ``forward-zones-recurse=example.com=192.0.2.1;192.0.2.1``).
+By default, the PowerDNS Recursor would throttle the "first" server on a timeout and hence not retry the "second" one.
+In this case, ``dont-throttle-netmasks`` could be set to ``192.0.2.1``.
+
+.. warning::
+  Most servers on the internet do not respond for a good reason (overloaded or unreachable), ``dont-throttle-netmasks`` could make this load on the upstream server even higher, resulting in further service degradation.
+
 .. _setting-disable-packetcache:
 
 ``disable-packetcache``
@@ -296,6 +341,21 @@ For example, with a value of 1.25, no server should get more than 125 % of the
 average load. This helps making sure that all the workers have roughly the same
 share of queries, even if the incoming traffic is very skewed, with a larger
 number of requests asking for the same qname.
+
+.. _setting-distribution-pipe-buffer-size:
+
+``distribution-pipe-buffer-size``
+---------------------------------
+.. versionadded:: 4.2.0
+
+-  Integer
+-  Default: 0
+
+Size in bytes of the internal buffer of the pipe used by the distributor to pass incoming queries to a worker thread.
+Requires support for `F_SETPIPE_SZ` which is present in Linux since 2.6.35. The actual size might be rounded up to
+a multiple of a page size. 0 means that the OS default size is used.
+A large buffer might allow the recursor to deal with very short-lived load spikes during which a worker thread gets
+overloaded, but it will be at the cost of an increased latency.
 
 .. _setting-distributor-threads:
 
@@ -399,7 +459,7 @@ Number of bits of client IPv4 address to pass when sending EDNS Client Subnet ad
 .. _setting-ecs-ipv4-cache-bits:
 
 ``ecs-ipv4-cache-bits``
------------------
+-----------------------
 .. versionadded:: 4.1.12
 
 -  Integer
@@ -422,7 +482,7 @@ Number of bits of client IPv6 address to pass when sending EDNS Client Subnet ad
 .. _setting-ecs-ipv6-cache-bits:
 
 ``ecs-ipv6-cache-bits``
------------------
+-----------------------
 .. versionadded:: 4.1.12
 
 -  Integer
@@ -1093,6 +1153,17 @@ maximizing the cache hit ratio. Starting with version 4.2.0, more than one distr
 setting.
 Improves performance on Linux.
 
+.. _settting-protobuf-use-kernel-timestamp:
+
+``protobuf-use-kernel-timestamp``
+---------------------------------
+.. versionadded:: 4.2.0
+
+- Boolean
+- Default: false
+
+Whether to compute the latency of responses in protobuf messages using the timestamp set by the kernel when the query packet was received (when available), instead of computing it based on the moment we start processing the query.
+
 .. _settting-public-suffix-list-file:
 
 ``public-suffix-list-file``
@@ -1103,6 +1174,18 @@ Improves performance on Linux.
 - Default: unset
 
 Path to the Public Suffix List file, if any. If set, PowerDNS will try to load the Public Suffix List from this file instead of using the built-in list. The PSL is used to group the queries by relevant domain names when displaying the top queries.
+
+.. _setting-qname-minimization:
+
+``qname-minimization``
+----------------------
+.. versionadded:: 4.3.0
+
+-  Boolean
+-  Default: no
+
+Enable Query Name Minimization. This is a experimental feature, implementing a relaxed form of Query Name Mimimization as
+described in :rfc:`7816`.
 
 .. _setting-query-local-address:
 
@@ -1707,7 +1790,7 @@ If a PID file should be written to `socket-dir`_
 The server will trust XPF records found in queries sent from those netmasks (both IPv4 and IPv6),
 and will adjust queries' source and destination accordingly. This is especially useful when the recursor
 is placed behind a proxy like `dnsdist <https://dnsdist.org>`_.
-Note that the ref:`setting-allow-from` setting is still applied to the original source address, and thus access restriction
+Note that the :ref:`setting-allow-from` setting is still applied to the original source address, and thus access restriction
 should be done on the proxy.
 
 .. _setting-xpf-rr-code:
