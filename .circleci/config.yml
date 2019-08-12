@@ -194,6 +194,18 @@ commands:
               protobuf-compiler \
               virtualenv
 
+  install-ixfrdist-deps:
+    description: "Install all libraries needed for testing ixfrdist"
+    steps:
+      - run: apt-get update
+      - run:
+          command: |
+            apt-get install -qq -y \
+              libboost-all-dev \
+              libsystemd0 \
+              libyaml-cpp0.5v5 \
+              virtualenv
+
   install-auth-dev-deps:
     description: Install all packages needed to build the auth
     steps:
@@ -219,11 +231,14 @@ commands:
               libsodium-dev \
               libsqlite3-dev \
               libssl-dev \
+              libsystemd-dev \
               libtool \
+              libyaml-cpp-dev \
               make \
               pkg-config \
               ragel \
               sqlite3 \
+              systemd \
               unixodbc-dev \
               virtualenv \
               wget
@@ -454,15 +469,17 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
               --disable-lua-records \
               --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc mydns random tinydns' \
+              --enable-systemd \
               --enable-tools \
               --with-lmdb=/usr \
               --with-libsodium \
-              --prefix=/opt/pdns-auth
+              --prefix=/opt/pdns-auth \
+              --enable-ixfrdist
       - run:
           name: build
           command: make -j3 -k
@@ -789,6 +806,7 @@ jobs:
             pkg-config \
             protobuf-compiler \
             ragel \
+            systemd \
             virtualenv
       - checkout-shallow
       - run:
@@ -798,11 +816,12 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --enable-unit-tests \
             --enable-nod \
+            --enable-systemd \
             --prefix=/opt/pdns-recursor \
             --with-libsodium \
             --with-lua=luajit \
@@ -964,10 +983,11 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
               --disable-lua-records \
+              --disable-systemd \
               --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc mydns random tinydns' \
               --enable-tools \
               --with-lmdb=/usr \
@@ -1032,8 +1052,8 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --disable-systemd \
             --disable-unit-tests \
@@ -1104,8 +1124,8 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --disable-systemd \
             --disable-unit-tests \
@@ -1167,6 +1187,7 @@ jobs:
             pkg-config \
             protobuf-compiler \
             ragel \
+            systemd \
             virtualenv
       - checkout-shallow
       - run:
@@ -1176,14 +1197,15 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla" \
-            CXXFLAGS="-O1 -Werror=vla" \
+            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --enable-unit-tests \
             --enable-dnstap \
             --enable-dnscrypt \
             --enable-dns-over-tls \
             --enable-dns-over-https \
+            --enable-systemd \
             --prefix=/opt/dnsdist \
             --with-libsodium \
             --with-lua=luajit \
@@ -1233,6 +1255,23 @@ jobs:
           workdir: ~/project/regression-tests.dnsdist
           command: |
             DNSDISTBIN="/opt/dnsdist/bin/dnsdist" \
+            ./runtests
+
+  test-ixfrdist-regression:
+    docker:
+      - image: debian:stretch
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+    steps:
+      - install-ixfrdist-deps
+      - checkout-shallow
+      - attach_workspace:
+          at: /opt
+      - run:
+          name: Run ixfrdist tests
+          workdir: ~/project/regression-tests.ixfrdist
+          command: |
+            IXFRDISTBIN="/opt/pdns-auth/bin/ixfrdist" \
             ./runtests
 
 workflows:
@@ -1305,6 +1344,9 @@ workflows:
       - test-dnsdist-regression:
           requires:
             - build-dnsdist
+      - test-ixfrdist-regression:
+          requires:
+            - build-auth
 
   build-docs:
     jobs:

@@ -139,6 +139,7 @@ public:
   }
 
   std::vector<std::pair<std::string, std::string>> d_certKeyPairs;
+  std::vector<std::string> d_ocspFiles;
   ComboAddress d_addr;
   std::string d_ciphers;
   std::string d_ciphers13;
@@ -214,7 +215,7 @@ public:
         throw runtime_error("EOF while reading message");
       }
       if (res < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOTCONN) {
           return IOState::NeedRead;
         }
         else {
@@ -250,7 +251,7 @@ public:
         throw runtime_error("EOF while sending message");
       }
       if (res < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOTCONN) {
           return IOState::NeedWrite;
         }
         else {

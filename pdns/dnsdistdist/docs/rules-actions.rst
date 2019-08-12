@@ -583,6 +583,13 @@ These ``DNSRule``\ s be one of the following items:
   :param str name: The case-insensitive name of the HTTP header to match on
   :param str regex: A regular expression to match the content of the specified header
 
+.. function:: HTTPPathRegexRule(regex)
+  .. versionadded:: 1.4.0
+
+  Matches DNS over HTTPS queries with a HTTP path matching the regular expression supplied in ``regex``. For example, if the query has been sent to the https://192.0.2.1:443/PowerDNS?dns=... URL, the path would be '/PowerDNS'.
+
+  :param str regex: The regex to match on
+
 .. function:: HTTPPathRule(path)
   .. versionadded:: 1.4.0
 
@@ -852,6 +859,15 @@ The following actions exist.
 
   Let these packets go through.
 
+.. function:: ContinueAction(action)
+
+  .. versionadded:: 1.4.0
+
+  Execute the specified action and override its return with None, making it possible to continue the processing.
+  Subsequent rules are processed after this action.
+
+  :param int action: Any other action
+
 .. function:: DelayAction(milliseconds)
 
   Delay the response by the specified amount of milliseconds (UDP-only).
@@ -881,6 +897,7 @@ The following actions exist.
 
   Send the the current query to a remote logger as a :doc:`dnstap <reference/dnstap>` message.
   ``alterFunction`` is a callback, receiving a :class:`DNSQuestion` and a :class:`DnstapMessage`, that can be used to modify the message.
+  Subsequent rules are processed after this action.
 
   :param string identity: Server identity to store in the dnstap message
   :param logger: The :func:`FrameStreamLogger <newFrameStreamUnixLogger>` or :func:`RemoteLogger <newRemoteLogger>` object to write to
@@ -892,6 +909,7 @@ The following actions exist.
 
   Send the the current response to a remote logger as a :doc:`dnstap <reference/dnstap>` message.
   ``alterFunction`` is a callback, receiving a :class:`DNSQuestion` and a :class:`DnstapMessage`, that can be used to modify the message.
+  Subsequent rules are processed after this action.
 
   :param string identity: Server identity to store in the dnstap message
   :param logger: The :func:`FrameStreamLogger <newFrameStreamUnixLogger>` or :func:`RemoteLogger <newRemoteLogger>` object to write to
@@ -929,6 +947,15 @@ The following actions exist.
   ``rcode`` can be specified as an integer or as one of the built-in :ref:`DNSRCode`.
 
   :param int rcode: The extended RCODE to respond with.
+
+.. function:: HTTPStatusAction(status, body, contentType="")
+  .. versionadded:: 1.4.0
+
+  Return an HTTP response with a status code of ''status''. For HTTP redirects, ''body'' should be the redirect URL.
+
+  :param int status: The HTTP status code to return.
+  :param string body: The body of the HTTP response, or a URL if the status code is a redirect (3xx).
+  :param string contentType: The HTTP Content-Type header to return for a 200 response, ignored otherwise. Default is ''application/dns-message''.
 
 .. function:: LogAction([filename[, binary[, append[, buffered]]]])
 
@@ -1014,7 +1041,8 @@ The following actions exist.
     ``ipEncryptKey`` optional key added to the options table.
 
   Send the content of this query to a remote logger via Protocol Buffer.
-  ``alterFunction`` is a callback, receiving a :class:`DNSQuestion` and a :class:`DNSDistProtoBufMessage`, that can be used to modify the Protocol Buffer content, for example for anonymization purposes
+  ``alterFunction`` is a callback, receiving a :class:`DNSQuestion` and a :class:`DNSDistProtoBufMessage`, that can be used to modify the Protocol Buffer content, for example for anonymization purposes.
+  Subsequent rules are processed after this action.
 
   :param string remoteLogger: The :func:`remoteLogger <newRemoteLogger>` object to write to
   :param string alterFunction: Name of a function to modify the contents of the logs before sending
@@ -1034,9 +1062,10 @@ The following actions exist.
     ``ipEncryptKey`` optional key added to the options table.
 
   Send the content of this response to a remote logger via Protocol Buffer.
-  ``alterFunction`` is the same callback that receiving a :class:`DNSQuestion` and a :class:`DNSDistProtoBufMessage`, that can be used to modify the Protocol Buffer content, for example for anonymization purposes
+  ``alterFunction`` is the same callback that receiving a :class:`DNSQuestion` and a :class:`DNSDistProtoBufMessage`, that can be used to modify the Protocol Buffer content, for example for anonymization purposes.
   ``includeCNAME`` indicates whether CNAME records inside the response should be parsed and exported.
-  The default is to only exports A and AAAA records
+  The default is to only exports A and AAAA records.
+  Subsequent rules are processed after this action.
 
   :param string remoteLogger: The :func:`remoteLogger <newRemoteLogger>` object to write to
   :param string alterFunction: Name of a function to modify the contents of the logs before sending
@@ -1099,18 +1128,20 @@ The following actions exist.
   .. versionadded:: 1.3.0
 
   Associate a tag named ``name`` with a value of ``value`` to this query, that will be passed on to the response.
+  Subsequent rules are processed after this action.
 
   :param string name: The name of the tag to set
-  :param string cname: The value of the tag
+  :param string value: The value of the tag
 
 .. function:: TagResponseAction(name, value)
 
   .. versionadded:: 1.3.0
 
   Associate a tag named ``name`` with a value of ``value`` to this response.
+  Subsequent rules are processed after this action.
 
   :param string name: The name of the tag to set
-  :param string cname: The value of the tag
+  :param string value: The value of the tag
 
 .. function:: TCAction()
 

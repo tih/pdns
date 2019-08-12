@@ -68,6 +68,7 @@ extern StatBag S;
 
 pthread_mutex_t TCPNameserver::s_plock = PTHREAD_MUTEX_INITIALIZER;
 Semaphore *TCPNameserver::d_connectionroom_sem;
+unsigned int TCPNameserver::d_maxTCPConnections = 0;
 PacketHandler *TCPNameserver::s_P; 
 NetmaskGroup TCPNameserver::d_ng;
 size_t TCPNameserver::d_maxTransactionsPerConn;
@@ -494,7 +495,7 @@ bool TCPNameserver::canDoAXFR(shared_ptr<DNSPacket> q)
         while(B->get(rr)) 
           nsset.insert(DNSName(rr.content));
         for(const auto & j: nsset) {
-          vector<string> nsips=fns.lookup(j, s_P->getBackend(),q->qdomain);
+          vector<string> nsips=fns.lookup(j, s_P->getBackend());
           for(vector<string>::const_iterator k=nsips.begin();k!=nsips.end();++k) {
             // cerr<<"got "<<*k<<" from AUTO-NS"<<endl;
             if(*k == q->getRemote().toString())
@@ -1195,6 +1196,7 @@ TCPNameserver::TCPNameserver()
 
 //  sem_init(&d_connectionroom_sem,0,::arg().asNum("max-tcp-connections"));
   d_connectionroom_sem = new Semaphore( ::arg().asNum( "max-tcp-connections" ));
+  d_maxTCPConnections = ::arg().asNum( "max-tcp-connections" );
   d_tid=0;
   vector<string>locals;
   stringtok(locals,::arg()["local-address"]," ,");
@@ -1387,3 +1389,9 @@ void TCPNameserver::thread()
 }
 
 
+unsigned int TCPNameserver::numTCPConnections()
+{
+  int room;
+  d_connectionroom_sem->getValue( &room);
+  return d_maxTCPConnections - room;
+}

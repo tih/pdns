@@ -103,6 +103,7 @@ dnsdist_SOURCES = \
 	bpf-filter.cc bpf-filter.hh \
 	cachecleaner.hh \
 	capabilities.cc capabilities.hh \
+	circular_buffer.hh \
 	dns.cc dns.hh \
 	dnscrypt.cc dnscrypt.hh \
 	dnsdist.cc dnsdist.hh \
@@ -134,7 +135,7 @@ dnsdist_SOURCES = \
 	dnsname.cc dnsname.hh \
 	dnsparser.hh dnsparser.cc \
 	dnswriter.cc dnswriter.hh \
-	doh.hh \
+	doh.hh doh.cc \
 	dolog.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednscookies.cc ednscookies.hh \
@@ -207,7 +208,6 @@ endif
 endif
 
 if HAVE_DNS_OVER_HTTPS
-dnsdist_SOURCES += doh.cc
 
 if HAVE_LIBH2OEVLOOP
 dnsdist_LDADD += $(LIBH2OEVLOOP_LIBS)
@@ -253,9 +253,11 @@ testrunner_SOURCES = \
 	test-iputils_hh.cc \
 	test-mplexer.cc \
 	cachecleaner.hh \
+	circular_buffer.hh \
 	dnsdist.hh \
 	dnsdist-cache.cc dnsdist-cache.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
+	dnsdist-rings.hh \
 	dnsdist-xpf.cc dnsdist-xpf.hh \
 	dnscrypt.cc dnscrypt.hh \
 	dnslabeltext.cc \

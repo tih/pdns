@@ -2,7 +2,7 @@ PowerDNS is copyright © 2001-2019 by PowerDNS.COM BV and lots of
 contributors, using the GNU GPLv2 license (see NOTICE for the
 exact license and exception used).
 
-All documentation can be found on http://doc.powerdns.com/
+All documentation can be found on https://doc.powerdns.com/
 
 This file may lag behind at times. For most recent updates, always check
 https://doc.powerdns.com/md/changelog/.
@@ -180,7 +180,7 @@ The HTML documentation will now be available in `html-docs`.
 
 Solaris Notes
 -------------
-Use a recent gcc. OpenCSW is a good source, as is Solaris 11 IPS.
+Use a recent gcc (and other build tools), possibly from Solaris 11 IPS.
 
 If you encounter problems with the Solaris make, gmake is advised.
 

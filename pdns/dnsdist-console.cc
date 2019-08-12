@@ -299,7 +299,7 @@ void doConsole()
           }
         }
         else 
-          cout << g_outputBuffer;
+          cout << g_outputBuffer << std::flush;
         if(!getLuaNoSideEffect())
           feedConfigDelta(line);
       }
@@ -364,6 +364,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "clearDynBlocks", true, "", "clear all dynamic blocks" },
   { "clearQueryCounters", true, "", "clears the query counter buffer" },
   { "clearRules", true, "", "remove all current rules" },
+  { "ContinueAction", true, "action", "execute the specified action and continue the processing of the remaining rules, regardless of the return of the action" },
   { "DelayAction", true, "milliseconds", "delay the response by the specified amount of milliseconds (UDP-only)" },
   { "DelayResponseAction", true, "milliseconds", "delay the response by the specified amount of milliseconds (UDP-only)" },
   { "delta", true, "", "shows all commands entered that changed the configuration" },
@@ -407,7 +408,9 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "getTLSContext", true, "n", "returns the TLS context with index n" },
   { "getTLSFrontend", true, "n", "returns the TLS frontend with index n" },
   { "HTTPHeaderRule", true, "name, regex", "matches DoH queries with a HTTP header 'name' whose content matches the regular expression 'regex'"},
+  { "HTTPPathRegexRule", true, "regex", "matches DoH queries whose HTTP path matches 'regex'"},
   { "HTTPPathRule", true, "path", "matches DoH queries whose HTTP path is an exact match to 'path'"},
+  { "HTTPStatusAction", true, "status, reason, body", "return an HTTP response"},
   { "inClientStartup", true, "", "returns true during console client parsing of configuration" },
   { "includeDirectory", true, "path", "nclude configuration files from `path`" },
   { "grepq", true, "Netmask|DNS Name|100ms|{\"::1\", \"powerdns.com\", \"100ms\"} [, n]", "shows the last n queries and responses matching the specified client address or range (Netmask), or the specified DNS Name, or slower than 100ms" },
@@ -531,6 +534,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "showConsoleACL", true, "", "show our current console ACL set" },
   { "showDNSCryptBinds", true, "", "display the currently configured DNSCrypt binds" },
   { "showDOHFrontends", true, "", "list all the available DOH frontends" },
+  { "showDOHResponseCodes", true, "", "show the HTTP response code statistics for the DoH frontends"},
   { "showDynBlocks", true, "", "show dynamic blocks in force" },
   { "showPools", true, "", "show the available pools" },
   { "showPoolServerPolicy", true, "pool", "show server selection policy for this pool" },

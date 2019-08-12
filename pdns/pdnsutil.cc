@@ -51,15 +51,6 @@ ArgvMap &arg()
   return arg;
 }
 
-string humanTime(time_t t)
-{
-  char ret[256];
-  struct tm tm;
-  localtime_r(&t, &tm);
-  strftime(ret, sizeof(ret)-1, "%c", &tm);   // %h:%M %Y-%m-%d
-  return ret;
-}
-
 void loadMainConfig(const std::string& configdir)
 {
   ::arg().set("config-dir","Location of configuration directory (pdns.conf)")=configdir;
@@ -688,9 +679,9 @@ int increaseSerial(const DNSName& zone, DNSSECKeeper &dk)
     DNSName ordername;
     if(haveNSEC3) {
       if(!narrow)
-        ordername=DNSName(toBase32Hex(hashQNameWithSalt(ns3pr, zone))) + zone;
+        ordername=DNSName(toBase32Hex(hashQNameWithSalt(ns3pr, zone)));
     } else
-      ordername=zone;
+      ordername=DNSName("");
     if(g_verbose)
       cerr<<"'"<<rr.qname<<"' -> '"<< ordername <<"'"<<endl;
     sd.db->updateDNSSECOrderNameAndAuth(sd.domain_id, rr.qname, ordername, true);
@@ -1785,6 +1776,7 @@ void testSchema(DNSSECKeeper& dk, const DNSName& zone)
   cout<<"Note: test-schema will try to create the zone, but it will not remove it."<<endl;
   cout<<"Please clean up after this."<<endl;
   cout<<endl;
+  cout<<"If this test reports an error and aborts, please check your database schema."<<endl;
   cout<<"Constructing UeberBackend"<<endl;
   UeberBackend B("default");
   cout<<"Picking first backend - if this is not what you want, edit launch line!"<<endl;
@@ -1826,13 +1818,13 @@ void testSchema(DNSSECKeeper& dk, const DNSName& zone)
     if(db->get(rrthrowaway)) // should not touch rr but don't assume anything
     {
       cout<<"Expected one record, got multiple, aborting"<<endl;
-      return;
+      exit(EXIT_FAILURE);
     }
     int size=rrget.content.size();
     if(size != 302)
     {
       cout<<"Expected 302 bytes, got "<<size<<", aborting"<<endl;
-      return;
+      exit(EXIT_FAILURE);
     }
   }
   cout<<"[+] content field is over 255 bytes"<<endl;
@@ -1869,14 +1861,36 @@ void testSchema(DNSSECKeeper& dk, const DNSName& zone)
   if(before != DNSName("_underscore")+zone)
   {
     cout<<"before is wrong, got '"<<before.toString()<<"', expected '_underscore."<<zone.toString()<<"', aborting"<<endl;
-    return;
+    exit(EXIT_FAILURE);
   }
   if(after != zone)
   {
     cout<<"after is wrong, got '"<<after.toString()<<"', expected '"<<zone.toString()<<"', aborting"<<endl;
-    return;
+    exit(EXIT_FAILURE);
   }
   cout<<"[+] ordername sorting is correct for names starting with _"<<endl;
+  cout<<"Setting low notified serial"<<endl;
+  db->setNotified(di.id, 500);
+  db->getDomainInfo(zone, di);
+  if(di.notified_serial != 500) {
+    cout<<"[-] Set serial 500, got back "<<di.notified_serial<<", aborting"<<endl;
+    exit(EXIT_FAILURE);
+  }
+  cout<<"Setting serial that needs 32 bits"<<endl;
+  try {
+    db->setNotified(di.id, 2147484148);
+  } catch(const PDNSException &pe) {
+    cout<<"While setting serial, got error: "<<pe.reason<<endl;
+    cout<<"aborting"<<endl;
+    exit(EXIT_FAILURE);
+  }
+  db->getDomainInfo(zone, di);
+  if(di.notified_serial != 2147484148) {
+    cout<<"[-] Set serial 2147484148, got back "<<di.notified_serial<<", aborting"<<endl;
+    exit(EXIT_FAILURE);
+  } else {
+    cout<<"[+] Big serials work correctly"<<endl;
+  }
   cout<<endl;
   cout<<"End of tests, please remove "<<zone<<" from domains+records"<<endl;
 }

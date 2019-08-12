@@ -1041,6 +1041,72 @@ private:
   std::string d_value;
 };
 
+class ContinueAction : public DNSAction
+{
+public:
+  ContinueAction(std::shared_ptr<DNSAction>& action): d_action(action)
+  {
+  }
+
+  DNSAction::Action operator()(DNSQuestion* dq, std::string* ruleresult) const override
+  {
+    if (d_action) {
+      /* call the action */
+      auto action = (*d_action)(dq, ruleresult);
+      bool drop = false;
+      /* apply the changes if needed (pool selection, flags, etc */
+      processRulesResult(action, *dq, *ruleresult, drop);
+    }
+
+    /* but ignore the resulting action no matter what */
+    return Action::None;
+  }
+
+  std::string toString() const override
+  {
+    if (d_action) {
+      return "continue after: " + (d_action ? d_action->toString() : "");
+    }
+    else {
+      return "no op";
+    }
+  }
+
+private:
+  std::shared_ptr<DNSAction> d_action;
+};
+
+
+#ifdef HAVE_DNS_OVER_HTTPS
+class HTTPStatusAction: public DNSAction
+{
+public:
+  HTTPStatusAction(int code, const std::string& body, const std::string& contentType): d_body(body), d_contentType(contentType), d_code(code)
+  {
+  }
+
+  DNSAction::Action operator()(DNSQuestion* dq, std::string* ruleresult) const override
+  {
+    if (!dq->du) {
+      return Action::None;
+    }
+
+    dq->du->setHTTPResponse(d_code, d_body, d_contentType);
+    dq->dh->qr = true; // for good measure
+    return Action::HeaderModify;
+  }
+
+  std::string toString() const override
+  {
+    return "return an HTTP status of " + std::to_string(d_code);
+  }
+private:
+  std::string d_body;
+  std::string d_contentType;
+  int d_code;
+};
+#endif /* HAVE_DNS_OVER_HTTPS */
+
 template<typename T, typename ActionT>
 static void addAction(GlobalStateHolder<vector<T> > *someRulActions, luadnsrule_t var, std::shared_ptr<ActionT> action, boost::optional<luaruleparams_t> params) {
   setLuaSideEffect();
@@ -1340,4 +1406,14 @@ void setupLuaActions()
   g_lua.writeFunction("TagResponseAction", [](std::string tag, std::string value) {
       return std::shared_ptr<DNSResponseAction>(new TagResponseAction(tag, value));
     });
+
+  g_lua.writeFunction("ContinueAction", [](std::shared_ptr<DNSAction> action) {
+      return std::shared_ptr<DNSAction>(new ContinueAction(action));
+    });
+
+#ifdef HAVE_DNS_OVER_HTTPS
+  g_lua.writeFunction("HTTPStatusAction", [](uint16_t status, std::string body, boost::optional<std::string> contentType) {
+      return std::shared_ptr<DNSAction>(new HTTPStatusAction(status, body, contentType ? *contentType : ""));
+    });
+#endif /* HAVE_DNS_OVER_HTTPS */
 }
