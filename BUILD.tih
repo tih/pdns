@@ -7,7 +7,9 @@ In pdns/dnsdistdist: ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-
 ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dnscrypt
 ...or...
 ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dns-over-tls
+...or...
+./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dns-over-https
 ...or indeed...
-./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dnscrypt --enable-dns-over-tls
+./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit" --enable-dnscrypt --enable-dns-over-tls --enable-dns-over-https
 
-Also, for some reason, on tara I have to add "--with-boost=/usr/pkg" to everything.
+Also, for some reason, on aarch64 I have to add "--with-boost=/usr/pkg" to everything.
