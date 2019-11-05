@@ -103,8 +103,9 @@ void UDPNameserver::bindIPv4()
     s=socket(AF_INET,SOCK_DGRAM,0);
 
     if(s<0) {
-      g_log<<Logger::Error<<"Unable to acquire UDP socket: "+string(strerror(errno)) << endl;
-      throw PDNSException("Unable to acquire a UDP socket: "+string(strerror(errno)));
+      int err = errno;
+      g_log<<Logger::Error<<"Unable to acquire UDP socket: "+stringerror(err) << endl;
+      throw PDNSException("Unable to acquire a UDP socket: "+stringerror(err));
     }
   
     setCloseOnExec(s);
@@ -146,7 +147,7 @@ void UDPNameserver::bindIPv4()
         g_localaddresses.push_back(locala);
 
     if(::bind(s, (sockaddr*)&locala, locala.getSocklen()) < 0) {
-      string binderror = strerror(errno);
+      string binderror = stringerror();
       close(s);
       if( errno == EADDRNOTAVAIL && ! ::arg().mustDo("local-address-nonexist-fail") ) {
         g_log<<Logger::Error<<"IPv4 Address " << localname << " does not exist on this server - skipping UDP bind" << endl;
@@ -218,8 +219,8 @@ void UDPNameserver::bindIPv6()
         g_log<<Logger::Error<<"IPv6 Address Family is not supported - skipping UDPv6 bind" << endl;
         return;
       } else {
-        g_log<<Logger::Error<<"Unable to acquire a UDPv6 socket: "+string(strerror(errno)) << endl;
-        throw PDNSException("Unable to acquire a UDPv6 socket: "+string(strerror(errno)));
+        g_log<<Logger::Error<<"Unable to acquire a UDPv6 socket: "+stringerror() << endl;
+        throw PDNSException("Unable to acquire a UDPv6 socket: "+stringerror());
       }
     }
 
@@ -257,7 +258,7 @@ void UDPNameserver::bindIPv6()
         g_log<<Logger::Error<<"IPv6 Address " << localname << " does not exist on this server - skipping UDP bind" << endl;
         continue;
       } else {
-        g_log<<Logger::Error<<"Unable to bind to UDPv6 socket "<< localname <<": "<<strerror(errno)<<endl;
+        g_log<<Logger::Error<<"Unable to bind to UDPv6 socket "<< localname <<": "<<stringerror()<<endl;
         throw PDNSException("Unable to bind to UDPv6 socket");
       }
     }
@@ -288,30 +289,30 @@ UDPNameserver::UDPNameserver( bool additional_socket )
     g_log<<Logger::Critical<<"PDNS is deaf and mute! Not listening on any interfaces"<<endl;    
 }
 
-void UDPNameserver::send(DNSPacket *p)
+void UDPNameserver::send(DNSPacket& p)
 {
-  string buffer=p->getString();
-  g_rs.submitResponse(*p, true);
+  string buffer=p.getString();
+  g_rs.submitResponse(p, true);
 
   struct msghdr msgh;
   struct iovec iov;
   cmsgbuf_aligned cbuf;
 
-  fillMSGHdr(&msgh, &iov, &cbuf, 0, (char*)buffer.c_str(), buffer.length(), &p->d_remote);
+  fillMSGHdr(&msgh, &iov, &cbuf, 0, (char*)buffer.c_str(), buffer.length(), &p.d_remote);
 
   msgh.msg_control=NULL;
-  if(p->d_anyLocal) {
-    addCMsgSrcAddr(&msgh, &cbuf, p->d_anyLocal.get_ptr(), 0);
+  if(p.d_anyLocal) {
+    addCMsgSrcAddr(&msgh, &cbuf, p.d_anyLocal.get_ptr(), 0);
   }
-  DLOG(g_log<<Logger::Notice<<"Sending a packet to "<< p->getRemote() <<" ("<< buffer.length()<<" octets)"<<endl);
-  if(buffer.length() > p->getMaxReplyLen()) {
-    g_log<<Logger::Error<<"Weird, trying to send a message that needs truncation, "<< buffer.length()<<" > "<<p->getMaxReplyLen()<<". Question was for "<<p->qdomain<<"|"<<p->qtype.getName()<<endl;
+  DLOG(g_log<<Logger::Notice<<"Sending a packet to "<< p.getRemote() <<" ("<< buffer.length()<<" octets)"<<endl);
+  if(buffer.length() > p.getMaxReplyLen()) {
+    g_log<<Logger::Error<<"Weird, trying to send a message that needs truncation, "<< buffer.length()<<" > "<<p.getMaxReplyLen()<<". Question was for "<<p.qdomain<<"|"<<p.qtype.getName()<<endl;
   }
-  if(sendmsg(p->getSocket(), &msgh, 0) < 0)
-    g_log<<Logger::Error<<"Error sending reply with sendmsg (socket="<<p->getSocket()<<", dest="<<p->d_remote.toStringWithPort()<<"): "<<strerror(errno)<<endl;
+  if(sendmsg(p.getSocket(), &msgh, 0) < 0)
+    g_log<<Logger::Error<<"Error sending reply with sendmsg (socket="<<p.getSocket()<<", dest="<<p.d_remote.toStringWithPort()<<"): "<<stringerror()<<endl;
 }
 
-DNSPacket *UDPNameserver::receive(DNSPacket *prefilled, std::string& buffer)
+bool UDPNameserver::receive(DNSPacket& packet, std::string& buffer)
 {
   ComboAddress remote;
   extern StatBag S;
@@ -347,7 +348,7 @@ DNSPacket *UDPNameserver::receive(DNSPacket *prefilled, std::string& buffer)
       sock=pfd.fd;        
       if((len=recvmsg(sock, &msgh, 0)) < 0 ) {
         if(errno != EAGAIN)
-          g_log<<Logger::Error<<"recvfrom gave error, ignoring: "<<strerror(errno)<<endl;
+          g_log<<Logger::Error<<"recvfrom gave error, ignoring: "<<stringerror()<<endl;
         return 0;
       }
       break;
@@ -363,36 +364,28 @@ DNSPacket *UDPNameserver::receive(DNSPacket *prefilled, std::string& buffer)
   if(remote.sin4.sin_port == 0) // would generate error on responding. sin4 also works for ipv6
     return 0;
   
-  DNSPacket *packet;
-  if(prefilled)  // they gave us a preallocated packet
-    packet=prefilled;
-  else
-    packet=new DNSPacket(true); // don't forget to free it!
-
-  packet->setSocket(sock);
-  packet->setRemote(&remote);
+  packet.setSocket(sock);
+  packet.setRemote(&remote);
 
   ComboAddress dest;
   if(HarvestDestinationAddress(&msgh, &dest)) {
 //    cerr<<"Setting d_anyLocal to '"<<dest.toString()<<"'"<<endl;
-    packet->d_anyLocal = dest;
+    packet.d_anyLocal = dest;
   }            
 
   struct timeval recvtv;
   if(HarvestTimestamp(&msgh, &recvtv)) {
-    packet->d_dt.setTimeval(recvtv);
+    packet.d_dt.setTimeval(recvtv);
   }
   else
-    packet->d_dt.set(); // timing    
+    packet.d_dt.set(); // timing    
 
-  if(packet->parse(&buffer.at(0), (size_t) len)<0) {
+  if(packet.parse(&buffer.at(0), (size_t) len)<0) {
     S.inc("corrupt-packets");
-    S.ringAccount("remotes-corrupt", packet->d_remote);
+    S.ringAccount("remotes-corrupt", packet.d_remote);
 
-    if(!prefilled)
-      delete packet;
-    return 0; // unable to parse
+    return false; // unable to parse
   }
   
-  return packet;
+  return true;
 }

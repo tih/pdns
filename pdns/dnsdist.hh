@@ -113,8 +113,8 @@ struct DNSQuestion
 
 struct DNSResponse : DNSQuestion
 {
-  DNSResponse(const DNSName* name, uint16_t type, uint16_t class_, unsigned int consumed, const ComboAddress* lc, const ComboAddress* rem, struct dnsheader* header, size_t bufferSize, uint16_t responseLen, bool isTcp, const struct timespec* queryTime_):
-    DNSQuestion(name, type, class_, consumed, lc, rem, header, bufferSize, responseLen, isTcp, queryTime_) { }
+  DNSResponse(const DNSName* name, uint16_t type, uint16_t class_, unsigned int consumed_, const ComboAddress* lc, const ComboAddress* rem, struct dnsheader* header, size_t bufferSize, uint16_t responseLen, bool isTcp, const struct timespec* queryTime_):
+    DNSQuestion(name, type, class_, consumed_, lc, rem, header, bufferSize, responseLen, isTcp, queryTime_) { }
   DNSResponse(const DNSResponse&) = delete;
   DNSResponse& operator=(const DNSResponse&) = delete;
   DNSResponse(DNSResponse&&) = default;
@@ -396,9 +396,6 @@ struct MetricDefinitionStorage {
     { "dyn-blocked",            MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of a dynamic block")},
     { "dyn-block-nmg-size",     MetricDefinition(PrometheusMetricType::gauge,   "Number of dynamic blocks entries") },
     { "security-status",        MetricDefinition(PrometheusMetricType::gauge,   "Security status of this software. 0=unknown, 1=OK, 2=upgrade recommended, 3=upgrade mandatory") },
-    // Latency histogram
-    { "latency-sum",            MetricDefinition(PrometheusMetricType::counter, "Total response time in milliseconds")},
-    { "latency-count",          MetricDefinition(PrometheusMetricType::counter, "Number of queries contributing to response time histogram")},
   };
 };
 
@@ -679,12 +676,22 @@ struct ClientState
   std::shared_ptr<DOHFrontend> dohFrontend{nullptr};
   std::string interface;
   std::atomic<uint64_t> queries{0};
+  mutable std::atomic<uint64_t> responses{0};
   std::atomic<uint64_t> tcpDiedReadingQuery{0};
   std::atomic<uint64_t> tcpDiedSendingResponse{0};
   std::atomic<uint64_t> tcpGaveUp{0};
   std::atomic<uint64_t> tcpClientTimeouts{0};
   std::atomic<uint64_t> tcpDownstreamTimeouts{0};
   std::atomic<uint64_t> tcpCurrentConnections{0};
+  std::atomic<uint64_t> tlsNewSessions{0}; // A new TLS session has been negotiated, no resumption
+  std::atomic<uint64_t> tlsResumptions{0}; // A TLS session has been resumed, either via session id or via a TLS ticket
+  std::atomic<uint64_t> tlsUnknownTicketKey{0}; // A TLS ticket has been presented but we don't have the associated key (might have expired)
+  std::atomic<uint64_t> tlsInactiveTicketKey{0}; // A TLS ticket has been successfully resumed but the key is no longer active, we should issue a new one
+  std::atomic<uint64_t> tls10queries{0};   // valid DNS queries received via TLSv1.0
+  std::atomic<uint64_t> tls11queries{0};   // valid DNS queries received via TLSv1.1
+  std::atomic<uint64_t> tls12queries{0};   // valid DNS queries received via TLSv1.2
+  std::atomic<uint64_t> tls13queries{0};   // valid DNS queries received via TLSv1.3
+  std::atomic<uint64_t> tlsUnknownqueries{0};   // valid DNS queries received via unknown TLS version
   std::atomic<double> tcpAvgQueriesPerConnection{0.0};
   /* in ms */
   std::atomic<double> tcpAvgConnectionDuration{0.0};
@@ -699,6 +706,21 @@ struct ClientState
   int getSocket() const
   {
     return udpFD != -1 ? udpFD : tcpFD;
+  }
+
+  bool isUDP() const
+  {
+    return udpFD != -1;
+  }
+
+  bool isTCP() const
+  {
+    return udpFD == -1;
+  }
+
+  bool hasTLS() const
+  {
+    return tlsFrontend != nullptr || dohFrontend != nullptr;
   }
 
   std::string getType() const
@@ -738,9 +760,9 @@ struct ClientState
   }
 #endif /* HAVE_EBPF */
 
-  void updateTCPMetrics(size_t queries, uint64_t durationMs)
+  void updateTCPMetrics(size_t nbQueries, uint64_t durationMs)
   {
-    tcpAvgQueriesPerConnection = (99.0 * tcpAvgQueriesPerConnection / 100.0) + (queries / 100.0);
+    tcpAvgQueriesPerConnection = (99.0 * tcpAvgQueriesPerConnection / 100.0) + (nbQueries / 100.0);
     tcpAvgConnectionDuration = (99.0 * tcpAvgConnectionDuration / 100.0) + (durationMs / 100.0);
   }
 };
@@ -763,21 +785,22 @@ public:
 
     if (d_useSinglePipe) {
       if (pipe(d_singlePipe) < 0) {
-        throw std::runtime_error("Error creating the TCP single communication pipe: " + string(strerror(errno)));
+        int err = errno;
+        throw std::runtime_error("Error creating the TCP single communication pipe: " + stringerror(err));
       }
 
       if (!setNonBlocking(d_singlePipe[0])) {
         int err = errno;
         close(d_singlePipe[0]);
         close(d_singlePipe[1]);
-        throw std::runtime_error("Error setting the TCP single communication pipe non-blocking: " + string(strerror(err)));
+        throw std::runtime_error("Error setting the TCP single communication pipe non-blocking: " + stringerror(err));
       }
 
       if (!setNonBlocking(d_singlePipe[1])) {
         int err = errno;
         close(d_singlePipe[0]);
         close(d_singlePipe[1]);
-        throw std::runtime_error("Error setting the TCP single communication pipe non-blocking: " + string(strerror(err)));
+        throw std::runtime_error("Error setting the TCP single communication pipe non-blocking: " + stringerror(err));
       }
     }
   }
@@ -812,8 +835,8 @@ struct DownstreamState
 {
    typedef std::function<std::tuple<DNSName, uint16_t, uint16_t>(const DNSName&, uint16_t, uint16_t, dnsheader*)> checkfunc_t;
 
-  DownstreamState(const ComboAddress& remote_, const ComboAddress& sourceAddr_, unsigned int sourceItf, size_t numberOfSockets);
-  DownstreamState(const ComboAddress& remote_): DownstreamState(remote_, ComboAddress(), 0, 1) {}
+  DownstreamState(const ComboAddress& remote_, const ComboAddress& sourceAddr_, unsigned int sourceItf, const std::string& sourceItfName, size_t numberOfSockets);
+  DownstreamState(const ComboAddress& remote_): DownstreamState(remote_, ComboAddress(), 0, std::string(), 1) {}
   ~DownstreamState()
   {
     for (auto& fd : sockets) {
@@ -827,6 +850,7 @@ struct DownstreamState
   std::set<unsigned int> hashes;
   mutable pthread_rwlock_t d_lock;
   std::vector<int> sockets;
+  const std::string sourceItfName;
   std::mutex socketsLock;
   std::mutex connectLock;
   std::unique_ptr<FDMultiplexer> mplexer{nullptr};
@@ -844,6 +868,7 @@ struct DownstreamState
   std::atomic<uint64_t> outstanding{0};
   std::atomic<uint64_t> reuseds{0};
   std::atomic<uint64_t> queries{0};
+  std::atomic<uint64_t> responses{0};
   struct {
     std::atomic<uint64_t> sendErrors{0};
     std::atomic<uint64_t> reuseds{0};
@@ -930,9 +955,9 @@ struct DownstreamState
   void setId(const boost::uuids::uuid& newId);
   void setWeight(int newWeight);
 
-  void updateTCPMetrics(size_t queries, uint64_t durationMs)
+  void updateTCPMetrics(size_t nbQueries, uint64_t durationMs)
   {
-    tcpAvgQueriesPerConnection = (99.0 * tcpAvgQueriesPerConnection / 100.0) + (queries / 100.0);
+    tcpAvgQueriesPerConnection = (99.0 * tcpAvgQueriesPerConnection / 100.0) + (nbQueries / 100.0);
     tcpAvgConnectionDuration = (99.0 * tcpAvgConnectionDuration / 100.0) + (durationMs / 100.0);
   }
 };
@@ -1219,7 +1244,9 @@ extern bool g_snmpTrapsEnabled;
 extern DNSDistSNMPAgent* g_snmpAgent;
 extern bool g_addEDNSToSelfGeneratedResponses;
 
-static const size_t s_udpIncomingBufferSize{1500};
+extern std::set<std::string> g_capabilitiesToRetain;
+static const uint16_t s_udpIncomingBufferSize{1500}; // don't accept UDP queries larger than this value
+static const size_t s_maxPacketCacheEntrySize{4096}; // don't cache responses larger than this value
 
 enum class ProcessQueryResult { Drop, SendAnswer, PassToBackend };
 ProcessQueryResult processQuery(DNSQuestion& dq, ClientState& cs, LocalHolders& holders, std::shared_ptr<DownstreamState>& selectedBackend);

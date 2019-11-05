@@ -52,7 +52,7 @@ using json11::Json;
 
 extern StatBag S;
 
-static void patchZone(HttpRequest* req, HttpResponse* resp);
+static void patchZone(UeberBackend& B, HttpRequest* req, HttpResponse* resp);
 static void storeChangedPTRs(UeberBackend& B, vector<DNSResourceRecord>& new_ptrs);
 static void makePtr(const DNSResourceRecord& rr, DNSResourceRecord* ptr);
 
@@ -352,8 +352,7 @@ static bool shouldDoRRSets(HttpRequest* req) {
   throw ApiException("'rrsets' request parameter value '"+req->getvars["rrsets"]+"' is not supported");
 }
 
-static void fillZone(const DNSName& zonename, HttpResponse* resp, bool doRRSets) {
-  UeberBackend B;
+static void fillZone(UeberBackend& B, const DNSName& zonename, HttpResponse* resp, bool doRRSets) {
   DomainInfo di;
   if(!B.getDomainInfo(zonename, di)) {
     throw HttpNotFoundException();
@@ -525,8 +524,7 @@ static void validateGatheredRRType(const DNSResourceRecord& rr) {
   }
 }
 
-static void gatherRecords(const string& logprefix, const Json container, const DNSName& qname, const QType qtype, const int ttl, vector<DNSResourceRecord>& new_records, vector<DNSResourceRecord>& new_ptrs) {
-  UeberBackend B;
+static void gatherRecords(UeberBackend& B, const string& logprefix, const Json container, const DNSName& qname, const QType qtype, const int ttl, vector<DNSResourceRecord>& new_records, vector<DNSResourceRecord>& new_ptrs) {
   DNSResourceRecord rr;
   rr.qname = qname;
   rr.qtype = qtype;
@@ -537,7 +535,10 @@ static void gatherRecords(const string& logprefix, const Json container, const D
   const auto& items = container["records"].array_items();
   for(const auto& record : items) {
     string content = stringFromJson(record, "content");
-    rr.disabled = boolFromJson(record, "disabled");
+    rr.disabled = false;
+    if(!record["disabled"].is_null()) {
+      rr.disabled = boolFromJson(record, "disabled");
+    }
 
     // validate that the client sent something we can actually parse, and require that data to be dotted.
     try {
@@ -825,6 +826,7 @@ static bool isValidMetadataKind(const string& kind, bool readonly) {
     "PRESIGNED",
     "PUBLISH-CDNSKEY",
     "PUBLISH-CDS",
+    "SLAVE-RENOTIFY",
     "SOA-EDIT",
     "TSIG-ALLOW-AXFR",
     "TSIG-ALLOW-DNSUPDATE"
@@ -1058,7 +1060,7 @@ static void apiZoneCryptokeysGET(DNSName zonename, int inquireKeyId, HttpRespons
 
     if (value.second.keyType == DNSSECKeeper::KSK || value.second.keyType == DNSSECKeeper::CSK) {
       Json::array dses;
-      for(const uint8_t keyid : { DNSSECKeeper::SHA1, DNSSECKeeper::SHA256, DNSSECKeeper::GOST, DNSSECKeeper::SHA384 })
+      for(const uint8_t keyid : { DNSSECKeeper::DIGEST_SHA1, DNSSECKeeper::DIGEST_SHA256, DNSSECKeeper::DIGEST_GOST, DNSSECKeeper::DIGEST_SHA384 })
         try {
           dses.push_back(makeDSFromDNSKey(zonename, value.first.getDNSKEY(), keyid).getZoneRepresentation());
         } catch (...) {}
@@ -1302,6 +1304,7 @@ static void gatherRecordsFromZone(const std::string& zonestring, vector<DNSResou
   stringtok(zonedata, zonestring, "\r\n");
 
   ZoneParserTNG zpt(zonedata, zonename);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
 
   bool seenSOA=false;
 
@@ -1558,7 +1561,7 @@ static void apiServerZones(HttpRequest* req, HttpResponse* resp) {
         }
         if (rrset["records"].is_array()) {
           int ttl = intFromJson(rrset, "ttl");
-          gatherRecords(req->logprefix, rrset, qname, qtype, ttl, new_records, new_ptrs);
+          gatherRecords(B, req->logprefix, rrset, qname, qtype, ttl, new_records, new_ptrs);
         }
         if (rrset["comments"].is_array()) {
           gatherComments(rrset, qname, qtype, new_comments);
@@ -1667,7 +1670,7 @@ static void apiServerZones(HttpRequest* req, HttpResponse* resp) {
 
     storeChangedPTRs(B, new_ptrs);
 
-    fillZone(zonename, resp, shouldDoRRSets(req));
+    fillZone(B, zonename, resp, shouldDoRRSets(req));
     resp->status = 201;
     return;
   }
@@ -1740,10 +1743,10 @@ static void apiServerZoneDetail(HttpRequest* req, HttpResponse* resp) {
     resp->status = 204; // No Content: declare that the zone is gone now
     return;
   } else if (req->method == "PATCH") {
-    patchZone(req, resp);
+    patchZone(B, req, resp);
     return;
   } else if (req->method == "GET") {
-    fillZone(zonename, resp, shouldDoRRSets(req));
+    fillZone(B, zonename, resp, shouldDoRRSets(req));
     return;
   }
   throw HttpMethodNotAllowedException();
@@ -1819,7 +1822,7 @@ static void apiServerZoneNotify(HttpRequest* req, HttpResponse* resp) {
     throw HttpNotFoundException();
   }
 
-  if(!Communicator.notifyDomain(zonename))
+  if(!Communicator.notifyDomain(zonename, &B))
     throw ApiException("Failed to add to the queue - see server log");
 
   resp->setSuccessResult("Notification queued");
@@ -1921,8 +1924,7 @@ static void storeChangedPTRs(UeberBackend& B, vector<DNSResourceRecord>& new_ptr
   }
 }
 
-static void patchZone(HttpRequest* req, HttpResponse* resp) {
-  UeberBackend B;
+static void patchZone(UeberBackend& B, HttpRequest* req, HttpResponse* resp) {
   DomainInfo di;
   DNSName zonename = apiZoneIdToName(req->parameters["id"]);
   if (!B.getDomainInfo(zonename, di)) {
@@ -1991,7 +1993,7 @@ static void patchZone(HttpRequest* req, HttpResponse* resp) {
           // ttl shouldn't be part of DELETE, and it shouldn't be required if we don't get new records.
           int ttl = intFromJson(rrset, "ttl");
           // new_ptrs is merged.
-          gatherRecords(req->logprefix, rrset, qname, qtype, ttl, new_records, new_ptrs);
+          gatherRecords(B, req->logprefix, rrset, qname, qtype, ttl, new_records, new_ptrs);
 
           for(DNSResourceRecord& rr : new_records) {
             rr.domain_id = di.id;
@@ -2012,7 +2014,7 @@ static void patchZone(HttpRequest* req, HttpResponse* resp) {
 
         if (replace_records) {
           bool ent_present = false;
-          di.backend->lookup(QType(QType::ANY), qname);
+          di.backend->lookup(QType(QType::ANY), qname, di.id);
           DNSResourceRecord rr;
           while (di.backend->get(rr)) {
             if (rr.qtype.getCode() == QType::ENT) {

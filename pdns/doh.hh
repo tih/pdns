@@ -1,15 +1,53 @@
 #pragma once
 #include "iputils.hh"
+#include "libssl.hh"
 
 struct DOHServerConfig;
 
+class DOHResponseMapEntry
+{
+public:
+  DOHResponseMapEntry(const std::string& regex, uint16_t status, const std::string& content, const boost::optional<std::vector<std::pair<std::string, std::string>>>& headers): d_regex(regex), d_customHeaders(headers), d_content(content), d_status(status)
+  {
+  }
+
+  bool matches(const std::string& path) const
+  {
+    return d_regex.match(path);
+  }
+
+  uint16_t getStatusCode() const
+  {
+    return d_status;
+  }
+
+  const std::string& getContent() const
+  {
+    return d_content;
+  }
+
+  const boost::optional<std::vector<std::pair<std::string, std::string>>>& getHeaders() const
+  {
+    return d_customHeaders;
+  }
+
+private:
+  Regex d_regex;
+  boost::optional<std::vector<std::pair<std::string, std::string>>> d_customHeaders;
+  std::string d_content;
+  uint16_t d_status;
+};
+
 struct DOHFrontend
 {
+  DOHFrontend()
+  {
+  }
+
   std::shared_ptr<DOHServerConfig> d_dsc{nullptr};
-  std::vector<std::pair<std::string, std::string>> d_certKeyPairs;
-  std::vector<std::string> d_ocspFiles;
-  std::string d_ciphers;
-  std::string d_ciphers13;
+  std::vector<std::shared_ptr<DOHResponseMapEntry>> d_responsesMap;
+  TLSConfig d_tlsConfig;
+  TLSErrorCounters d_tlsCounters;
   std::string d_serverTokens{"h2o/dnsdist"};
   std::vector<std::pair<std::string, std::string>> d_customResponseHeaders;
   ComboAddress d_local;
@@ -17,19 +55,13 @@ struct DOHFrontend
   uint32_t d_idleTimeout{30};             // HTTP idle timeout in seconds
   std::vector<std::string> d_urls;
 
-  std::atomic<uint64_t> d_httpconnects;   // number of TCP/IP connections established
-  std::atomic<uint64_t> d_tls10queries;   // valid DNS queries received via TLSv1.0
-  std::atomic<uint64_t> d_tls11queries;   // valid DNS queries received via TLSv1.1
-  std::atomic<uint64_t> d_tls12queries;   // valid DNS queries received via TLSv1.2
-  std::atomic<uint64_t> d_tls13queries;   // valid DNS queries received via TLSv1.3
-  std::atomic<uint64_t> d_tlsUnknownqueries;   // valid DNS queries received via unknown TLS version
-
-  std::atomic<uint64_t> d_getqueries;     // valid DNS queries received via GET
-  std::atomic<uint64_t> d_postqueries;    // valid DNS queries received via POST
-  std::atomic<uint64_t> d_badrequests;     // request could not be converted to dns query
-  std::atomic<uint64_t> d_errorresponses; // dnsdist set 'error' on response
-    std::atomic<uint64_t> d_redirectresponses; // dnsdist set 'redirect' on response
-  std::atomic<uint64_t> d_validresponses; // valid responses sent out
+  std::atomic<uint64_t> d_httpconnects{0};   // number of TCP/IP connections established
+  std::atomic<uint64_t> d_getqueries{0};     // valid DNS queries received via GET
+  std::atomic<uint64_t> d_postqueries{0};    // valid DNS queries received via POST
+  std::atomic<uint64_t> d_badrequests{0};     // request could not be converted to dns query
+  std::atomic<uint64_t> d_errorresponses{0}; // dnsdist set 'error' on response
+  std::atomic<uint64_t> d_redirectresponses{0}; // dnsdist set 'redirect' on response
+  std::atomic<uint64_t> d_validresponses{0}; // valid responses sent out
 
   struct HTTPVersionStats
   {
@@ -45,6 +77,11 @@ struct DOHFrontend
   HTTPVersionStats d_http1Stats;
   HTTPVersionStats d_http2Stats;
 
+  time_t getTicketsKeyRotationDelay() const
+  {
+    return d_tlsConfig.d_ticketsKeyRotationDelay;
+  }
+
 #ifndef HAVE_DNS_OVER_HTTPS
   void setup()
   {
@@ -53,9 +90,39 @@ struct DOHFrontend
   void reloadCertificates()
   {
   }
+
+  void rotateTicketsKey(time_t now)
+  {
+  }
+
+  void loadTicketsKeys(const std::string& keyFile)
+  {
+  }
+
+  void handleTicketsKeyRotation()
+  {
+  }
+
+  time_t getNextTicketsKeyRotation() const
+  {
+    return 0;
+  }
+
+  size_t getTicketsKeysCount() const
+  {
+    size_t res = 0;
+    return res;
+  }
+
 #else
   void setup();
   void reloadCertificates();
+
+  void rotateTicketsKey(time_t now);
+  void loadTicketsKeys(const std::string& keyFile);
+  void handleTicketsKeyRotation();
+  time_t getNextTicketsKeyRotation() const;
+  size_t getTicketsKeysCount() const;
 #endif /* HAVE_DNS_OVER_HTTPS */
 };
 
@@ -71,6 +138,24 @@ struct st_h2o_req_t;
 
 struct DOHUnit
 {
+  DOHUnit()
+  {
+  }
+  DOHUnit(const DOHUnit&) = delete;
+  DOHUnit& operator=(const DOHUnit&) = delete;
+
+  void get()
+  {
+    ++d_refcnt;
+  }
+
+  void release()
+  {
+    if (--d_refcnt == 0) {
+      delete this;
+    }
+  }
+
   std::string query;
   std::string response;
   ComboAddress remote;
@@ -78,6 +163,7 @@ struct DOHUnit
   st_h2o_req_t* req{nullptr};
   DOHUnit** self{nullptr};
   std::string contentType;
+  std::atomic<uint64_t> d_refcnt{1};
   int rsock;
   uint16_t qtype;
   /* the status_code is set from

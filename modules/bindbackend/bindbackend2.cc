@@ -80,6 +80,9 @@ pthread_mutex_t Bind2Backend::s_supermaster_config_lock=PTHREAD_MUTEX_INITIALIZE
 pthread_mutex_t Bind2Backend::s_startup_lock=PTHREAD_MUTEX_INITIALIZER;
 string Bind2Backend::s_binddirectory;  
 
+template <typename T>
+std::mutex LookButDontTouch<T>::s_lock;
+
 BB2DomainInfo::BB2DomainInfo()
 {
   d_loaded=false;
@@ -373,7 +376,11 @@ void Bind2Backend::getAllDomains(vector<DomainInfo> *domains, bool include_disab
     // do not corrupt di if domain supplied by another backend.
     if (di.backend != this)
       continue;
-    this->getSOA(di.zone, soadata);
+    try {
+      this->getSOA(di.zone, soadata);
+    } catch(...) {
+      continue;
+    }
     di.serial=soadata.serial;
   }
 }
@@ -444,6 +451,13 @@ void Bind2Backend::alsoNotifies(const DNSName& domain, set<string> *ips)
   for(set<string>::iterator i = this->alsoNotify.begin(); i != this->alsoNotify.end(); i++) {
     (*ips).insert(*i);
   }
+  // check metadata too if available
+  vector<string> meta;
+  if (getDomainMetadata(domain, "ALSO-NOTIFY", meta)) {
+    for(const auto& str: meta) {
+      (*ips).insert(str);
+    }
+  }
   ReadLock rl(&s_state_lock);  
   for(state_t::const_iterator i = s_state.begin(); i != s_state.end() ; ++i) {
     if(i->d_name == domain) {
@@ -467,11 +481,11 @@ void Bind2Backend::parseZoneFile(BB2DomainInfo *bbd)
     nsec3zone=getNSEC3PARAM(bbd->d_name, &ns3pr);
 
   bbd->d_records = shared_ptr<recordstorage_t>(new recordstorage_t());
-        
   ZoneParserTNG zpt(bbd->d_filename, bbd->d_name, s_binddirectory);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
   DNSResourceRecord rr;
   string hashed;
-  while(zpt.get(rr)) { 
+  while(zpt.get(rr)) {
     if(rr.qtype.getCode() == QType::NSEC || rr.qtype.getCode() == QType::NSEC3 || rr.qtype.getCode() == QType::NSEC3PARAM)
       continue; // we synthesise NSECs on demand
 
@@ -1042,41 +1056,42 @@ bool Bind2Backend::getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& qn
   }
 }
 
-void Bind2Backend::lookup(const QType &qtype, const DNSName &qname, DNSPacket *pkt_p, int zoneId )
+void Bind2Backend::lookup(const QType &qtype, const DNSName &qname, int zoneId, DNSPacket *pkt_p )
 {
   d_handle.reset();
-  DNSName domain(qname);
 
   static bool mustlog=::arg().mustDo("query-logging");
-  if(mustlog) 
-    g_log<<Logger::Warning<<"Lookup for '"<<qtype.getName()<<"' of '"<<domain<<"' within zoneID "<<zoneId<<endl;
-  bool found=false;
+
+  bool found;
+  DNSName domain;
   BB2DomainInfo bbd;
 
-  do {
-    found = safeGetBBDomainInfo(domain, &bbd);
-  } while ((!found || (zoneId != (int)bbd.d_id && zoneId != -1)) && domain.chopOff());
+  if(mustlog)
+    g_log<<Logger::Warning<<"Lookup for '"<<qtype.getName()<<"' of '"<<qname<<"' within zoneID "<<zoneId<<endl;
+
+  if (zoneId >= 0) {
+    if ((found = (safeGetBBDomainInfo(zoneId, &bbd) && qname.isPartOf(bbd.d_name)))) {
+      domain = bbd.d_name;
+    }
+  } else {
+    domain = qname;
+    do {
+      found = safeGetBBDomainInfo(domain, &bbd);
+    } while (!found && qtype != QType::SOA && domain.chopOff());
+  }
 
   if(!found) {
     if(mustlog)
-      g_log<<Logger::Warning<<"Found no authoritative zone for "<<qname<<endl;
+      g_log<<Logger::Warning<<"Found no authoritative zone for '"<<qname<<"' and/or id "<<bbd.d_id<<endl;
     d_handle.d_list=false;
     return;
   }
 
   if(mustlog)
     g_log<<Logger::Warning<<"Found a zone '"<<domain<<"' (with id " << bbd.d_id<<") that might contain data "<<endl;
-    
-  d_handle.id=bbd.d_id;
-  
-  DLOG(g_log<<"Bind2Backend constructing handle for search for "<<qtype.getName()<<" for "<<
-       qname<<endl);
-  
-  if(domain.empty())
-    d_handle.qname=qname;
-  else if(qname.isPartOf(domain))
-    d_handle.qname=qname.makeRelative(domain); // strip domain name
 
+  d_handle.id=bbd.d_id;
+  d_handle.qname=qname.makeRelative(domain); // strip domain name
   d_handle.qtype=qtype;
   d_handle.domain=domain;
 

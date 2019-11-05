@@ -160,6 +160,18 @@ Static pre-shared authentication key for access to the REST API.
 
 Disallow data modification through the REST API when set.
 
+.. _setting-axfr-fetch-timeout:
+
+``axfr-fetch-timeout``
+----------------------
+
+- Integer
+- Default: 10
+
+.. versionadded:: 4.3.0
+
+Maximum time in seconds for inbound AXFR to start or be idle after starting.
+
 .. _setting-axfr-lower-serial:
 
 ``axfr-lower-serial``
@@ -915,6 +927,21 @@ will generally suffice for most installations.
 Maximum number of empty non-terminals to add to a zone. This is a
 protection measure to avoid database explosion due to long names.
 
+.. _setting-max-generate-steps:
+
+``max-generate-steps``
+----------------------
+
+.. versionadded:: 4.3.0
+
+-  Integer
+-  Default: 0
+
+Maximum number of steps for a '$GENERATE' directive when parsing a
+zone file. This is a protection measure to prevent consuming a lot of
+CPU and memory when untrusted zones are loaded. Default to 0 which
+means unlimited.
+
 .. _setting-max-nsec3-iterations:
 
 ``max-nsec3-iterations``
@@ -1413,6 +1440,8 @@ checking for updates to zones.
 This setting will make PowerDNS renotify the slaves after an AXFR is
 *received* from a master. This is useful when using when running a
 signing-slave.
+
+See :ref:`metadata-slave-renotify` to set this per-zone.
 
 .. _setting-soa-expire-default:
 

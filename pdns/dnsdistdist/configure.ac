@@ -17,11 +17,11 @@ AC_DEFINE([DNSDIST], [1],
 LT_PREREQ([2.2.2])
 LT_INIT([disable-static])
 
-CFLAGS="-Wall -g -O3 $CFLAGS"
-CXXFLAGS="-Wall -g -O3 $CXXFLAGS"
+CFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter $CFLAGS"
+CXXFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter $CXXFLAGS"
 
 PDNS_WITH_LIBSODIUM
-PDNS_CHECK_DNSTAP
+PDNS_CHECK_DNSTAP([auto])
 PDNS_CHECK_RAGEL([dnslabeltext.cc], [www.dnsdist.org])
 PDNS_CHECK_LIBEDIT
 PDNS_CHECK_CLOCK_GETTIME
@@ -48,6 +48,9 @@ AX_AVAILABLE_SYSTEMD
 AX_CHECK_SYSTEMD_FEATURES
 AM_CONDITIONAL([HAVE_SYSTEMD], [ test x"$systemd" = "xy" ])
 
+dnl the *_r functions are in posix so we can use them unconditionally, but the ext/yahttp code is
+dnl using the defines.
+AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r])
 AC_SUBST([YAHTTP_CFLAGS], ['-I$(top_srcdir)/ext/yahttp'])
 AC_SUBST([YAHTTP_LIBS], ['$(top_builddir)/ext/yahttp/yahttp/libyahttp.la'])
 AC_SUBST([IPCRYPT_CFLAGS], ['-I$(top_srcdir)/ext/ipcrypt'])
@@ -63,6 +66,8 @@ PDNS_CHECK_LUA_HPP
 
 AM_CONDITIONAL([HAVE_GNUTLS], [false])
 AM_CONDITIONAL([HAVE_LIBSSL], [false])
+AM_CONDITIONAL([HAVE_LMDB], [false])
+AM_CONDITIONAL([HAVE_CDB], [false])
 
 PDNS_CHECK_LIBCRYPTO
 
@@ -91,6 +96,9 @@ AS_IF([test "x$enable_dns_over_https" != "xno"], [
     AC_MSG_ERROR([DNS over HTTPS support requested but OpenSSL was not found])
   ])
 ])
+
+PDNS_CHECK_CDB
+PDNS_CHECK_LMDB
 
 AX_CXX_COMPILE_STDCXX_11([ext], [mandatory])
 
@@ -212,6 +220,14 @@ AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xn
     [AC_MSG_NOTICE([OpenSSL: yes])],
     [AC_MSG_NOTICE([OpenSSL: no])]
   )]
+)
+AS_IF([test "x$CDB_LIBS" != "x"],
+  [AC_MSG_NOTICE([cdb: yes])],
+  [AC_MSG_NOTICE([cdb: no])]
+)
+AS_IF([test "x$LMDB_LIBS" != "x"],
+  [AC_MSG_NOTICE([lmdb: yes])],
+  [AC_MSG_NOTICE([lmdb: no])]
 )
 
 AC_MSG_NOTICE([])

@@ -197,10 +197,11 @@ size_t writen2WithTimeout(int fd, const void * buffer, size_t len, int timeout)
 string nowTime()
 {
   time_t now = time(nullptr);
-  struct tm* tm = localtime(&now);
+  struct tm tm;
+  localtime_r(&now, &tm);
   char buffer[30];
   // YYYY-mm-dd HH:MM:SS TZOFF
-  strftime(buffer, sizeof(buffer), "%F %T %z", tm);
+  strftime(buffer, sizeof(buffer), "%F %T %z", &tm);
   buffer[sizeof(buffer)-1] = '\0';
   return string(buffer);
 }
@@ -446,10 +447,6 @@ DTime::DTime()
   d_set.tv_sec=d_set.tv_usec=0;
 }
 
-DTime::DTime(const DTime &dt) : d_set(dt.d_set)
-{
-}
-
 time_t DTime::time()
 {
   return d_set.tv_sec;
@@ -525,14 +522,14 @@ string bitFlip(const string &str)
   return ret;
 }
 
+string stringerror(int err)
+{
+  return strerror(err);
+}
+
 string stringerror()
 {
   return strerror(errno);
-}
-
-string netstringerror()
-{
-  return stringerror();
 }
 
 void cleanSlashes(string &str)
@@ -893,7 +890,14 @@ void addCMsgSrcAddr(struct msghdr* msgh, cmsgbuf_aligned* cmsgbuf, const ComboAd
     struct in6_pktinfo *pkt;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
+    /* CMSG_SPACE is not a constexpr on macOS */
     static_assert(CMSG_SPACE(sizeof(*pkt)) <= sizeof(*cmsgbuf), "Buffer is too small for in6_pktinfo");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*pkt)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in6_pktinfo");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*pkt));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -912,7 +916,14 @@ void addCMsgSrcAddr(struct msghdr* msgh, cmsgbuf_aligned* cmsgbuf, const ComboAd
     struct in_pktinfo *pkt;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
+    /* CMSG_SPACE is not a constexpr on macOS */
     static_assert(CMSG_SPACE(sizeof(*pkt)) <= sizeof(*cmsgbuf), "Buffer is too small for in_pktinfo");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*pkt)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in_pktinfo");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*pkt));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -929,7 +940,13 @@ void addCMsgSrcAddr(struct msghdr* msgh, cmsgbuf_aligned* cmsgbuf, const ComboAd
     struct in_addr *in;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
     static_assert(CMSG_SPACE(sizeof(*in)) <= sizeof(*cmsgbuf), "Buffer is too small for in_addr");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*in)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in_addr");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*in));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -999,16 +1016,26 @@ uint32_t burtle(const unsigned char* k, uint32_t length, uint32_t initval)
   c += length;
   switch(len) {             /* all the case statements fall through */
   case 11: c+=((uint32_t)k[10]<<24);
+    /* fall-through */
   case 10: c+=((uint32_t)k[9]<<16);
+    /* fall-through */
   case 9 : c+=((uint32_t)k[8]<<8);
     /* the first byte of c is reserved for the length */
+    /* fall-through */
   case 8 : b+=((uint32_t)k[7]<<24);
+    /* fall-through */
   case 7 : b+=((uint32_t)k[6]<<16);
+    /* fall-through */
   case 6 : b+=((uint32_t)k[5]<<8);
+    /* fall-through */
   case 5 : b+=k[4];
+    /* fall-through */
   case 4 : a+=((uint32_t)k[3]<<24);
+    /* fall-through */
   case 3 : a+=((uint32_t)k[2]<<16);
+    /* fall-through */
   case 2 : a+=((uint32_t)k[1]<<8);
+    /* fall-through */
   case 1 : a+=k[0];
     /* case 0: nothing left to add */
   }
@@ -1039,16 +1066,26 @@ uint32_t burtleCI(const unsigned char* k, uint32_t length, uint32_t initval)
   c += length;
   switch(len) {             /* all the case statements fall through */
   case 11: c+=((uint32_t)dns_tolower(k[10])<<24);
+    /* fall-through */
   case 10: c+=((uint32_t)dns_tolower(k[9])<<16);
+    /* fall-through */
   case 9 : c+=((uint32_t)dns_tolower(k[8])<<8);
     /* the first byte of c is reserved for the length */
+    /* fall-through */
   case 8 : b+=((uint32_t)dns_tolower(k[7])<<24);
+    /* fall-through */
   case 7 : b+=((uint32_t)dns_tolower(k[6])<<16);
+    /* fall-through */
   case 6 : b+=((uint32_t)dns_tolower(k[5])<<8);
+    /* fall-through */
   case 5 : b+=dns_tolower(k[4]);
+    /* fall-through */
   case 4 : a+=((uint32_t)dns_tolower(k[3])<<24);
+    /* fall-through */
   case 3 : a+=((uint32_t)dns_tolower(k[2])<<16);
+    /* fall-through */
   case 2 : a+=((uint32_t)dns_tolower(k[1])<<8);
+    /* fall-through */
   case 1 : a+=dns_tolower(k[0]);
     /* case 0: nothing left to add */
   }
@@ -1099,7 +1136,7 @@ bool setReuseAddr(int sock)
 {
   int tmp = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&tmp, static_cast<unsigned>(sizeof tmp))<0)
-    throw PDNSException(string("Setsockopt failed: ")+strerror(errno));
+    throw PDNSException(string("Setsockopt failed: ")+stringerror());
   return true;
 }
 
@@ -1119,7 +1156,7 @@ bool setReceiveSocketErrors(int sock, int af)
     ret = setsockopt(sock, IPPROTO_IPV6, IPV6_RECVERR, &tmp, sizeof(tmp));
   }
   if (ret < 0) {
-    throw PDNSException(string("Setsockopt failed: ") + strerror(errno));
+    throw PDNSException(string("Setsockopt failed: ") + stringerror());
   }
 #endif
   return true;

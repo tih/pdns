@@ -27,6 +27,10 @@ int getMTaskerTID()
   return 0;
 }
 
+void primeRootNSZones(bool)
+{
+}
+
 bool RecursorLua4::preoutquery(const ComboAddress& ns, const ComboAddress& requestor, const DNSName& query, const QType& qtype, bool isTcp, vector<DNSRecord>& res, int& ret) const
 {
   return false;
@@ -125,6 +129,7 @@ void initSR(bool debug)
   SyncRes::s_ecsipv6cachelimit = 56;
   SyncRes::s_ecscachelimitttl = 0;
   SyncRes::s_rootNXTrust = true;
+  SyncRes::s_hardenNXD = true;
   SyncRes::s_minimumTTL = 0;
   SyncRes::s_minimumECSTTL = 0;
   SyncRes::s_serverID = "PowerDNS Unit Tests Server ID";
@@ -138,13 +143,13 @@ void initSR(bool debug)
   SyncRes::setECSScopeZeroAddress(Netmask("127.0.0.1/32"));
 
   SyncRes::clearNSSpeeds();
-  BOOST_CHECK_EQUAL(SyncRes::getNSSpeedsSize(), 0);
+  BOOST_CHECK_EQUAL(SyncRes::getNSSpeedsSize(), 0U);
   SyncRes::clearEDNSStatuses();
-  BOOST_CHECK_EQUAL(SyncRes::getEDNSStatusesSize(), 0);
+  BOOST_CHECK_EQUAL(SyncRes::getEDNSStatusesSize(), 0U);
   SyncRes::clearThrottle();
-  BOOST_CHECK_EQUAL(SyncRes::getThrottledServersSize(), 0);
+  BOOST_CHECK_EQUAL(SyncRes::getThrottledServersSize(), 0U);
   SyncRes::clearFailedServers();
-  BOOST_CHECK_EQUAL(SyncRes::getFailedServersSize(), 0);
+  BOOST_CHECK_EQUAL(SyncRes::getFailedServersSize(), 0U);
 
   SyncRes::clearECSStats();
 

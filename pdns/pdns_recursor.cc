@@ -266,7 +266,7 @@ struct DNSComboWriter {
   {
   }
 
-  DNSComboWriter(const std::string& query, const struct timeval& now, std::vector<std::string>&& policyTags, LuaContext::LuaObject&& data): d_mdp(true, query), d_now(now), d_query(query), d_policyTags(std::move(policyTags)), d_data(std::move(data))
+  DNSComboWriter(const std::string& query, const struct timeval& now, std::vector<std::string>&& policyTags, LuaContext::LuaObject&& data, std::vector<DNSRecord>&& records): d_mdp(true, query), d_now(now), d_query(query), d_policyTags(std::move(policyTags)), d_records(std::move(records)), d_data(std::move(data))
   {
   }
 
@@ -326,10 +326,12 @@ struct DNSComboWriter {
 #endif
   std::string d_query;
   std::vector<std::string> d_policyTags;
+  std::vector<DNSRecord> d_records;
   LuaContext::LuaObject d_data;
   EDNSSubnetOpts d_ednssubnet;
   shared_ptr<TCPConnection> d_tcpConnection;
-  int d_socket;
+  boost::optional<int> d_rcode{boost::none};
+  int d_socket{-1};
   unsigned int d_tag{0};
   uint32_t d_qhash{0};
   uint32_t d_ttlCap{std::numeric_limits<uint32_t>::max()};
@@ -338,7 +340,9 @@ struct DNSComboWriter {
   bool d_variable{false};
   bool d_ecsFound{false};
   bool d_ecsParsed{false};
-  bool d_tcp;
+  bool d_followCNAMERecords{false};
+  bool d_logResponse{false};
+  bool d_tcp{false};
 };
 
 MT_t* getMT()
@@ -447,7 +451,7 @@ static void handleGenUDPQueryResponse(int fd, FDMultiplexer::funcparam_t& var)
   else {
     string empty;
     MT->sendEvent(pident, &empty);
-    //    cerr<<"Had some kind of error: "<<ret<<", "<<strerror(errno)<<endl;
+    //    cerr<<"Had some kind of error: "<<ret<<", "<<stringerror()<<endl;
   }
 }
 string GenUDPQueryResponse(const ComboAddress& dest, const string& query)
@@ -514,8 +518,10 @@ static void setSocketBuffer(int fd, int optname, uint32_t size)
     return;
   }
 
-  if (setsockopt(fd, SOL_SOCKET, optname, (char*)&size, sizeof(size)) < 0 )
-    g_log<<Logger::Error<<"Unable to raise socket buffer size to "<<size<<": "<<strerror(errno)<<endl;
+  if (setsockopt(fd, SOL_SOCKET, optname, (char*)&size, sizeof(size)) < 0) {
+    int err = errno;
+    g_log << Logger::Error << "Unable to raise socket buffer size to " << size << ": " << stringerror(err) << endl;
+  }
 }
 
 
@@ -733,9 +739,14 @@ static void writePid(void)
   ofstream of(s_pidfname.c_str(), std::ios_base::app);
   if(of)
     of<< Utility::getpid() <<endl;
-  else
-    g_log<<Logger::Error<<"Writing pid for "<<Utility::getpid()<<" to "<<s_pidfname<<" failed: "<<strerror(errno)<<endl;
+  else {
+    int err = errno;
+    g_log << Logger::Error << "Writing pid for " << Utility::getpid() << " to " << s_pidfname << " failed: "
+          << stringerror(err) << endl;
+  }
 }
+
+uint16_t TCPConnection::s_maxInFlight;
 
 TCPConnection::TCPConnection(int fd, const ComboAddress& addr) : data(2, 0), d_remote(addr), d_fd(fd)
 {
@@ -1068,17 +1079,6 @@ static bool nodCheckNewDomain(const DNSName& dname)
   return ret;
 }
 
-static void nodAddDomain(const DNSName& dname)
-{
-  // Don't bother adding domains on the nod whitelist
-  if (!g_nodDomainWL.check(dname)) {  
-    if (t_nodDBp) {
-      // This keeps the nod info up to date
-      t_nodDBp->addDomain(dname);
-    }
-  }
-}
-
 static bool udrCheckUniqueDNSRecord(const DNSName& dname, uint16_t qtype, const DNSRecord& record)
 {
   bool ret = false;
@@ -1098,6 +1098,32 @@ static bool udrCheckUniqueDNSRecord(const DNSName& dname, uint16_t qtype, const 
   return ret;
 }
 #endif /* NOD_ENABLED */
+
+int followCNAMERecords(vector<DNSRecord>& ret, const QType& qtype)
+{
+  vector<DNSRecord> resolved;
+  DNSName target;
+  for(const DNSRecord& rr :  ret) {
+    if(rr.d_type == QType::CNAME) {
+      auto rec = getRR<CNAMERecordContent>(rr);
+      if(rec) {
+        target=rec->getTarget();
+        break;
+      }
+    }
+  }
+
+  if(target.empty()) {
+    return 0;
+  }
+
+  int rcode = directResolve(target, qtype, QClass::IN, resolved);
+
+  for(DNSRecord& rr :  resolved) {
+    ret.push_back(std::move(rr));
+  }
+  return rcode;
+}
 
 static void startDoResolve(void *p)
 {
@@ -1155,10 +1181,8 @@ static void startDoResolve(void *p)
     // Used to tell syncres later on if we should apply NSDNAME and NSIP RPZ triggers for this query
     bool wantsRPZ(true);
     boost::optional<RecProtoBufMessage> pbMessage(boost::none);
-    bool logResponse = false;
 #ifdef HAVE_PROTOBUF
     if (checkProtobufExport(luaconfsLocal)) {
-      logResponse = t_protobufServers && luaconfsLocal->protobufExportConfig.logResponses;
       Netmask requestorNM(dc->d_source, dc->d_source.sin4.sin_family == AF_INET ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
       const ComboAddress& requestor = requestorNM.getMaskedNetwork();
       pbMessage = RecProtoBufMessage(RecProtoBufMessage::Response, dc->d_uuid, &requestor, &dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_mdp.d_qclass, dc->d_mdp.d_header.id, dc->d_tcp, 0);
@@ -1188,6 +1212,7 @@ static void startDoResolve(void *p)
     uint32_t minTTL = dc->d_ttlCap;
 
     SyncRes sr(dc->d_now);
+    sr.setId(MT->getTid());
 
     bool DNSSECOK=false;
     if(t_pdl) {
@@ -1236,9 +1261,10 @@ static void startDoResolve(void *p)
 
     /* preresolve expects res (dq.rcode) to be set to RCode::NoError by default */
     int res = RCode::NoError;
+
     DNSFilterEngine::Policy appliedPolicy;
     std::vector<DNSRecord> spoofed;
-    RecursorLua4::DNSQuestion dq(dc->d_source, dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_tcp, variableAnswer, wantsRPZ, logResponse);
+    RecursorLua4::DNSQuestion dq(dc->d_source, dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_tcp, variableAnswer, wantsRPZ, dc->d_logResponse);
     dq.ednsFlags = &edo.d_extFlags;
     dq.ednsOptions = &ednsOpts;
     dq.tag = dc->d_tag;
@@ -1270,7 +1296,6 @@ static void startDoResolve(void *p)
       tracedQuery=true;
     }
 
-
     if(!g_quiet || tracedQuery) {
       g_log<<Logger::Warning<<t_id<<" ["<<MT->getTid()<<"/"<<MT->numProcesses()<<"] " << (dc->d_tcp ? "TCP " : "") << "question for '"<<dc->d_mdp.d_qname<<"|"
        <<DNSRecordContent::NumberToType(dc->d_mdp.d_qtype)<<"' from "<<dc->getRemote();
@@ -1280,9 +1305,19 @@ static void startDoResolve(void *p)
       g_log<<endl;
     }
 
-    sr.setId(MT->getTid());
-    if(!dc->d_mdp.d_header.rd)
+    if(!dc->d_mdp.d_header.rd) {
       sr.setCacheOnly();
+    }
+
+    if (dc->d_rcode != boost::none) {
+      /* we have a response ready to go, most likely from gettag_ffi */
+      ret = std::move(dc->d_records);
+      res = *dc->d_rcode;
+      if (res == RCode::NoError && dc->d_followCNAMERecords) {
+        res = followCNAMERecords(ret, QType(dc->d_mdp.d_qtype));
+      }
+      goto haveAnswer;
+    }
 
     if (t_pdl) {
       t_pdl->prerpz(dq, res);
@@ -1617,7 +1652,7 @@ static void startDoResolve(void *p)
     }
 #endif /* NOD_ENABLED */
 #ifdef HAVE_PROTOBUF
-    if (t_protobufServers && logResponse && !(luaconfsLocal->protobufExportConfig.taggedOnly && (!appliedPolicy.d_name || appliedPolicy.d_name->empty()) && dc->d_policyTags.empty())) {
+    if (t_protobufServers && !(luaconfsLocal->protobufExportConfig.taggedOnly && (!appliedPolicy.d_name || appliedPolicy.d_name->empty()) && dc->d_policyTags.empty())) {
       pbMessage->setBytes(packet.size());
       pbMessage->setResponseCode(pw.getHeader()->rcode);
       if (appliedPolicy.d_name) {
@@ -1645,7 +1680,9 @@ static void startDoResolve(void *p)
         }
       }
 #endif /* NOD_ENABLED */
-      protobufLogResponse(*pbMessage);
+      if (dc->d_logResponse) {
+        protobufLogResponse(*pbMessage);
+      }
 #ifdef NOD_ENABLED
       if (g_nodEnabled) {
         pbMessage->setNOD(false);
@@ -1668,8 +1705,11 @@ static void startDoResolve(void *p)
       if(g_fromtosockets.count(dc->d_socket)) {
         addCMsgSrcAddr(&msgh, &cbuf, &dc->d_local, 0);
       }
-      if(sendmsg(dc->d_socket, &msgh, 0) < 0 && g_logCommonErrors) 
-        g_log<<Logger::Warning<<"Sending UDP reply to client "<<dc->getRemote()<<" failed with: "<<strerror(errno)<<endl;
+      if(sendmsg(dc->d_socket, &msgh, 0) < 0 && g_logCommonErrors) {
+        int err = errno;
+        g_log << Logger::Warning << "Sending UDP reply to client " << dc->getRemote() << " failed with: "
+              << strerror(err) << endl;
+      }
 
       if(variableAnswer || sr.wasVariable()) {
         g_stats.variableResponses++;
@@ -1702,31 +1742,59 @@ static void startDoResolve(void *p)
 
       if(wret == 0)
         g_log<<Logger::Error<<"EOF writing TCP answer to "<<dc->getRemote()<<endl;
-      else if(wret < 0 )
-        g_log<<Logger::Error<<"Error writing TCP answer to "<<dc->getRemote()<<": "<< strerror(errno) <<endl;
-      else if((unsigned int)wret != 2 + packet.size())
+      else if(wret < 0 ) {
+        int err = errno;
+        g_log << Logger::Error << "Error writing TCP answer to " << dc->getRemote() << ": " << strerror(err) << endl;
+      } else if((unsigned int)wret != 2 + packet.size())
         g_log<<Logger::Error<<"Oops, partial answer sent to "<<dc->getRemote()<<" for "<<dc->d_mdp.d_qname<<" (size="<< (2 + packet.size()) <<", sent "<<wret<<")"<<endl;
       else
         hadError=false;
 
-      // update tcp connection status, either by closing or moving to 'BYTE0'
+      // update tcp connection status, closing if needed and doing the fd multiplexer accounting
+      if  (dc->d_tcpConnection->d_requestsInFlight > 0) {
+        dc->d_tcpConnection->d_requestsInFlight--;
+      }
 
+      // In the code below, we try to remove the fd from the set, but
+      // we don't know if another mthread already did the remove, so we can get a
+      // "Tried to remove unlisted fd" exception.  Not that an inflight < limit test
+      // will not work since we do not know if the other mthread got an error or not.
       if(hadError) {
-        // no need to remove us from FDM, we weren't there
+        try {
+          t_fdm->removeReadFD(dc->d_socket);
+        }
+        catch (FDMultiplexerException &) {
+        }
         dc->d_socket = -1;
       }
       else {
         dc->d_tcpConnection->queriesCount++;
         if (g_tcpMaxQueriesPerConn && dc->d_tcpConnection->queriesCount >= g_tcpMaxQueriesPerConn) {
+          try {
+            t_fdm->removeReadFD(dc->d_socket);
+          }
+          catch (FDMultiplexerException &) {
+          }
           dc->d_socket = -1;
         }
         else {
-          dc->d_tcpConnection->state=TCPConnection::BYTE0;
           Utility::gettimeofday(&g_now, 0); // needs to be updated
           struct timeval ttd = g_now;
-          ttd.tv_sec += g_tcpTimeout;
-
-          t_fdm->addReadFD(dc->d_socket, handleRunningTCPQuestion, dc->d_tcpConnection, &ttd);
+          // If we cross from max to max-1 in flight requests, the fd was not listened to, add it back
+          if (dc->d_tcpConnection->d_requestsInFlight == TCPConnection::s_maxInFlight - 1) {
+            // A read error might have happened. If we add the fd back, it will most likely error again.
+            // This is not a big issue, the next handleTCPClientReadable() will see another read error
+            // and take action.
+            ttd.tv_sec += g_tcpTimeout;
+            t_fdm->addReadFD(dc->d_socket, handleRunningTCPQuestion, dc->d_tcpConnection, &ttd);
+          } else {
+            // fd might have been removed by read error code, so expect an exception
+            try {
+              t_fdm->setReadTTD(dc->d_socket, ttd, g_tcpTimeout);
+            }
+            catch (FDMultiplexerException &) {
+            }
+          }
         }
       }
     }
@@ -1963,8 +2031,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
     }
     conn->bytesread+=(uint16_t)bytes;
     if(conn->bytesread==conn->qlen) {
-      t_fdm->removeReadFD(fd); // should no longer awake ourselves when there is data to read
-
+      conn->state = TCPConnection::BYTE0;
       std::unique_ptr<DNSComboWriter> dc;
       try {
         dc=std::unique_ptr<DNSComboWriter>(new DNSComboWriter(conn->data, g_now));
@@ -2002,6 +2069,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
         needECS = true;
       }
       logQuery = t_protobufServers && luaconfsLocal->protobufExportConfig.logQueries;
+      dc->d_logResponse = t_protobufServers && luaconfsLocal->protobufExportConfig.logResponses;
 #endif /* HAVE_PROTOBUF */
 
 #ifdef HAVE_FSTRM
@@ -2022,7 +2090,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
           if(t_pdl) {
             try {
               if (t_pdl->d_gettag_ffi) {
-                dc->d_tag = t_pdl->gettag_ffi(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName, dc->d_ttlCap, dc->d_variable, logQuery);
+                dc->d_tag = t_pdl->gettag_ffi(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_records, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName, dc->d_rcode, dc->d_ttlCap, dc->d_variable, logQuery, dc->d_logResponse, dc->d_followCNAMERecords);
               }
               else if (t_pdl->d_gettag) {
                 dc->d_tag = t_pdl->gettag(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName);
@@ -2097,7 +2165,15 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       else {
         ++g_stats.qcounter;
         ++g_stats.tcpqcounter;
-        MT->makeThread(startDoResolve, dc.release()); // deletes dc, will set state to BYTE0 again
+        ++conn->d_requestsInFlight;
+        if (conn->d_requestsInFlight >= TCPConnection::s_maxInFlight) {
+          t_fdm->removeReadFD(fd); // should no longer awake ourselves when there is data to read
+        } else {
+          Utility::gettimeofday(&g_now, 0); // needed?
+          struct timeval ttd = g_now;
+          t_fdm->setReadTTD(fd, ttd, g_tcpTimeout);
+        }
+        MT->makeThread(startDoResolve, dc.release()); // deletes dc
         return;
       }
     }
@@ -2191,6 +2267,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   string deviceId;
   string deviceName;
   bool logQuery = false;
+  bool logResponse = false;
 #ifdef HAVE_PROTOBUF
   boost::uuids::uuid uniqueId;
   auto luaconfsLocal = g_luaconfs.getLocal();
@@ -2201,7 +2278,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
     uniqueId = getUniqueID();
   }
   logQuery = t_protobufServers && luaconfsLocal->protobufExportConfig.logQueries;
-  bool logResponse = t_protobufServers && luaconfsLocal->protobufExportConfig.logResponses;
+  logResponse = t_protobufServers && luaconfsLocal->protobufExportConfig.logResponses;
 #endif
 #ifdef HAVE_FSTRM
   checkFrameStreamExport(luaconfsLocal);
@@ -2211,8 +2288,11 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   bool ecsParsed = false;
   uint16_t ecsBegin = 0;
   uint16_t ecsEnd = 0;
+  std::vector<DNSRecord> records;
+  boost::optional<int> rcode = boost::none;
   uint32_t ttlCap = std::numeric_limits<uint32_t>::max();
   bool variable = false;
+  bool followCNAMEs = false;
   try {
     DNSName qname;
     uint16_t qtype=0;
@@ -2248,7 +2328,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
         if(t_pdl) {
           try {
             if (t_pdl->d_gettag_ffi) {
-              ctag = t_pdl->gettag_ffi(source, ednssubnet.source, destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName, ttlCap, variable, logQuery);
+              ctag = t_pdl->gettag_ffi(source, ednssubnet.source, destination, qname, qtype, &policyTags, records, data, ednsOptions, false, requestorId, deviceId, deviceName, rcode, ttlCap, variable, logQuery, logResponse, followCNAMEs);
             }
             else if (t_pdl->d_gettag) {
               ctag = t_pdl->gettag(source, ednssubnet.source, destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName);
@@ -2331,9 +2411,12 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
       if(g_fromtosockets.count(fd)) {
         addCMsgSrcAddr(&msgh, &cbuf, &destaddr, 0);
       }
-      if(sendmsg(fd, &msgh, 0) < 0 && g_logCommonErrors)
-        g_log<<Logger::Warning<<"Sending UDP reply to client "<<source.toStringWithPort()<<(source != fromaddr ? " (via "+fromaddr.toStringWithPort()+")" : "")<<" failed with: "<<strerror(errno)<<endl;
-
+      if(sendmsg(fd, &msgh, 0) < 0 && g_logCommonErrors) {
+        int err = errno;
+        g_log << Logger::Warning << "Sending UDP reply to client " << source.toStringWithPort()
+              << (source != fromaddr ? " (via " + fromaddr.toStringWithPort() + ")" : "") << " failed with: "
+              << strerror(err) << endl;
+      }
       if(response.length() >= sizeof(struct dnsheader)) {
         struct dnsheader tmpdh;
         memcpy(&tmpdh, response.c_str(), sizeof(tmpdh));
@@ -2366,7 +2449,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
     return 0;
   }
 
-  auto dc = std::unique_ptr<DNSComboWriter>(new DNSComboWriter(question, g_now, std::move(policyTags), std::move(data)));
+  auto dc = std::unique_ptr<DNSComboWriter>(new DNSComboWriter(question, g_now, std::move(policyTags), std::move(data), std::move(records)));
   dc->setSocket(fd);
   dc->d_tag=ctag;
   dc->d_qhash=qhash;
@@ -2382,6 +2465,9 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   dc->d_ednssubnet = ednssubnet;
   dc->d_ttlCap = ttlCap;
   dc->d_variable = variable;
+  dc->d_followCNAMERecords = followCNAMEs;
+  dc->d_rcode = rcode;
+  dc->d_logResponse = logResponse;
 #ifdef HAVE_PROTOBUF
   if (t_protobufServers || t_outgoingProtobufServers) {
     dc->d_uuid = std::move(uniqueId);
@@ -2569,7 +2655,8 @@ static void makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tcp
       exit(1);
     }
     if(sin.sin6.sin6_family == AF_INET6 && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &tmp, sizeof(tmp)) < 0) {
-      g_log<<Logger::Error<<"Failed to set IPv6 socket to IPv6 only, continuing anyhow: "<<strerror(errno)<<endl;
+      int err = errno;
+      g_log<<Logger::Error<<"Failed to set IPv6 socket to IPv6 only, continuing anyhow: "<<strerror(err)<<endl;
     }
 
 #ifdef TCP_DEFER_ACCEPT
@@ -2593,7 +2680,8 @@ static void makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tcp
 #ifdef TCP_FASTOPEN
       int fastOpenQueueSize = ::arg().asNum("tcp-fast-open");
       if (setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &fastOpenQueueSize, sizeof fastOpenQueueSize) < 0) {
-        g_log<<Logger::Error<<"Failed to enable TCP Fast Open for listening socket: "<<strerror(errno)<<endl;
+        int err = errno;
+        g_log<<Logger::Error<<"Failed to enable TCP Fast Open for listening socket: "<<strerror(err)<<endl;
       }
 #else
       g_log<<Logger::Warning<<"TCP Fast Open configured but not supported for listening socket"<<endl;
@@ -2646,7 +2734,7 @@ static void makeUDPServerSockets(deferredAdd_t& deferredAdds)
 
     int fd=socket(sin.sin4.sin_family, SOCK_DGRAM, 0);
     if(fd < 0) {
-      throw PDNSException("Making a UDP server socket for resolver: "+netstringerror());
+      throw PDNSException("Making a UDP server socket for resolver: "+stringerror());
     }
     if (!setSocketTimestamps(fd))
       g_log<<Logger::Warning<<"Unable to enable timestamp reporting for socket"<<endl;
@@ -2661,7 +2749,8 @@ static void makeUDPServerSockets(deferredAdd_t& deferredAdds)
           g_fromtosockets.insert(fd);
 #endif
       if(sin.sin6.sin6_family == AF_INET6 && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0) {
-	g_log<<Logger::Error<<"Failed to set IPv6 socket to IPv6 only, continuing anyhow: "<<strerror(errno)<<endl;
+        int err = errno;
+	      g_log<<Logger::Error<<"Failed to set IPv6 socket to IPv6 only, continuing anyhow: "<<strerror(err)<<endl;
       }
     }
     if( ::arg().mustDo("non-local-bind") )
@@ -2720,6 +2809,11 @@ static void daemonize(void)
     dup2(i,2); /* stderr */
     close(i);
   }
+}
+
+static void termIntHandler(int)
+{
+  doExit();
 }
 
 static void usr1Handler(int)
@@ -2820,8 +2914,10 @@ static void houseKeeping(void *)
 
     if(now.tv_sec - last_rootupdate > 7200) {
       int res = SyncRes::getRootNS(g_now, nullptr);
-      if (!res)
+      if (!res) {
         last_rootupdate=now.tv_sec;
+        primeRootNSZones(g_dnssecmode != DNSSECMode::Off);
+      }
     }
 
     if(isHandlerThread()) {
@@ -2906,7 +3002,8 @@ static void makeThreadPipes()
 
     if (pipeBufferSize > 0) {
       if (!setPipeBufferSize(threadInfos.pipes.writeQueriesToThread, pipeBufferSize)) {
-        g_log<<Logger::Warning<<"Error resizing the buffer of the distribution pipe for thread "<<n<<" to "<<pipeBufferSize<<": "<<strerror(errno)<<endl;
+        int err = errno;
+        g_log<<Logger::Warning<<"Error resizing the buffer of the distribution pipe for thread "<<n<<" to "<<pipeBufferSize<<": "<<strerror(err)<<endl;
         auto existingSize = getPipeBufferSize(threadInfos.pipes.writeQueriesToThread);
         if (existingSize > 0) {
           g_log<<Logger::Warning<<"The current size of the distribution pipe's buffer for thread "<<n<<" is "<<existingSize<<endl;
@@ -3859,6 +3956,7 @@ static int serviceMain(int argc, char*argv[])
   SyncRes::s_ecscachelimitttl = ::arg().asNum("ecs-cache-limit-ttl");
 
   SyncRes::s_qnameminimization = ::arg().mustDo("qname-minimization");
+  SyncRes::s_hardenNXD = ::arg().mustDo("nothing-below-nxdomain");
 
   if (!::arg().isEmpty("ecs-scope-zero-address")) {
     ComboAddress scopeZero(::arg()["ecs-scope-zero-address"]);
@@ -3917,6 +4015,16 @@ static int serviceMain(int argc, char*argv[])
 
   g_numThreads = g_numDistributorThreads + g_numWorkerThreads;
   g_maxMThreads = ::arg().asNum("max-mthreads");
+
+
+  int64_t maxInFlight = ::arg().asNum("max-concurrent-requests-per-tcp-connection");
+  if (maxInFlight < 1 || maxInFlight > USHRT_MAX || maxInFlight >= g_maxMThreads) {
+    g_log<<Logger::Warning<<"Asked to run with illegal max-concurrent-requests-per-tcp-connection, setting to default (10)"<<endl;
+    TCPConnection::s_maxInFlight = 10;
+  } else {
+    TCPConnection::s_maxInFlight = maxInFlight;
+  }
+    
 
   g_gettagNeedsEDNSOptions = ::arg().mustDo("gettag-needs-edns-options");
 
@@ -4010,6 +4118,24 @@ static int serviceMain(int argc, char*argv[])
     g_log.toConsole(Logger::Critical);
     daemonize();
   }
+  if(Utility::getpid() == 1) {
+    /* We are running as pid 1, register sigterm and sigint handler
+     
+      The Linux kernel will handle SIGTERM and SIGINT for all processes, except PID 1.
+      It assumes that the processes running as pid 1 is an "init" like system.
+      For years, this was a safe assumption, but containers change that: in
+      most (all?) container implementations, the application itself is running
+      as pid 1. This means that sending signals to those applications, will not
+      be handled by default. Results might be "your container not responsing
+      when asking it to stop", or "ctrl-c not working even when the app is
+      running in the foreground inside a container".
+
+      So TL;DR: If we're running pid 1 (container), we should handle SIGTERM and SIGINT ourselves */
+
+    signal(SIGTERM,termIntHandler);
+    signal(SIGINT,termIntHandler);
+  } 
+
   signal(SIGUSR1,usr1Handler);
   signal(SIGUSR2,usr2Handler);
   signal(SIGPIPE,SIG_IGN);
@@ -4051,8 +4177,9 @@ static int serviceMain(int argc, char*argv[])
      }
 #endif
     if (chroot(::arg()["chroot"].c_str())<0 || chdir("/") < 0) {
-      g_log<<Logger::Error<<"Unable to chroot to '"+::arg()["chroot"]+"': "<<strerror (errno)<<", exiting"<<endl;
-      exit(1);
+       int err = errno;
+       g_log<<Logger::Error<<"Unable to chroot to '"+::arg()["chroot"]+"': "<<strerror (err)<<", exiting"<<endl;
+       exit(1);
     }
     else
       g_log<<Logger::Info<<"Chrooted to '"<<::arg()["chroot"]<<"'"<<endl;
@@ -4469,6 +4596,7 @@ int main(int argc, char **argv)
     ::arg().set("client-tcp-timeout","Timeout in seconds when talking to TCP clients")="2";
     ::arg().set("max-mthreads", "Maximum number of simultaneous Mtasker threads")="2048";
     ::arg().set("max-tcp-clients","Maximum number of simultaneous TCP clients")="128";
+    ::arg().set("max-concurrent-requests-per-tcp-connection", "Maximum number of requests handled concurrently per TCP connection") = "10";
     ::arg().set("server-down-max-fails","Maximum number of consecutive timeouts (and unreachables) to mark a server as down ( 0 => disabled )")="64";
     ::arg().set("server-down-throttle-time","Number of seconds to throttle all queries to a server after being marked as down")="60";
     ::arg().set("dont-throttle-names", "Do not throttle nameservers with this name or suffix")="";
@@ -4569,6 +4697,8 @@ int main(int argc, char **argv)
     ::arg().set("public-suffix-list-file", "Path to the Public Suffix List file, if any")="";
     ::arg().set("distribution-load-factor", "The load factor used when PowerDNS is distributing queries to worker threads")="0.0";
     ::arg().setSwitch("qname-minimization", "Use Query Name Minimization")="no";
+    ::arg().setSwitch("nothing-below-nxdomain", "When an NXDOMAIN exists in cache for a name with fewer labels than the qname, send NXDOMAIN without doing a lookup (see RFC 8020)")="yes";
+    ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
 #ifdef NOD_ENABLED
     ::arg().set("new-domain-tracking", "Track newly observed domains (i.e. never seen before).")="no";
     ::arg().set("new-domain-log", "Log newly observed domains.")="yes";
@@ -4597,7 +4727,20 @@ int main(int argc, char **argv)
     cleanSlashes(configname);
 
     if(!::arg().getCommands().empty()) {
-      cerr<<"Fatal: non-option on the command line, perhaps a '--setting=123' statement missed the '='?"<<endl;
+      cerr<<"Fatal: non-option";
+      if (::arg().getCommands().size() > 1) {
+        cerr<<"s";
+      }
+      cerr<<" (";
+      bool first = true;
+      for (auto const c : ::arg().getCommands()) {
+        if (!first) {
+          cerr<<", ";
+        }
+        first = false;
+        cerr<<c;
+      }
+      cerr<<") on the command line, perhaps a '--setting=123' statement missed the '='?"<<endl;
       exit(99);
     }
 

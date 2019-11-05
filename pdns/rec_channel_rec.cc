@@ -242,7 +242,7 @@ static string doDumpNSSpeeds(T begin, T end)
 
   int fd=open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);
   if(fd < 0)
-    return "Error opening dump file for writing: "+string(strerror(errno))+"\n";
+    return "Error opening dump file for writing: "+stringerror()+"\n";
   uint64_t total = 0;
   try {
     total = broadcastAccFunction<uint64_t>(boost::bind(pleaseDumpNSSpeeds, fd));
@@ -273,7 +273,7 @@ static string doDumpCache(T begin, T end)
 
   int fd=open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);
   if(fd < 0) 
-    return "Error opening dump file for writing: "+string(strerror(errno))+"\n";
+    return "Error opening dump file for writing: "+stringerror()+"\n";
   uint64_t total = 0;
   try {
     total = broadcastAccFunction<uint64_t>(boost::bind(pleaseDump, fd));
@@ -295,7 +295,7 @@ static string doDumpEDNSStatus(T begin, T end)
 
   int fd=open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);
   if(fd < 0) 
-    return "Error opening dump file for writing: "+string(strerror(errno))+"\n";
+    return "Error opening dump file for writing: "+stringerror()+"\n";
   uint64_t total = 0;
   try {
     total = broadcastAccFunction<uint64_t>(boost::bind(pleaseDumpEDNSMap, fd));
@@ -331,13 +331,13 @@ static string doDumpRPZ(T begin, T end)
   int fd = open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);
 
   if(fd < 0) {
-    return "Error opening dump file for writing: "+string(strerror(errno))+"\n";
+    return "Error opening dump file for writing: "+stringerror()+"\n";
   }
 
   auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(fd, "w"), fclose);
   if (!fp) {
     close(fd);
-    return "Error converting file descriptor: "+string(strerror(errno))+"\n";
+    return "Error converting file descriptor: "+stringerror()+"\n";
   }
 
   zone->dump(fp.get());
@@ -356,7 +356,7 @@ static string doDumpThrottleMap(T begin, T end)
 
   int fd=open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);
   if(fd < 0)
-    return "Error opening dump file for writing: "+string(strerror(errno))+"\n";
+    return "Error opening dump file for writing: "+stringerror()+"\n";
   uint64_t total = 0;
   try {
     total = broadcastAccFunction<uint64_t>(boost::bind(pleaseDumpThrottleMap, fd));
@@ -780,7 +780,7 @@ static ThreadTimes* pleaseGetThreadCPUMsec()
   ret = (ru.ru_utime.tv_sec*1000ULL + ru.ru_utime.tv_usec/1000);
   ret += (ru.ru_stime.tv_sec*1000ULL + ru.ru_stime.tv_usec/1000);
 #endif
-  return new ThreadTimes{ret};
+  return new ThreadTimes{ret, vector<uint64_t>()};
 }
 
 /* Next up, when you want msec data for a specific thread, we check
@@ -1161,7 +1161,7 @@ void registerAllStats()
   }
 }
 
-static void doExitGeneric(bool nicely)
+void doExitGeneric(bool nicely)
 {
   g_log<<Logger::Error<<"Exiting on user request"<<endl;
   extern RecursorControlChannel s_rcc;
@@ -1176,12 +1176,12 @@ static void doExitGeneric(bool nicely)
     _exit(1);
 }
 
-static void doExit()
+void doExit()
 {
   doExitGeneric(false);
 }
 
-static void doExitNicely()
+void doExitNicely()
 {
   doExitGeneric(true);
 }

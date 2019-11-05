@@ -80,6 +80,14 @@ static std::unique_ptr<Socket> setupTCPDownstream(shared_ptr<DownstreamState>& d
           SSetsockopt(result->getHandle(), SOL_IP, IP_BIND_ADDRESS_NO_PORT, 1);
         }
 #endif
+#ifdef SO_BINDTODEVICE
+        if (!ds->sourceItfName.empty()) {
+          int res = setsockopt(result->getHandle(), SOL_SOCKET, SO_BINDTODEVICE, ds->sourceItfName.c_str(), ds->sourceItfName.length());
+          if (res != 0) {
+            vinfolog("Error setting up the interface on backend TCP socket '%s': %s", ds->getNameWithAddr(), stringerror());
+          }
+        }
+#endif
         result->bind(ds->sourceAddr, false);
       }
       result->setNonBlocking();
@@ -280,21 +288,23 @@ void TCPClientCollection::addTCPClientThread()
   }
   else {
     if (pipe(pipefds) < 0) {
-      errlog("Error creating the TCP thread communication pipe: %s", strerror(errno));
+      errlog("Error creating the TCP thread communication pipe: %s", stringerror());
       return;
     }
 
     if (!setNonBlocking(pipefds[0])) {
+      int err = errno;
       close(pipefds[0]);
       close(pipefds[1]);
-      errlog("Error setting the TCP thread communication pipe non-blocking: %s", strerror(errno));
+      errlog("Error setting the TCP thread communication pipe non-blocking: %s", stringerror(err));
       return;
     }
 
     if (!setNonBlocking(pipefds[1])) {
+      int err = errno;
       close(pipefds[0]);
       close(pipefds[1]);
-      errlog("Error setting the TCP thread communication pipe non-blocking: %s", strerror(errno));
+      errlog("Error setting the TCP thread communication pipe non-blocking: %s", stringerror(err));
       return;
     }
   }
@@ -376,7 +386,7 @@ IOState tryRead(int fd, std::vector<uint8_t>& buffer, size_t& pos, size_t toRead
         return IOState::NeedRead;
       }
       else {
-        throw std::runtime_error(std::string("Error while reading message: ") + strerror(errno));
+        throw std::runtime_error(std::string("Error while reading message: ") + stringerror());
       }
     }
 
@@ -407,7 +417,7 @@ static void handleDownstreamIOCallback(int fd, FDMultiplexer::funcparam_t& param
 class IncomingTCPConnectionState
 {
 public:
-  IncomingTCPConnectionState(ConnectionInfo&& ci, TCPClientThreadData& threadData, const struct timeval& now): d_buffer(4096), d_responseBuffer(4096), d_threadData(threadData), d_ci(std::move(ci)), d_handler(d_ci.fd, g_tcpRecvTimeout, d_ci.cs->tlsFrontend ? d_ci.cs->tlsFrontend->getContext() : nullptr, now.tv_sec), d_connectionStartTime(now)
+  IncomingTCPConnectionState(ConnectionInfo&& ci, TCPClientThreadData& threadData, const struct timeval& now): d_buffer(s_maxPacketCacheEntrySize), d_responseBuffer(s_maxPacketCacheEntrySize), d_threadData(threadData), d_ci(std::move(ci)), d_handler(d_ci.fd, g_tcpRecvTimeout, d_ci.cs->tlsFrontend ? d_ci.cs->tlsFrontend->getContext() : nullptr, now.tv_sec), d_connectionStartTime(now)
   {
     d_ids.origDest.reset();
     d_ids.origDest.sin4.sin_family = d_ci.remote.sin4.sin_family;
@@ -673,6 +683,19 @@ static void handleResponseSent(std::shared_ptr<IncomingTCPConnectionState>& stat
     vinfolog("Got answer from %s, relayed to %s (%s), took %f usec", state->d_ds->remote.toStringWithPort(), state->d_ids.origRemote.toStringWithPort(), (state->d_ci.cs->tlsFrontend ? "DoT" : "TCP"), udiff);
   }
 
+  switch (state->d_cleartextDH.rcode) {
+  case RCode::NXDomain:
+    ++g_stats.frontendNXDomain;
+    break;
+  case RCode::ServFail:
+    ++g_stats.servfailResponses;
+    ++g_stats.frontendServFail;
+    break;
+  case RCode::NoError:
+    ++g_stats.frontendNoError;
+    break;
+  }
+
   if (g_maxTCPQueriesPerConn && state->d_queriesCount > g_maxTCPQueriesPerConn) {
     vinfolog("Terminating TCP connection from %s because it reached the maximum number of queries per conn (%d / %d)", state->d_ci.remote.toStringWithPort(), state->d_queriesCount, g_maxTCPQueriesPerConn);
     return;
@@ -748,9 +771,16 @@ static void handleResponse(std::shared_ptr<IncomingTCPConnectionState>& state, s
   if (state->d_isXFR && !state->d_xfrStarted) {
     /* don't bother parsing the content of the response for now */
     state->d_xfrStarted = true;
+    ++g_stats.responses;
+    ++state->d_ci.cs->responses;
+    ++state->d_ds->responses;
   }
 
-  ++g_stats.responses;
+  if (!state->d_isXFR) {
+    ++g_stats.responses;
+    ++state->d_ci.cs->responses;
+    ++state->d_ds->responses;
+  }
 
   sendResponse(state, now);
 }
@@ -802,6 +832,26 @@ static void handleQuery(std::shared_ptr<IncomingTCPConnectionState>& state, stru
   ++state->d_queriesCount;
   ++state->d_ci.cs->queries;
   ++g_stats.queries;
+
+  if (state->d_handler.isTLS()) {
+    auto tlsVersion = state->d_handler.getTLSVersion();
+    switch (tlsVersion) {
+    case LibsslTLSVersion::TLS10:
+      ++state->d_ci.cs->tls10queries;
+      break;
+    case LibsslTLSVersion::TLS11:
+      ++state->d_ci.cs->tls11queries;
+      break;
+    case LibsslTLSVersion::TLS12:
+      ++state->d_ci.cs->tls12queries;
+      break;
+    case LibsslTLSVersion::TLS13:
+      ++state->d_ci.cs->tls13queries;
+      break;
+    default:
+      ++state->d_ci.cs->tlsUnknownqueries;
+    }
+  }
 
   /* we need an accurate ("real") value for the response and
      to store into the IDS, but not for insertion into the
@@ -1067,6 +1117,21 @@ static void handleIO(std::shared_ptr<IncomingTCPConnectionState>& state, struct 
     if (state->d_state == IncomingTCPConnectionState::State::doingHandshake) {
       iostate = state->d_handler.tryHandshake();
       if (iostate == IOState::Done) {
+        if (state->d_handler.isTLS()) {
+          if (!state->d_handler.hasTLSSessionBeenResumed()) {
+            ++state->d_ci.cs->tlsNewSessions;
+          }
+          else {
+            ++state->d_ci.cs->tlsResumptions;
+          }
+          if (state->d_handler.getResumedFromInactiveTicketKey()) {
+            ++state->d_ci.cs->tlsInactiveTicketKey;
+          }
+          if (state->d_handler.getUnknownTicketKey()) {
+            ++state->d_ci.cs->tlsUnknownTicketKey;
+          }
+        }
+
         state->d_handshakeDoneTime = now;
         state->d_state = IncomingTCPConnectionState::State::readingQuerySize;
       }
@@ -1087,9 +1152,9 @@ static void handleIO(std::shared_ptr<IncomingTCPConnectionState>& state, struct 
           return;
         }
 
-        /* allocate a bit more memory to be able to spoof the content,
+        /* allocate a bit more memory to be able to spoof the content, get an answer from the cache
            or to add ECS without allocating a new buffer */
-        state->d_buffer.resize(state->d_querySize + 512);
+        state->d_buffer.resize(std::max(state->d_querySize + static_cast<size_t>(512), s_maxPacketCacheEntrySize));
         state->d_currentPos = 0;
       }
     }
@@ -1176,7 +1241,7 @@ static void handleIncomingTCPQuery(int pipefd, FDMultiplexer::funcparam_t& param
     if (errno == EAGAIN || errno == EINTR) {
       return;
     }
-    throw std::runtime_error("Error while reading from the TCP acceptor pipe (" + std::to_string(pipefd) + ") in " + std::string(isNonBlocking(pipefd) ? "non-blocking" : "blocking") + " mode:" + strerror(errno));
+    throw std::runtime_error("Error while reading from the TCP acceptor pipe (" + std::to_string(pipefd) + ") in " + std::string(isNonBlocking(pipefd) ? "non-blocking" : "blocking") + " mode:" + stringerror());
   }
   else if (got != sizeof(citmp)) {
     throw std::runtime_error("Partial read while reading from the TCP acceptor pipe (" + std::to_string(pipefd) + ") in " + std::string(isNonBlocking(pipefd) ? "non-blocking" : "blocking") + " mode");
@@ -1292,7 +1357,7 @@ void tcpAcceptorThread(void* p)
       ++cs->tcpCurrentConnections;
 
       if(ci->fd < 0) {
-        throw std::runtime_error((boost::format("accepting new connection on socket: %s") % strerror(errno)).str());
+        throw std::runtime_error((boost::format("accepting new connection on socket: %s") % stringerror()).str());
       }
 
       if(!acl->match(remote)) {

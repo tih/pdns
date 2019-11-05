@@ -28,7 +28,6 @@
 #include <sys/types.h>
 #include <iostream>  
 #include <string>
-#include <errno.h>
 #include <boost/tokenizer.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/algorithm/string.hpp>
@@ -76,49 +75,6 @@ ComboAddress DNSPacket::getRemote() const
 uint16_t DNSPacket::getRemotePort() const
 {
   return d_remote.sin4.sin_port;
-}
-
-DNSPacket::DNSPacket(const DNSPacket &orig) :
-  d_anyLocal(orig.d_anyLocal),
-  d_dt(orig.d_dt),
-  qdomain(orig.qdomain),
-  qdomainwild(orig.qdomainwild),
-  qdomainzone(orig.qdomainzone),
-
-  d(orig.d),
-  d_trc(orig.d_trc),
-  d_remote(orig.d_remote),
-  d_tsig_algo(orig.d_tsig_algo),
-
-  d_ednsRawPacketSizeLimit(orig.d_ednsRawPacketSizeLimit),
-  qclass(orig.qclass),
-  qtype(orig.qtype),
-  d_tcp(orig.d_tcp),
-  d_dnssecOk(orig.d_dnssecOk),
-  d_havetsig(orig.d_havetsig),
-
-  d_tsigsecret(orig.d_tsigsecret),
-  d_tsigkeyname(orig.d_tsigkeyname),
-  d_tsigprevious(orig.d_tsigprevious),
-  d_rrs(orig.d_rrs),
-  d_rawpacket(orig.d_rawpacket),
-  d_eso(orig.d_eso),
-  d_maxreplylen(orig.d_maxreplylen),
-  d_socket(orig.d_socket),
-  d_hash(orig.d_hash),
-  d_ednsrcode(orig.d_ednsrcode),
-  d_ednsversion(orig.d_ednsversion),
-
-  d_wrapped(orig.d_wrapped),
-  d_compress(orig.d_compress),
-  d_tsigtimersonly(orig.d_tsigtimersonly),
-  d_wantsnsid(orig.d_wantsnsid),
-  d_haveednssubnet(orig.d_haveednssubnet),
-  d_haveednssection(orig.d_haveednssection),
-
-  d_isQuery(orig.d_isQuery)
-{
-  DLOG(g_log<<"DNSPacket copy constructor called!"<<endl);
 }
 
 void DNSPacket::setRcode(int v)
@@ -228,7 +184,7 @@ void DNSPacket::setCompress(bool compress)
   d_rrs.reserve(200);
 }
 
-bool DNSPacket::couldBeCached()
+bool DNSPacket::couldBeCached() const
 {
   return !d_wantsnsid && qclass==QClass::IN && !d_havetsig;
 }
@@ -387,7 +343,7 @@ void DNSPacket::wrapup()
 void DNSPacket::setQuestion(int op, const DNSName &qd, int newqtype)
 {
   memset(&d,0,sizeof(d));
-  d.id=dns_random(0xffff);
+  d.id=dns_random_uint16();
   d.rd=d.tc=d.aa=false;
   d.qr=false;
   d.qdcount=1; // is htons'ed later on
@@ -397,10 +353,10 @@ void DNSPacket::setQuestion(int op, const DNSName &qd, int newqtype)
   qtype=newqtype;
 }
 
-/** convenience function for creating a reply packet from a question packet. Do not forget to delete it after use! */
-DNSPacket *DNSPacket::replyPacket() const
+/** convenience function for creating a reply packet from a question packet. */
+std::unique_ptr<DNSPacket> DNSPacket::replyPacket() const
 {
-  DNSPacket *r=new DNSPacket(false);
+  auto r=make_unique<DNSPacket>(false);
   r->setSocket(d_socket);
   r->d_anyLocal=d_anyLocal;
   r->setRemote(&d_remote);
@@ -437,7 +393,7 @@ DNSPacket *DNSPacket::replyPacket() const
   return r;
 }
 
-void DNSPacket::spoofQuestion(const DNSPacket *qd)
+void DNSPacket::spoofQuestion(const DNSPacket& qd)
 {
   d_wrapped=true; // if we do this, don't later on wrapup
   
@@ -445,10 +401,10 @@ void DNSPacket::spoofQuestion(const DNSPacket *qd)
   string::size_type i=sizeof(d);
 
   for(;;) {
-    labellen = qd->d_rawpacket[i];
+    labellen = qd.d_rawpacket[i];
     if(!labellen) break;
     i++;
-    d_rawpacket.replace(i, labellen, qd->d_rawpacket, i, labellen);
+    d_rawpacket.replace(i, labellen, qd.d_rawpacket, i, labellen);
     i = i + labellen;
   }
 }
@@ -640,7 +596,7 @@ bool DNSPacket::hasEDNSSubnet() const
   return d_haveednssubnet;
 }
 
-bool DNSPacket::hasEDNS() 
+bool DNSPacket::hasEDNS() const
 {
   return d_haveednssection;
 }

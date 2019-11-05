@@ -193,11 +193,22 @@ bool ZoneParserTNG::getTemplateLine()
         char radix='d';
         sscanf(spec.c_str(), "%d,%d,%c", &offset, &width, &radix);  // parse format specifier
 
-        char sformat[12];
-        snprintf(sformat, sizeof(sformat), "%%0%d%c", width, radix); // make into printf-style format
-
         char tmp[80];
-        snprintf(tmp, sizeof(tmp), sformat, d_templatecounter + offset); // and do the actual printing
+        switch (radix) {
+        case 'o':
+          snprintf(tmp, sizeof(tmp), "%0*o", width, d_templatecounter + offset);
+          break;
+        case 'x':
+          snprintf(tmp, sizeof(tmp), "%0*x", width, d_templatecounter + offset);
+          break;
+        case 'X':
+          snprintf(tmp, sizeof(tmp), "%0*X", width, d_templatecounter + offset);
+          break;
+        case 'd':
+        default:
+          snprintf(tmp, sizeof(tmp), "%0*d", width, d_templatecounter + offset);
+          break;
+        }
         outpart+=tmp;
       }
       else
@@ -308,11 +319,24 @@ bool ZoneParserTNG::get(DNSResourceRecord& rr, std::string* comment)
       d_zonename = DNSName(makeString(d_line, parts[1]));
     }
     else if(pdns_iequals(command, "$GENERATE") && parts.size() > 2) {
+      if (!d_generateEnabled) {
+        throw exception("$GENERATE is not allowed in this zone");
+      }
       // $GENERATE 1-127 $ CNAME $.0
       string range=makeString(d_line, parts[1]);
       d_templatestep=1;
       d_templatestop=0;
       sscanf(range.c_str(),"%u-%u/%u", &d_templatecounter, &d_templatestop, &d_templatestep);
+      if (d_templatestep < 1 ||
+          d_templatestop < d_templatecounter) {
+        throw exception("Invalid $GENERATE parameters");
+      }
+      if (d_maxGenerateSteps != 0) {
+        size_t numberOfSteps = (d_templatestop - d_templatecounter) / d_templatestep;
+        if (numberOfSteps > d_maxGenerateSteps) {
+          throw exception("The number of $GENERATE steps (" + std::to_string(numberOfSteps) + ") is too high, the maximum is set to " + std::to_string(d_maxGenerateSteps));
+        }
+      }
       d_templateline=d_line;
       parts.pop_front();
       parts.pop_front();

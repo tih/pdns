@@ -11,8 +11,8 @@ AC_CONFIG_HEADERS([config.h])
 
 AC_CANONICAL_HOST
 # Add some default CFLAGS and CXXFLAGS, can be appended to using the environment variables
-CFLAGS="-Wall -g -O2 $CFLAGS"
-CXXFLAGS="-Wall -g -O2 $CXXFLAGS"
+CFLAGS="-Wall -Wextra -Wshadow -Wno-unused-parameter -g -O2 $CFLAGS"
+CXXFLAGS="-Wall -Wextra -Wshadow -Wno-unused-parameter -g -O2 $CXXFLAGS"
 
 AC_SUBST([pdns_configure_args],["$ac_configure_args"])
 AC_DEFINE_UNQUOTED([PDNS_CONFIG_ARGS],
@@ -51,11 +51,15 @@ BOOST_FIND_HEADER([boost/container/flat_set.hpp], [AC_MSG_NOTICE([boost::contain
 
 # Boost Context was introduced in 1.51 (Aug 2012), but there was an immediate
 # API break in 1.52 (Nov 2012), so we only support that, and later.
-pdns_context_library="System V ucontexts"
+pdns_context_library=""
 AS_IF([test $boost_major_version -ge 152], [BOOST_CONTEXT([], [no])])
+AS_IF([test x"$boost_cv_lib_context" = "xyes"], [
+  pdns_context_library="Boost Context"
+], [
+  AC_CHECK_FUNCS([getcontext makecontext swapcontext], [pdns_context_library="System V ucontexts"])
+])
 AC_MSG_CHECKING([what context library to use for MTasker])
-AS_IF([test x"$boost_cv_lib_context" = "xyes"], [pdns_context_library="Boost Context"])
-AC_MSG_RESULT([$pdns_context_library])
+AS_IF([test -n "$pdns_context_library"], [AC_MSG_RESULT([$pdns_context_library])], [AC_MSG_ERROR([neither boost::context nor System V ucontexts available])])
 
 PDNS_ENABLE_UNIT_TESTS
 PDNS_ENABLE_REPRODUCIBLE
@@ -89,7 +93,9 @@ PDNS_WITH_NET_SNMP
 PDNS_CHECK_RAGEL([pdns/dnslabeltext.cc], [www.powerdns.com])
 PDNS_CHECK_CURL
 
-AC_CHECK_FUNCS_ONCE([strcasestr getrandom arc4random])
+dnl the *_r functions are in posix so we can use them unconditionally, but the ext/yahttp code is
+dnl using the defines.
+AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r strcasestr getrandom arc4random])
 
 PDNS_CHECK_PTHREAD_NP
 
@@ -102,12 +108,6 @@ AC_ARG_WITH([socketdir],
 
 PDNS_ENABLE_NOD
 
-AM_COND_IF([NOD_ENABLED],
-  [
-  BOOST_FILESYSTEM
-  AS_IF([test -z "$BOOST_FILESYSTEM_LIBS"], [ AC_MSG_ERROR([Boost filesystem library is not installed])])],
-  [])
-
 AC_SUBST([nodcachedir])
 nodcachedir='${localstatedir}/lib/pdns-recursor'
 AC_ARG_WITH([nod-cache-dir],
@@ -115,7 +115,7 @@ AC_ARG_WITH([nod-cache-dir],
   [nodcachedir="$withval"]
 )
 
-PDNS_CHECK_DNSTAP
+PDNS_CHECK_DNSTAP([auto])
 
 AC_MSG_CHECKING([whether we will enable compiler security checks])
 AC_ARG_ENABLE([hardening],

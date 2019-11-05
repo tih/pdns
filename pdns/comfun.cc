@@ -227,7 +227,7 @@ struct SendReceiveRes
     pw.getHeader()->qr = 0;
     
     if(::send(d_socket, &*packet.begin(), packet.size(), 0) < 0) {
-      cout<<"Error sending: "<<strerror(errno)<<endl;
+      cout<<"Error sending: "<<stringerror()<<endl;
       d_senderrors++;
     }
     
@@ -311,6 +311,7 @@ void printStats()
 int parseZone(const std::string& str, unsigned int limit)
 {
   ZoneParserTNG zpt(str);
+  zpt.disableGenerate();
   DNSResourceRecord rr;
 
   std::thread stats(printStats);
@@ -387,7 +388,7 @@ void readRESNames(const std::string& fname, map<DNSName, vector<ComboAddress>>& 
 {
   ifstream ifs(fname);
   if(!ifs)
-    unixDie("Reading resolved names from "+fname+": "+string(strerror(errno)));
+    unixDie("Reading resolved names from "+fname+": "+stringerror());
   vector<string> parts;
   string line;
   addrs.clear();
@@ -420,7 +421,7 @@ try
   }
   else if(mode=="scan-ns") {
     ifstream ns(string(argv[2])+".nameservers");
-    g_powerdns = make_unique<ofstream>(string(argv[2])+".powerdns");
+    g_powerdns = std::unique_ptr<ofstream>(new ofstream(string(argv[2])+".powerdns"));
     string line;
     int count=0;
     vector<string> parts;
@@ -517,6 +518,7 @@ try
     }
     cerr<<"Have "<<powerdns.size()<<" known NS names that are PowerDNS"<<endl;
     ZoneParserTNG zpt(argv[2]);
+    zpt.disableGenerate();
     DNSResourceRecord rr;
     
     set<DNSName> seen, pdnsdomains;

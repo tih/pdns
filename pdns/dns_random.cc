@@ -151,8 +151,8 @@ static void dns_random_setup(bool force=false)
     char buf[1];
     // some systems define getrandom but it does not really work, e.g. because it's
     // not present in kernel.
-    if (getrandom(buf, sizeof(buf), 0) == -1) {
-       g_log<<Logger::Warning<<"getrandom() failed: "<<strerror(errno)<<", falling back to " + rdev<<std::endl;
+    if (getrandom(buf, sizeof(buf), 0) == -1 && errno != EINTR) {
+       g_log<<Logger::Warning<<"getrandom() failed: "<<stringerror()<<", falling back to " + rdev<<std::endl;
        chosen_rng = RNG_URANDOM;
     }
   }
@@ -172,14 +172,14 @@ static void dns_random_setup(bool force=false)
   if (chosen_rng == RNG_URANDOM) {
     urandom_fd = open(rdev.c_str(), O_RDONLY);
     if (urandom_fd == -1)
-      throw std::runtime_error("Cannot open " + rdev + ": " + std::string(strerror(errno)));
+      throw std::runtime_error("Cannot open " + rdev + ": " + stringerror());
   }
 #if defined(HAVE_KISS_RNG)
   if (chosen_rng == RNG_KISS) {
     unsigned int seed;
     urandom_fd = open(rdev.c_str(), O_RDONLY);
     if (urandom_fd == -1)
-      throw std::runtime_error("Cannot open " + rdev + ": " + std::string(strerror(errno)));
+      throw std::runtime_error("Cannot open " + rdev + ": " + stringerror());
     if (read(urandom_fd, &seed, sizeof(seed)) < 0) {
       (void)close(urandom_fd);
       throw std::runtime_error("Cannot read random device");
@@ -263,8 +263,13 @@ uint32_t dns_random(uint32_t upper_bound) {
 #if defined(HAVE_GETRANDOM) && !defined(USE_URANDOM_ONLY)
       uint32_t num = 0;
       do {
-        if (getrandom(&num, sizeof(num), 0) != sizeof(num))
-          throw std::runtime_error("getrandom() failed: " + std::string(strerror(errno)));
+        auto got = getrandom(&num, sizeof(num), 0);
+        if (got == -1 && errno == EINTR) {
+          continue;
+        }
+        if (got != sizeof(num)) {
+          throw std::runtime_error("getrandom() failed: " + stringerror());
+        }
       }
       while(num < min);
 
@@ -319,4 +324,9 @@ uint32_t dns_random(uint32_t upper_bound) {
   default:
     throw std::runtime_error("Unreachable at " __FILE__ ":" + boost::lexical_cast<std::string>(__LINE__)); // cannot be reached
   };
+}
+
+uint16_t dns_random_uint16()
+{
+  return dns_random(0x10000);
 }

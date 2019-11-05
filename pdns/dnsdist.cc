@@ -144,6 +144,8 @@ bool g_fixupCase{false};
 bool g_preserveTrailingData{false};
 bool g_roundrobinFailOnNoServer{false};
 
+std::set<std::string> g_capabilitiesToRetain;
+
 static void truncateTC(char* packet, uint16_t* len, size_t responseSize, unsigned int consumed)
 try
 {
@@ -437,7 +439,7 @@ bool processResponse(char** response, uint16_t* responseLen, size_t* responseSiz
     return false;
   }
 
-  if (dr.packetCache && !dr.skipCache) {
+  if (dr.packetCache && !dr.skipCache && *responseLen <= s_maxPacketCacheEntrySize) {
     if (!dr.useZeroScope) {
       /* if the query was not suitable for zero-scope, for
          example because it had an existing ECS entry so the hash is
@@ -480,7 +482,7 @@ static bool sendUDPResponse(int origFD, const char* response, const uint16_t res
     }
     if (res == -1) {
       int err = errno;
-      vinfolog("Error sending response to %s: %s", origRemote.toStringWithPort(), strerror(err));
+      vinfolog("Error sending response to %s: %s", origRemote.toStringWithPort(), stringerror(err));
     }
   }
 
@@ -513,7 +515,7 @@ void responderThread(std::shared_ptr<DownstreamState> dss)
 try {
   setThreadName("dnsdist/respond");
   auto localRespRulactions = g_resprulactions.getLocal();
-  char packet[4096 + DNSCRYPT_MAX_RESPONSE_PADDING_AND_MAC_SIZE];
+  char packet[s_maxPacketCacheEntrySize + DNSCRYPT_MAX_RESPONSE_PADDING_AND_MAC_SIZE];
   static_assert(sizeof(packet) <= UINT16_MAX, "Packet size should fit in a uint16_t");
   /* when the answer is encrypted in place, we need to get a copy
      of the original header before encryption to fill the ring buffer */
@@ -614,8 +616,10 @@ try {
             du->response = std::string(response, responseLen);
             if (send(du->rsock, &du, sizeof(du), 0) != sizeof(du)) {
               /* at this point we have the only remaining pointer on this
-                 DOHUnit object since we did set ids->du to nullptr earlier */
-              delete du;
+                 DOHUnit object since we did set ids->du to nullptr earlier,
+                 except if we got the response before the pointer could be
+                 released by the frontend */
+              du->release();
             }
 #endif /* HAVE_DNS_OVER_HTTPS */
             du = nullptr;
@@ -630,6 +634,10 @@ try {
         }
 
         ++g_stats.responses;
+        if (ids->cs) {
+          ++ids->cs->responses;
+        }
+        ++dss->responses;
 
         double udiff = ids->sentTime.udiff();
         vinfolog("Got answer from %s, relayed to %s%s, took %f usec", dss->remote.toStringWithPort(), ids->origRemote.toStringWithPort(),
@@ -639,7 +647,7 @@ try {
         gettime(&ts);
         g_rings.insertResponse(ts, *dr.remote, *dr.qname, dr.qtype, static_cast<unsigned int>(udiff), static_cast<unsigned int>(got), cleartextDH, dss->remote);
 
-        switch (dh->rcode) {
+        switch (cleartextDH.rcode) {
         case RCode::NXDomain:
           ++g_stats.frontendNXDomain;
           break;
@@ -700,6 +708,15 @@ bool DownstreamState::reconnect()
       fd = SSocket(remote.sin4.sin_family, SOCK_DGRAM, 0);
       if (!IsAnyAddress(sourceAddr)) {
         SSetsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1);
+        if (!sourceItfName.empty()) {
+#ifdef SO_BINDTODEVICE
+          int res = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, sourceItfName.c_str(), sourceItfName.length());
+          if (res != 0) {
+            infolog("Error setting up the interface on backend socket '%s': %s", remote.toStringWithPort(), stringerror());
+          }
+#endif
+        }
+
         SBind(fd, sourceAddr);
       }
       try {
@@ -771,7 +788,7 @@ void DownstreamState::setWeight(int newWeight)
   }
 }
 
-DownstreamState::DownstreamState(const ComboAddress& remote_, const ComboAddress& sourceAddr_, unsigned int sourceItf_, size_t numberOfSockets): remote(remote_), sourceAddr(sourceAddr_), sourceItf(sourceItf_)
+DownstreamState::DownstreamState(const ComboAddress& remote_, const ComboAddress& sourceAddr_, unsigned int sourceItf_, const std::string& sourceItfName_, size_t numberOfSockets): sourceItfName(sourceItfName_), remote(remote_), sourceAddr(sourceAddr_), sourceItf(sourceItf_)
 {
   pthread_rwlock_init(&d_lock, nullptr);
   id = getUniqueID();
@@ -1442,6 +1459,7 @@ ProcessQueryResult processQuery(DNSQuestion& dq, ClientState& cs, LocalHolders& 
       }
 
       ++g_stats.selfAnswered;
+      ++cs.responses;
       return ProcessQueryResult::SendAnswer;
     }
 
@@ -1667,7 +1685,7 @@ static void MultipleMessagesUDPClientThread(ClientState* cs, LocalHolders& holde
 {
   struct MMReceiver
   {
-    char packet[4096];
+    char packet[s_maxPacketCacheEntrySize];
     ComboAddress remote;
     ComboAddress dest;
     struct iovec iov;
@@ -1707,7 +1725,7 @@ static void MultipleMessagesUDPClientThread(ClientState* cs, LocalHolders& holde
     int msgsGot = recvmmsg(cs->udpFD, msgVec.get(), vectSize, MSG_WAITFORONE | MSG_TRUNC, nullptr);
 
     if (msgsGot <= 0) {
-      vinfolog("Getting UDP messages via recvmmsg() failed with: %s", strerror(errno));
+      vinfolog("Getting UDP messages via recvmmsg() failed with: %s", stringerror());
       continue;
     }
 
@@ -1735,7 +1753,7 @@ static void MultipleMessagesUDPClientThread(ClientState* cs, LocalHolders& holde
       int sent = sendmmsg(cs->udpFD, outMsgVec.get(), msgsToSend, 0);
 
       if (sent < 0 || static_cast<unsigned int>(sent) != msgsToSend) {
-        vinfolog("Error sending responses with sendmmsg() (%d on %u): %s", sent, msgsToSend, strerror(errno));
+        vinfolog("Error sending responses with sendmmsg() (%d on %u): %s", sent, msgsToSend, stringerror());
       }
     }
 
@@ -1758,7 +1776,7 @@ try
   else
 #endif /* defined(HAVE_RECVMMSG) && defined(HAVE_SENDMMSG) && defined(MSG_WAITFORONE) */
   {
-    char packet[4096];
+    char packet[s_maxPacketCacheEntrySize];
     /* the actual buffer is larger because:
        - we may have to add EDNS and/or ECS
        - we use it for self-generated responses (from rule or cache)
@@ -1773,7 +1791,7 @@ try
     ComboAddress remote;
     ComboAddress dest;
     remote.sin4.sin_family = cs->local.sin4.sin_family;
-    fillMSGHdr(&msgh, &iov, &cbuf, sizeof(cbuf), packet, sizeof(packet), &remote);
+    fillMSGHdr(&msgh, &iov, &cbuf, sizeof(cbuf), packet, s_udpIncomingBufferSize, &remote);
 
     for(;;) {
       ssize_t got = recvmsg(cs->udpFD, &msgh, 0);
@@ -1783,7 +1801,7 @@ try
         continue;
       }
 
-      processUDPQuery(*cs, holders, &msgh, remote, dest, packet, static_cast<uint16_t>(got), s_udpIncomingBufferSize, nullptr, nullptr, nullptr, nullptr);
+      processUDPQuery(*cs, holders, &msgh, remote, dest, packet, static_cast<uint16_t>(got), sizeof(packet), nullptr, nullptr, nullptr, nullptr);
     }
   }
 }
@@ -1843,6 +1861,14 @@ try
   sock.setNonBlocking();
   if (!IsAnyAddress(ds->sourceAddr)) {
     sock.setReuseAddr();
+    if (!ds->sourceItfName.empty()) {
+#ifdef SO_BINDTODEVICE
+      int res = setsockopt(sock.getHandle(), SOL_SOCKET, SO_BINDTODEVICE, ds->sourceItfName.c_str(), ds->sourceItfName.length());
+      if (res != 0 && g_verboseHealthChecks) {
+        infolog("Error settting SO_BINDTODEVICE on the health check socket for backend '%s': %s", ds->getNameWithAddr(), stringerror());
+      }
+#endif
+    }
     sock.bind(ds->sourceAddr);
   }
   sock.connect(ds->remote);
@@ -2147,22 +2173,22 @@ static void bindAny(int af, int sock)
 
 #ifdef IP_FREEBIND
   if (setsockopt(sock, IPPROTO_IP, IP_FREEBIND, &one, sizeof(one)) < 0)
-    warnlog("Warning: IP_FREEBIND setsockopt failed: %s", strerror(errno));
+    warnlog("Warning: IP_FREEBIND setsockopt failed: %s", stringerror());
 #endif
 
 #ifdef IP_BINDANY
   if (af == AF_INET)
     if (setsockopt(sock, IPPROTO_IP, IP_BINDANY, &one, sizeof(one)) < 0)
-      warnlog("Warning: IP_BINDANY setsockopt failed: %s", strerror(errno));
+      warnlog("Warning: IP_BINDANY setsockopt failed: %s", stringerror());
 #endif
 #ifdef IPV6_BINDANY
   if (af == AF_INET6)
     if (setsockopt(sock, IPPROTO_IPV6, IPV6_BINDANY, &one, sizeof(one)) < 0)
-      warnlog("Warning: IPV6_BINDANY setsockopt failed: %s", strerror(errno));
+      warnlog("Warning: IPV6_BINDANY setsockopt failed: %s", stringerror());
 #endif
 #ifdef SO_BINDANY
   if (setsockopt(sock, SOL_SOCKET, SO_BINDANY, &one, sizeof(one)) < 0)
-    warnlog("Warning: SO_BINDANY setsockopt failed: %s", strerror(errno));
+    warnlog("Warning: SO_BINDANY setsockopt failed: %s", stringerror());
 #endif
 }
 
@@ -2171,11 +2197,11 @@ static void dropGroupPrivs(gid_t gid)
   if (gid) {
     if (setgid(gid) == 0) {
       if (setgroups(0, NULL) < 0) {
-        warnlog("Warning: Unable to drop supplementary gids: %s", strerror(errno));
+        warnlog("Warning: Unable to drop supplementary gids: %s", stringerror());
       }
     }
     else {
-      warnlog("Warning: Unable to set group ID to %d: %s", gid, strerror(errno));
+      warnlog("Warning: Unable to set group ID to %d: %s", gid, stringerror());
     }
   }
 }
@@ -2184,7 +2210,7 @@ static void dropUserPrivs(uid_t uid)
 {
   if(uid) {
     if(setuid(uid) < 0) {
-      warnlog("Warning: Unable to set user ID to %d: %s", uid, strerror(errno));
+      warnlog("Warning: Unable to set user ID to %d: %s", uid, stringerror());
     }
   }
 }
@@ -2301,7 +2327,7 @@ static void setUpLocalBind(std::unique_ptr<ClientState>& cs)
 #ifdef SO_BINDTODEVICE
     int res = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, itf.c_str(), itf.length());
     if (res != 0) {
-      warnlog("Error setting up the interface on local address '%s': %s", cs->local.toStringWithPort(), strerror(errno));
+      warnlog("Error setting up the interface on local address '%s': %s", cs->local.toStringWithPort(), stringerror());
     }
 #else
     if (warn) {
@@ -2510,6 +2536,9 @@ try
       cout<<"dnsdist "<<VERSION<<" ("<<LUA_RELEASE<<")"<<endl;
 #endif
       cout<<"Enabled features: ";
+#ifdef HAVE_CDB
+      cout<<"cdb ";
+#endif
 #ifdef HAVE_DNS_OVER_TLS
       cout<<"dns-over-tls(";
 #ifdef HAVE_GNUTLS
@@ -2540,6 +2569,9 @@ try
 #endif
 #ifdef HAVE_LIBSODIUM
       cout<<"libsodium ";
+#endif
+#ifdef HAVE_LMDB
+      cout<<"lmdb ";
 #endif
 #ifdef HAVE_PROTOBUF
       cout<<"protobuf ";
@@ -2724,7 +2756,7 @@ try
        or as an unprivileged user with ambient
        capabilities like CAP_NET_BIND_SERVICE.
     */
-    dropCapabilities();
+    dropCapabilities(g_capabilitiesToRetain);
   }
   catch(const std::exception& e) {
     warnlog("%s", e.what());

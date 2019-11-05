@@ -46,8 +46,6 @@
 #include "common_startup.hh"
 
 #include "ixfr.hh"
-using boost::scoped_ptr;
-
 
 void CommunicatorClass::addSuckRequest(const DNSName &domain, const ComboAddress& master)
 {
@@ -80,7 +78,7 @@ struct ZoneStatus
 };
 
 
-void CommunicatorClass::ixfrSuck(const DNSName &domain, const TSIGTriplet& tt, const ComboAddress& laddr, const ComboAddress& remote, scoped_ptr<AuthLua4>& pdl,
+void CommunicatorClass::ixfrSuck(const DNSName &domain, const TSIGTriplet& tt, const ComboAddress& laddr, const ComboAddress& remote, unique_ptr<AuthLua4>& pdl,
                                  ZoneStatus& zs, vector<DNSRecord>* axfr)
 {
   UeberBackend B; // fresh UeberBackend
@@ -141,7 +139,7 @@ void CommunicatorClass::ixfrSuck(const DNSName &domain, const TSIGTriplet& tt, c
         vector<DNSRecord> rrset;
         {
           DNSZoneRecord zrr;
-          B.lookup(QType(g.first.second), g.first.first+domain, 0, di.id);
+          B.lookup(QType(g.first.second), g.first.first+domain, di.id);
           while(B.get(zrr)) {
             zrr.dr.d_name.makeUsRelative(domain);
             rrset.push_back(zrr.dr);
@@ -239,15 +237,16 @@ static bool processRecordForZS(const DNSName& domain, bool& firstNSEC3, DNSResou
    5) It updates the Empty Non Terminals
 */
 
-static vector<DNSResourceRecord> doAxfr(const ComboAddress& raddr, const DNSName& domain, const TSIGTriplet& tt, const ComboAddress& laddr,  scoped_ptr<AuthLua4>& pdl, ZoneStatus& zs)
+static vector<DNSResourceRecord> doAxfr(const ComboAddress& raddr, const DNSName& domain, const TSIGTriplet& tt, const ComboAddress& laddr,  unique_ptr<AuthLua4>& pdl, ZoneStatus& zs)
 {
+  uint16_t axfr_timeout=::arg().asNum("axfr-fetch-timeout");
   vector<DNSResourceRecord> rrs;
-  AXFRRetriever retriever(raddr, domain, tt, (laddr.sin4.sin_family == 0) ? NULL : &laddr, ((size_t) ::arg().asNum("xfr-max-received-mbytes")) * 1024 * 1024);
+  AXFRRetriever retriever(raddr, domain, tt, (laddr.sin4.sin_family == 0) ? NULL : &laddr, ((size_t) ::arg().asNum("xfr-max-received-mbytes")) * 1024 * 1024, axfr_timeout);
   Resolver::res_t recs;
   bool first=true;
   bool firstNSEC3{true};
   bool soa_received {false};
-  while(retriever.getChunk(recs)) {
+  while(retriever.getChunk(recs, nullptr, axfr_timeout)) {
     if(first) {
       g_log<<Logger::Error<<"AXFR started for '"<<domain<<"'"<<endl;
       first=false;
@@ -339,7 +338,7 @@ void CommunicatorClass::suck(const DNSName &domain, const ComboAddress& remote)
     }
 
 
-    scoped_ptr<AuthLua4> pdl;
+    unique_ptr<AuthLua4> pdl{nullptr};
     vector<string> scripts;
     string script=::arg()["lua-axfr-script"];
     if(B.getDomainMetadata(domain, "LUA-AXFR-SCRIPT", scripts) && !scripts.empty()) {
@@ -351,7 +350,7 @@ void CommunicatorClass::suck(const DNSName &domain, const ComboAddress& remote)
     }
     if(!script.empty()){
       try {
-        pdl.reset(new AuthLua4());
+        pdl = make_unique<AuthLua4>();
         pdl->loadFile(script);
         g_log<<Logger::Info<<"Loaded Lua script '"<<script<<"' to edit the incoming AXFR of '"<<domain<<"'"<<endl;
       }
@@ -597,10 +596,20 @@ void CommunicatorClass::suck(const DNSName &domain, const ComboAddress& remote)
     di.backend->setFresh(zs.domain_id);
     purgeAuthCaches(domain.toString()+"$");
 
-
     g_log<<Logger::Error<<"AXFR done for '"<<domain<<"', zone committed with serial number "<<zs.soa_serial<<endl;
-    if(::arg().mustDo("slave-renotify"))
-      notifyDomain(domain);
+
+    // Send slave re-notifications
+    bool notify;
+    vector<string> meta;
+    if(B.getDomainMetadata(domain, "SLAVE-RENOTIFY", meta ) && !meta.empty()) {
+      notify=(meta.front() == "1");
+    } else {
+      notify=(::arg().mustDo("slave-renotify"));
+    }
+    if(notify) {
+      notifyDomain(domain, &B);
+    }
+
   }
   catch(DBException &re) {
     g_log<<Logger::Error<<"Unable to feed record during incoming AXFR of '" << domain<<"': "<<re.reason<<endl;
@@ -739,10 +748,10 @@ void CommunicatorClass::addSlaveCheckRequest(const DomainInfo& di, const ComboAd
   d_any_sem.post(); // kick the loop!
 }
 
-void CommunicatorClass::addTrySuperMasterRequest(DNSPacket *p)
+void CommunicatorClass::addTrySuperMasterRequest(const DNSPacket& p)
 {
   Lock l(&d_lock);
-  DNSPacket ours = *p;
+  DNSPacket ours = p;
   if(d_potentialsupermasters.insert(ours).second)
     d_any_sem.post(); // kick the loop!
 }
@@ -788,7 +797,7 @@ void CommunicatorClass::slaveRefresh(PacketHandler *P)
     TSIGRecordContent trc;
     DNSName tsigkeyname;
     dp.getTSIGDetails(&trc, &tsigkeyname);
-    P->trySuperMasterSynchronous(&dp, tsigkeyname); // FIXME could use some error loging
+    P->trySuperMasterSynchronous(dp, tsigkeyname); // FIXME could use some error loging
   }
   if(rdomains.empty()) { // if we have priority domains, check them first
     B->getUnfreshSlaveInfos(&rdomains);
@@ -947,7 +956,7 @@ void CommunicatorClass::slaveRefresh(PacketHandler *P)
     else if(hasSOA && theirserial == ourserial) {
       uint32_t maxExpire=0, maxInception=0;
       if(dk.isPresigned(di.zone)) {
-        B->lookup(QType(QType::RRSIG), di.zone); // can't use DK before we are done with this lookup!
+        B->lookup(QType(QType::RRSIG), di.zone, di.id); // can't use DK before we are done with this lookup!
         DNSZoneRecord zr;
         while(B->get(zr)) {
           auto rrsig = getRR<RRSIGRecordContent>(zr.dr);

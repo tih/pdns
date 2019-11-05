@@ -1,6 +1,6 @@
 #pragma once
 #include "pdns/dnsbackend.hh"
-#include "lmdb-typed.hh"
+#include "ext/lmdb-safe/lmdb-typed.hh"
 
 template<class T, typename std::enable_if<std::is_same<T, DNSName>::value,T>::type* = nullptr>
 std::string keyConv(const T& t)
@@ -51,7 +51,7 @@ public:
   bool replaceRRSet(uint32_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset) override;
 
   void getAllDomains(vector<DomainInfo> *domains, bool include_disabled=false) override;
-  void lookup(const QType &type, const DNSName &qdomain, DNSPacket *p, int zoneId) override;
+  void lookup(const QType &type, const DNSName &qdomain, int zoneId, DNSPacket *p=nullptr) override;
   bool get(DNSResourceRecord &rr) override;
   bool get(DNSZoneRecord& dzr) override;
 

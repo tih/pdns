@@ -23,6 +23,7 @@
 #define STATBAG_HH
 #include <pthread.h>
 #include <map>
+#include <mutex>
 #include <functional>
 #include <string>
 #include <vector>
@@ -38,6 +39,10 @@ class StatRing
 {
 public:
   StatRing(unsigned int size=10000);
+  // Some older C++ libs have trouble emplacing without a copy-contructor, so provide one
+  StatRing(const StatRing &);
+  StatRing & operator=(const StatRing &) = delete;
+  
   void account(const T &item);
 
   unsigned int getSize();
@@ -54,7 +59,7 @@ private:
   }
 
   boost::circular_buffer<T> d_items;
-  mutable pthread_mutex_t d_lock;
+  mutable std::mutex d_lock;
   string d_help;
 };
 
@@ -62,7 +67,7 @@ private:
 //! use this to gather and query statistics
 class StatBag
 {
-  map<string, AtomicCounter *> d_stats;
+  map<string, std::unique_ptr<AtomicCounter>> d_stats;
   map<string, string> d_keyDescrips;
   map<string,StatRing<string, CIStringCompare> >d_rings;
   map<string,StatRing<SComboAddress> >d_comborings;

@@ -13,18 +13,35 @@ commands:
       - run:
           name: Clone the repo
           command: |
+            mkdir -p /opt/project
             if [ -n "$CIRCLE_PR_NUMBER" ]
             then
               echo === Checking out PR "$CIRCLE_PR_NUMBER" from "$CIRCLE_REPOSITORY_URL"
-              git clone --depth 1 $CIRCLE_REPOSITORY_URL ~/project
-              cd ~/project
+              git clone --depth 1 $CIRCLE_REPOSITORY_URL /opt/project
+              cd /opt/project
               git fetch --depth 1 origin +refs/pull/${CIRCLE_PR_NUMBER}/merge
               git checkout -qf FETCH_HEAD
             else
               echo === Checking out branch "${CIRCLE_BRANCH}" from "$CIRCLE_REPOSITORY_URL"
-              git clone --depth 1 --branch $CIRCLE_BRANCH $CIRCLE_REPOSITORY_URL ~/project
+              git clone --depth 1 --branch $CIRCLE_BRANCH $CIRCLE_REPOSITORY_URL /opt/project
             fi
+            cd /opt/project
             git show -s
+
+  get-workspace:
+    description: "Attach workspace to /opt and symlink checkout into home"
+    steps:
+      - run:
+          name: ensure ca-certificates is installed
+          command: apt-get update && apt-get -qq -y install ca-certificates
+      - attach_workspace:
+          at: /opt
+      - run:
+          name: symlink checkout into home
+          command: rmdir ~/project && ln -s /opt/project ~/project
+      - run:
+          name: include $BASH_ENV for both interactive and non-interactive shells
+          command: echo '. $BASH_ENV' >> $HOME/.bashrc
 
   install-coverity-tools:
     description: Install the coverity tools to /usr/local
@@ -45,11 +62,7 @@ commands:
   auth-regress-setup:
     description: Prepare the environment for auth regression tests
     steps:
-      - run:
-          name: ensure ca-certificates is installed
-          command: apt-get update && apt-get -qq -y install ca-certificates
-      - attach_workspace:
-          at: /opt
+      - get-workspace
       - install-auth-deps
       - run:
           name: Install test dependencies
@@ -65,13 +78,13 @@ commands:
       - run:
           name: Install jdnssectools
           command: |
-            if [ ! -e /usr/bin/jdnssec-verifyzone ]; then
+            if [ ! -e $HOME/bin/jdnssec-verifyzone ]; then
               apt-get install -qq -y wget
               wget https://github.com/dblacka/jdnssec-tools/releases/download/0.14/jdnssec-tools-0.14.tar.gz
-              tar xfz jdnssec-tools-0.14.tar.gz --strip-components=1 -C /
+              tar xfz jdnssec-tools-0.14.tar.gz -C $HOME
               rm jdnssec-tools-0.14.tar.gz
             fi
-      - checkout-shallow
+            echo 'export PATH=$HOME/jdnssec-tools-0.14/bin:$PATH' >> $BASH_ENV
       - run:
           name: Allow missing tools in verify-dnssec-zone
           command: touch regression-tests/tests/verify-dnssec-zone/allow-missing
@@ -100,6 +113,7 @@ commands:
           name: Run << parameters.context >> tests
           command: |
             [ -e ./vars ] && . ./vars
+            export
             rm -rf tests/*/skip
             for t in << parameters.skip >>
             do
@@ -153,8 +167,9 @@ commands:
               libcap2 \
               libssl1.1 \
               libsystemd0 \
-              libsodium18 \
-              libprotobuf10
+              libsodium23 \
+              libfstrm0 \
+              libprotobuf17
 
   install-auth-deps:
     description: Install all libraries needed to run the auth
@@ -168,7 +183,7 @@ commands:
             liblmdb0 \
             libpq5 \
             libssl1.1 \
-            libsodium18 \
+            libsodium23 \
             libsystemd0 \
             default-libmysqlclient-dev \
             unixodbc
@@ -183,14 +198,16 @@ commands:
               libluajit-5.1 \
               libboost-all-dev \
               libcap2 \
+              libcdb1 \
               libcurl4-openssl-dev \
               libfstrm0 \
               libh2o-evloop0.13 \
+              liblmdb0 \
+              libprotobuf17 \
               libre2-5 \
               libssl-dev \
               libsystemd0 \
               libsodium23 \
-              libprotobuf17 \
               protobuf-compiler \
               virtualenv
 
@@ -201,9 +218,10 @@ commands:
       - run:
           command: |
             apt-get install -qq -y \
+              git \
               libboost-all-dev \
               libsystemd0 \
-              libyaml-cpp0.5v5 \
+              libyaml-cpp0.6 \
               virtualenv
 
   install-auth-dev-deps:
@@ -254,7 +272,7 @@ commands:
         default: "debian"
       release:
         type: string
-        default: "stretch"
+        default: "buster"
     steps:
       - run:
           name: "Install dependencies"
@@ -341,6 +359,7 @@ commands:
             make \
             pkg-config \
             ragel \
+            rsync \
             virtualenv
             if [ "${CIRCLE_PROJECT_USERNAME}" = "PowerDNS" -a "${CIRCLE_PROJECT_REPONAME}" = "pdns" -a "${CIRCLE_BRANCH}" = "master" ]; then
               apt-get update && apt-get -qq -y install \
@@ -454,12 +473,25 @@ commands:
             fi
 
 jobs:
-  build-auth:
+  checkout:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
 
     steps:
       - checkout-shallow
+      - persist_to_workspace:
+          root: /opt
+          paths:
+            - project
+
+  build-auth:
+    docker:
+      - image: debian:buster
+
+    steps:
+      - get-workspace
       - install-auth-dev-deps
       - restore-cache-ccache:
           product: auth
@@ -469,11 +501,11 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
               --disable-lua-records \
-              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc mydns random tinydns' \
+              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc random tinydns' \
               --enable-systemd \
               --enable-tools \
               --with-lmdb=/usr \
@@ -494,8 +526,10 @@ jobs:
             - pdns-auth
 
   test-auth-regress-odbc-sqlite3:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - run:
@@ -526,7 +560,7 @@ jobs:
 
   test-auth-regress-odbc-mssql:
     docker:
-      - image: debian:stretch
+      - image: debian:buster
       - image: mcr.microsoft.com/mssql/server:2017-GA-ubuntu
         environment:
           - ACCEPT_EULA: Y
@@ -584,8 +618,10 @@ jobs:
           skip: 8bit-txt-unescaped
 
   test-auth-regress-gsqlite3:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - run:
@@ -602,8 +638,10 @@ jobs:
           context: gsqlite3-nsec3-narrow
 
   test-auth-regress-bind:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
       - image: circleci/mysql:5      # for the hybrid test
     steps:
       - auth-regress-setup
@@ -627,30 +665,18 @@ jobs:
              [client]
              protocol=TCP
             __EOF__
+      - run:
+          name: Set up mysql client lib to force TCP
+          command: echo 'export GMYSQLHOST=127.0.0.1' > ./vars
+          workdir: ~/project/regression-tests            
       - auth-regress:
           context: bind-hybrid-nsec3
 
-  test-auth-regress-mydns:
-    docker:
-      - image: debian:stretch
-      - image: circleci/mysql:5
-    steps:
-      - auth-regress-setup
-      - run:
-          command: apt-get install -qq -y default-mysql-client
-      - run:
-          command: |
-            cat >> ~/.my.cnf \<<- __EOF__
-             [client]
-             protocol=TCP
-            __EOF__
-      - auth-regress:
-          context: mydns
-          doroot: false
-
   test-auth-regress-gmysql:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
       - image: circleci/mysql:5
     steps:
       - auth-regress-setup
@@ -659,9 +685,14 @@ jobs:
       - run:
           command: |
             cat >> ~/.my.cnf \<<- __EOF__
-             [client]
-             protocol=TCP
+            [client]
+            protocol=TCP
+            default-character-set=latin1
             __EOF__
+      - run:
+          name: Set up mysql client lib to force TCP
+          command: echo 'export GMYSQLHOST=127.0.0.1 export GMYSQL2HOST=127.0.0.1 ' > ./vars
+          workdir: ~/project/regression-tests
       - auth-regress:
           context: gmysql-nodnssec-both
       - auth-regress:
@@ -674,8 +705,10 @@ jobs:
           context: gmysql-nsec3-narrow
 
   test-auth-regress-gpgsql:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
       - image: circleci/postgres:9
         environment:
           POSTGRES_USER: root
@@ -703,8 +736,10 @@ jobs:
           context: gpgsql-nsec3-narrow
 
   test-auth-regress-ldap:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
         environment:
           LDAPHOST: ldap://ldapserver/
       - image: powerdns/ldap-regress:1.2.4-0 # OpenLDAP 2.4.47
@@ -726,8 +761,10 @@ jobs:
           doroot: false
 
   test-auth-regress-tinydns:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - auth-regress:
@@ -735,8 +772,10 @@ jobs:
           doroot: false
 
   test-auth-regress-lmdb:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - run: apt-get install -y -qq jq curl
@@ -752,8 +791,10 @@ jobs:
           context: lmdb-nsec3-narrow
 
   test-auth-algorithms:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - run:
@@ -761,8 +802,10 @@ jobs:
           command: /opt/pdns-auth/bin/pdnsutil test-algorithms
 
   test-auth-api:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - auth-regress-setup
       - run: apt-get -y -qq install virtualenv sqlite3
@@ -778,7 +821,7 @@ jobs:
 
   build-recursor:
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - restore-cache-ccache:
           product: recursor
@@ -797,6 +840,7 @@ jobs:
             libboost-all-dev \
             libcap-dev \
             libluajit-5.1-dev \
+            libfstrm-dev \
             libprotobuf-dev \
             libsodium-dev \
             libssl-dev \
@@ -808,7 +852,7 @@ jobs:
             ragel \
             systemd \
             virtualenv
-      - checkout-shallow
+      - get-workspace
       - run:
           name: autoconf
           command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
@@ -816,8 +860,8 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --enable-unit-tests \
             --enable-nod \
@@ -849,20 +893,20 @@ jobs:
             - pdns-recursor
 
   test-recursor-regression:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - add-auth-repo
-      - run: apt-get --no-install-recommends install -qq -y pdns-server pdns-backend-bind pdns-tools daemontools authbind jq libfaketime lua-posix moreutils bc virtualenv protobuf-compiler
+      - run: apt-get --no-install-recommends install -qq -y pdns-server pdns-backend-bind pdns-tools daemontools authbind jq libfaketime lua-posix lua-socket moreutils bc virtualenv protobuf-compiler
       - install-recursor-deps
       - run:
           name: Set up authbind
           command: |
             touch /etc/authbind/byport/53
             chmod 755 /etc/authbind/byport/53
-      - checkout-shallow
-      - attach_workspace:
-          at: /opt
+      - get-workspace
       - run:
           name: Run regression tests
           workdir: ~/project
@@ -872,15 +916,15 @@ jobs:
             ./build-scripts/test-recursor
 
   test-recursor-bulk:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - add-auth-repo
       - run: apt-get --no-install-recommends install -qq -y pdns-tools moreutils time
       - install-recursor-deps
-      - checkout-shallow
-      - attach_workspace:
-          at: /opt
+      - get-workspace
       - run:
           name: Get the majestic million list
           workdir: ~/project/regression-tests
@@ -900,15 +944,15 @@ jobs:
           workdir: ~/project/regression-tests
 
   test-recursor-api:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - add-auth-repo
       - run: apt-get --no-install-recommends install -qq -y virtualenv pdns-tools
       - install-recursor-deps
-      - checkout-shallow
-      - attach_workspace:
-          at: /opt
+      - get-workspace
       - run:
           name: Run API tests
           workdir: ~/project/regression-tests.api
@@ -917,54 +961,66 @@ jobs:
             ./runtests recursor
 
   build-auth-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-auth-docs
 
   deploy-auth-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-auth-docs
       - add-docs-upload-ssh
       - upload-auth-docs
 
   build-recursor-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-recursor-docs
 
   deploy-recursor-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-recursor-docs
       - add-docs-upload-ssh
       - upload-recursor-docs
 
   build-dnsdist-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-dnsdist-docs
 
   deploy-dnsdist-docs:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
-      - checkout-shallow
+      - get-workspace
       - install-doc-deps
       - build-dnsdist-docs
       - add-docs-upload-ssh
@@ -972,35 +1028,40 @@ jobs:
 
   coverity-auth:
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - install-auth-dev-deps
       - install-coverity-tools
       - checkout-shallow
       - run:
           name: autoconf
+          working_directory: /opt/project/
           command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
       - run:
           name: configure
+          working_directory: /opt/project/
           command: |
             CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
             CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
               --disable-lua-records \
               --disable-systemd \
-              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc mydns random tinydns' \
+              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc random tinydns' \
               --enable-tools \
               --with-lmdb=/usr \
               --with-libsodium \
               --prefix=/opt/pdns-auth
       - run:
           name: build
+          working_directory: /opt/project/
           command: /usr/local/bin/cov-build --dir cov-int make -j2 -k
       - run:
           name: Create Coverity tarball
+          working_directory: /opt/project/
           command: tar caf auth.tar.bz2 cov-int
       - run:
           name: Upload tarball to coverity
+          working_directory: /opt/project/
           command: |
             curl --form token=${COVERITY_TOKEN} \
             --form email="${COVERITY_EMAIL}" \
@@ -1011,7 +1072,7 @@ jobs:
 
   coverity-dnsdist:
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - run:
           name: Install dependencies
@@ -1028,8 +1089,10 @@ jobs:
             git \
             libboost-all-dev \
             libcap-dev \
+            libcdb-dev \
             libedit-dev \
             libfstrm-dev \
+            liblmdb-dev \
             libluajit-5.1-dev \
             libprotobuf-dev \
             libre2-dev \
@@ -1048,12 +1111,12 @@ jobs:
       - run:
           name: autoconf
           command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
-          working_directory: ~/project/pdns/dnsdistdist
+          working_directory: /opt/project/pdns/dnsdistdist
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --disable-systemd \
             --disable-unit-tests \
@@ -1066,17 +1129,18 @@ jobs:
             --with-libcap \
             --with-protobuf=yes \
             --with-re2
-          working_directory: ~/project/pdns/dnsdistdist
+          working_directory: /opt/project/pdns/dnsdistdist
       - run:
           name: build
           command: /usr/local/bin/cov-build --dir cov-int make -j2 -k
-          working_directory: ~/project/pdns/dnsdistdist
+          working_directory: /opt/project/pdns/dnsdistdist
       - run:
           name: Create Coverity tarball
           command: tar caf dnsdist.tar.bz2 cov-int
-          working_directory: ~/project/pdns/dnsdistdist
+          working_directory: /opt/project/pdns/dnsdistdist
       - run:
           name: Upload tarball to coverity
+          working_directory: /opt/project/
           command: |
             curl --form token=${COVERITY_TOKEN} \
             --form email="${COVERITY_EMAIL}" \
@@ -1087,7 +1151,7 @@ jobs:
 
   coverity-recursor:
     docker:
-      - image: debian:stretch
+      - image: debian:buster
     steps:
       - run:
           name: Install dependencies
@@ -1105,6 +1169,7 @@ jobs:
             libboost-all-dev \
             libcap-dev \
             libluajit-5.1-dev \
+            libfstrm-dev \
             libprotobuf-dev \
             libsodium-dev \
             libssl-dev \
@@ -1120,7 +1185,7 @@ jobs:
       - run:
           name: autoconf
           command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
-          working_directory: ~/project/pdns/recursordist
+          working_directory: /opt/project/pdns/recursordist
       - run:
           name: configure
           command: |
@@ -1135,17 +1200,18 @@ jobs:
             --with-libcap \
             --with-protobuf=yes \
             --without-net-snmp
-          working_directory: ~/project/pdns/recursordist
+          working_directory: /opt/project/pdns/recursordist
       - run:
           name: build
           command: /usr/local/bin/cov-build --dir cov-int make -j2 -k
-          working_directory: ~/project/pdns/recursordist
+          working_directory: /opt/project/pdns/recursordist
       - run:
           name: Create Coverity tarball
           command: tar caf recursor.tar.bz2 cov-int
-          working_directory: ~/project/pdns/recursordist
+          working_directory: /opt/project/pdns/recursordist
       - run:
           name: Upload tarball to coverity
+          working_directory: /opt/project/
           command: |
             curl --form token=${COVERITY_TOKEN} \
             --form email="${COVERITY_EMAIL}" \
@@ -1172,9 +1238,11 @@ jobs:
             git \
             libboost-all-dev \
             libcap-dev \
+            libcdb-dev \
             libedit-dev \
             libfstrm-dev \
             libh2o-evloop-dev \
+            liblmdb-dev \
             libluajit-5.1-dev \
             libprotobuf-dev \
             libre2-dev \
@@ -1189,7 +1257,7 @@ jobs:
             ragel \
             systemd \
             virtualenv
-      - checkout-shallow
+      - get-workspace
       - run:
           name: autoconf
           command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
@@ -1197,8 +1265,8 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
             --enable-unit-tests \
             --enable-dnstap \
@@ -1235,21 +1303,25 @@ jobs:
             - dnsdist
 
   test-dnsdist-regression:
+    resource_class: small
+
     docker:
       - image: debian:buster
         environment:
           UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
     steps:
       - install-dnsdist-deps
-      - checkout-shallow
+      - get-workspace
       - run:
           name: setup snmp
           command: |
             apt-get -qq --no-install-recommends install snmpd
             sed "s/agentxperms 0700 0755 dnsdist/agentxperms 0700 0755/g" regression-tests.dnsdist/snmpd.conf > /etc/snmp/snmpd.conf
             /etc/init.d/snmpd start
-      - attach_workspace:
-          at: /opt
+      - run:
+          name: install prometheus tools
+          command: |
+            apt-get -qq --no-install-recommends install prometheus
       - run:
           name: Run dnsdist tests
           workdir: ~/project/regression-tests.dnsdist
@@ -1258,15 +1330,15 @@ jobs:
             ./runtests
 
   test-ixfrdist-regression:
+    resource_class: small
+
     docker:
-      - image: debian:stretch
+      - image: debian:buster
         environment:
           UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
     steps:
       - install-ixfrdist-deps
-      - checkout-shallow
-      - attach_workspace:
-          at: /opt
+      - get-workspace
       - run:
           name: Run ixfrdist tests
           workdir: ~/project/regression-tests.ixfrdist
@@ -1293,7 +1365,10 @@ workflows:
 
   build-and-test-all:
     jobs:
-      - build-auth
+      - checkout
+      - build-auth:
+          requires:
+            - checkout
       - test-auth-api:
           requires:
             - build-auth
@@ -1307,9 +1382,6 @@ workflows:
           requires:
             - build-auth
       - test-auth-regress-gmysql:
-          requires:
-            - build-auth
-      - test-auth-regress-mydns:
           requires:
             - build-auth
       - test-auth-regress-bind:
@@ -1330,7 +1402,9 @@ workflows:
       - test-auth-regress-tinydns:
           requires:
             - build-auth
-      - build-recursor
+      - build-recursor:
+          requires:
+            - checkout
       - test-recursor-regression:
           requires:
             - build-recursor
@@ -1340,7 +1414,9 @@ workflows:
       - test-recursor-api:
           requires:
             - build-recursor
-      - build-dnsdist
+      - build-dnsdist:
+          requires:
+            - checkout
       - test-dnsdist-regression:
           requires:
             - build-dnsdist
@@ -1350,18 +1426,25 @@ workflows:
 
   build-docs:
     jobs:
+      - checkout
       - build-auth-docs:
           filters:
             branches:
               ignore: master
+          requires:
+            - checkout
       - build-recursor-docs:
           filters:
             branches:
               ignore: master
+          requires:
+            - checkout
       - build-dnsdist-docs:
           filters:
             branches:
               ignore: master
+          requires:
+            - checkout
 
       # These actually deploy
       - deploy-auth-docs:
@@ -1369,13 +1452,19 @@ workflows:
           filters:
             branches:
               only: master
+          requires:
+            - checkout
       - deploy-recursor-docs:
           context: docs
           filters:
             branches:
               only: master
+          requires:
+            - checkout
       - deploy-dnsdist-docs:
           context: docs
           filters:
             branches:
               only: master
+          requires:
+            - checkout

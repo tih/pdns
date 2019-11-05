@@ -343,6 +343,7 @@ install_recursor() {
     libfaketime \
     libsnmp-dev \
     lua-posix \
+    lua-socket \
     moreutils \
     snmpd"
   run "cd .."
@@ -373,8 +374,10 @@ install_dnsdist() {
   run "sudo apt-get -qq update"
   run "sudo apt-get -qq --no-install-recommends install \
     snmpd \
-    libsnmp-dev \
-    libfstrm-dev"
+    libcdb-dev \
+    libfstrm-dev \
+    liblmdb-dev \
+    libsnmp-dev"
   run "sudo sed -i \"s/agentxperms 0700 0755 dnsdist/agentxperms 0700 0755 ${USER}/g\" regression-tests.dnsdist/snmpd.conf"
   run "sudo cp -f regression-tests.dnsdist/snmpd.conf /etc/snmp/snmpd.conf"
   run "sudo service snmpd restart"
@@ -390,7 +393,7 @@ build_auth() {
   run "autoreconf -vi"
   run "./configure \
     ${sanitizerflags} \
-    --with-dynmodules='bind gmysql geoip gpgsql gsqlite3 lmdb lua mydns opendbx pipe random remote tinydns godbc lua2' \
+    --with-dynmodules='bind gmysql geoip gpgsql gsqlite3 lmdb lua opendbx pipe random remote tinydns godbc lua2' \
     --with-modules='' \
     --with-sqlite3 \
     --with-libsodium \
@@ -442,6 +445,7 @@ build_recursor() {
     --with-libsodium \
     --enable-unit-tests \
     --enable-nod \
+    --disable-dnstap \
     --disable-silent-rules"
   run "make -k -j3"
   run "make install"
@@ -464,6 +468,7 @@ build_dnsdist(){
     --enable-dnscrypt \
     --enable-dns-over-tls \
     --enable-dnstap \
+    --with-lmdb=/usr \
     --prefix=$HOME/dnsdist \
     --disable-silent-rules"
   run "make -k -j3"
@@ -491,6 +496,8 @@ test_auth() {
 
   #travis unbound is too old for this test (unbound 1.6.0 required)
   run "touch tests/ent-asterisk/fail.nsec"
+
+  run "./timestamp ./start-test-stop 5300 lua-minimal nowait 0 apex-level-a-but-no-a"
 
   run "./timestamp ./start-test-stop 5300 bind-both"
   run "./timestamp ./start-test-stop 5300 bind-dnssec-both"
@@ -525,8 +532,6 @@ test_auth() {
   run "./timestamp ./start-test-stop 5300 gsqlite3-nsec3-both"
   # run "./timestamp ./start-test-stop 5300 gsqlite3-nsec3-optout-both"
   run "./timestamp ./start-test-stop 5300 gsqlite3-nsec3-narrow"
-
-  run "./timestamp ./start-test-stop 5300 mydns"
 
   run "./timestamp ./start-test-stop 5300 opendbx-sqlite3"
 
@@ -634,7 +639,7 @@ test_recursor() {
 
 test_dnsdist(){
   run "cd regression-tests.dnsdist"
-  run "DNSDISTBIN=$HOME/dnsdist/bin/dnsdist ./runtests -v --ignore-files='(?:^\.|^_,|^setup\.py$|^test_DOH\.py$|^test_OCSP\.py$)'"
+  run "DNSDISTBIN=$HOME/dnsdist/bin/dnsdist ./runtests -v --ignore-files='(?:^\.|^_,|^setup\.py$|^test_DOH\.py$|^test_OCSP\.py$|^test_Prometheus\.py$|^test_TLSSessionResumption\.py$)'"
   run "rm -f ./DNSCryptResolver.cert ./DNSCryptResolver.key"
   run "cd .."
 }

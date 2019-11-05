@@ -2,6 +2,7 @@
 #pragma once
 #include <memory>
 
+#include "libssl.hh"
 #include "misc.hh"
 
 enum class IOState { Done, NeedRead, NeedWrite };
@@ -16,11 +17,35 @@ public:
   virtual size_t write(const void* buffer, size_t bufferSize, unsigned int writeTimeout) = 0;
   virtual IOState tryWrite(std::vector<uint8_t>& buffer, size_t& pos, size_t toWrite) = 0;
   virtual IOState tryRead(std::vector<uint8_t>& buffer, size_t& pos, size_t toRead) = 0;
-  virtual std::string getServerNameIndication() = 0;
+  virtual std::string getServerNameIndication() const = 0;
+  virtual LibsslTLSVersion getTLSVersion() const = 0;
+  virtual bool hasSessionBeenResumed() const = 0;
   virtual void close() = 0;
+
+  void setUnknownTicketKey()
+  {
+    d_unknownTicketKey = true;
+  }
+
+  bool getUnknownTicketKey() const
+  {
+    return d_unknownTicketKey;
+  }
+
+  void setResumedFromInactiveTicketKey()
+  {
+    d_resumedFromInactiveTicketKey = true;
+  }
+
+  bool getResumedFromInactiveTicketKey() const
+  {
+    return d_resumedFromInactiveTicketKey;
+  }
 
 protected:
   int d_socket{-1};
+  bool d_unknownTicketKey{false};
+  bool d_resumedFromInactiveTicketKey{false};
 };
 
 class TLSCtx
@@ -124,7 +149,7 @@ public:
 
   time_t getTicketsKeyRotationDelay() const
   {
-    return d_ticketsKeyRotationDelay;
+    return d_tlsConfig.d_ticketsKeyRotationDelay;
   }
 
   std::string getNextTicketsKeyRotation() const
@@ -138,18 +163,10 @@ public:
     return res;
   }
 
-  std::vector<std::pair<std::string, std::string>> d_certKeyPairs;
-  std::vector<std::string> d_ocspFiles;
+  TLSConfig d_tlsConfig;
+  TLSErrorCounters d_tlsCounters;
   ComboAddress d_addr;
-  std::string d_ciphers;
-  std::string d_ciphers13;
   std::string d_provider;
-  std::string d_ticketKeyFile;
-
-  size_t d_maxStoredSessions{20480};
-  time_t d_ticketsKeyRotationDelay{43200};
-  uint8_t d_numberOfTicketsKeys{5};
-  bool d_enableTickets{true};
 
 private:
   std::shared_ptr<TLSCtx> d_ctx{nullptr};
@@ -219,7 +236,7 @@ public:
           return IOState::NeedRead;
         }
         else {
-          throw std::runtime_error(std::string("Error while reading message: ") + strerror(errno));
+          throw std::runtime_error("Error while reading message: " + stringerror());
         }
       }
 
@@ -255,7 +272,7 @@ public:
           return IOState::NeedWrite;
         }
         else {
-          throw std::runtime_error(std::string("Error while writing message: ") + strerror(errno));
+          throw std::runtime_error("Error while writing message: " + stringerror());
         }
       }
 
@@ -276,12 +293,40 @@ public:
     }
   }
 
-  std::string getServerNameIndication()
+  std::string getServerNameIndication() const
   {
     if (d_conn) {
       return d_conn->getServerNameIndication();
     }
     return std::string();
+  }
+
+  LibsslTLSVersion getTLSVersion() const
+  {
+    if (d_conn) {
+      return d_conn->getTLSVersion();
+    }
+    return LibsslTLSVersion::Unknown;
+  }
+
+  bool isTLS() const
+  {
+    return d_conn != nullptr;
+  }
+
+  bool hasTLSSessionBeenResumed() const
+  {
+    return d_conn && d_conn->hasSessionBeenResumed();
+  }
+
+  bool getResumedFromInactiveTicketKey() const
+  {
+    return d_conn && d_conn->getResumedFromInactiveTicketKey();
+  }
+
+    bool getUnknownTicketKey() const
+  {
+    return d_conn && d_conn->getUnknownTicketKey();
   }
 
 private:

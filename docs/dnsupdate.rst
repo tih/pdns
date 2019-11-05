@@ -16,7 +16,6 @@ support DNS update:
 - :doc:`gmysql <backends/generic-mysql>`
 - :doc:`gpgsql <backends/generic-postgresql>`
 - :doc:`gsqlite3 <backends/generic-sqlite3>`
-- :doc:`goracle <backends/generic-oracle>`
 - :doc:`godbc <backends/generic-odbc>`
 
 .. _dnsupdate-configuration-options:
@@ -237,6 +236,8 @@ These are the settings available for **SOA-EDIT-DNSUPDATE**.
 -  SOA-EDIT-INCREASE: Change the serial to whatever SOA-EDIT would
    provide. If what SOA-EDIT provides is lower than the current serial,
    increase the current serial by 1.
+   Exception: with SOA-EDIT=INCEPTION-EPOCH, the serial is bumped to at
+   least the current EPOCH time.
 
 DNS update How-to: Setup dyndns/rfc2136 with dhcpd
 --------------------------------------------------
@@ -455,7 +456,7 @@ each record at a time and you can approve or reject any or all.
 The object has following methods available:
 
 - ``DNSName getQName()`` - name to update
-- ``DNSName getZonename()`` - zone name
+- ``DNSName getZoneName()`` - zone name
 - ``int getQType()`` - record type, it can be 255(ANY) for delete.
 - ``ComboAddress getLocal()`` - local socket address
 - ``ComboAddress getRemote()`` - remote socket address

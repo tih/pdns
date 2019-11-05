@@ -137,7 +137,7 @@ static void writePid(void)
   string fname=::arg()["socket-dir"];
   if (::arg()["socket-dir"].empty()) {
     if (::arg()["chroot"].empty())
-      fname = LOCALSTATEDIR;
+      fname = std::string(LOCALSTATEDIR) + "/pdns";
     else
       fname = ::arg()["chroot"] + "/";
   } else if (!::arg()["socket-dir"].empty() && !::arg()["chroot"].empty()) {
@@ -149,7 +149,7 @@ static void writePid(void)
   if(of)
     of<<getpid()<<endl;
   else
-    g_log<<Logger::Error<<"Writing pid for "<<getpid()<<" to "<<fname<<" failed: "<<strerror(errno)<<endl;
+    g_log<<Logger::Error<<"Writing pid for "<<getpid()<<" to "<<fname<<" failed: "<<stringerror()<<endl;
 }
 
 int g_fd1[2], g_fd2[2];
@@ -223,7 +223,7 @@ static int guardian(int argc, char **argv)
     setStatus("Launching child");
     
     if(pipe(g_fd1)<0 || pipe(g_fd2)<0) {
-      g_log<<Logger::Critical<<"Unable to open pipe for coprocess: "<<strerror(errno)<<endl;
+      g_log<<Logger::Critical<<"Unable to open pipe for coprocess: "<<stringerror()<<endl;
       exit(1);
     }
 
@@ -268,7 +268,7 @@ static int guardian(int argc, char **argv)
         close(g_fd2[1]);
       }
       if(execvp(argv[0], newargv)<0) {
-        g_log<<Logger::Error<<"Unable to execvp '"<<argv[0]<<"': "<<strerror(errno)<<endl;
+        g_log<<Logger::Error<<"Unable to execvp '"<<argv[0]<<"': "<<stringerror()<<endl;
         char **p=newargv;
         while(*p)
           g_log<<Logger::Error<<*p++<<endl;
@@ -299,7 +299,7 @@ static int guardian(int argc, char **argv)
         int ret=waitpid(pid,&status,WNOHANG);
 
         if(ret<0) {
-          g_log<<Logger::Error<<"In guardian loop, waitpid returned error: "<<strerror(errno)<<endl;
+          g_log<<Logger::Error<<"In guardian loop, waitpid returned error: "<<stringerror()<<endl;
           g_log<<Logger::Error<<"Dying"<<endl;
           exit(1);
         }
@@ -348,7 +348,7 @@ static int guardian(int argc, char **argv)
       g_log<<Logger::Error<<"No clue what happened! Respawning"<<endl;
     }
     else {
-      g_log<<Logger::Error<<"Unable to fork: "<<strerror(errno)<<endl;
+      g_log<<Logger::Error<<"Unable to fork: "<<stringerror()<<endl;
       exit(1);
     }
   }
@@ -488,7 +488,20 @@ int main(int argc, char **argv)
     BackendMakers().launch(::arg()["launch"]); // vrooooom!
 
     if(!::arg().getCommands().empty()) {
-      cerr<<"Fatal: non-option on the command line, perhaps a '--setting=123' statement missed the '='?"<<endl;
+      cerr<<"Fatal: non-option";
+      if (::arg().getCommands().size() > 1) {
+        cerr<<"s";
+      }
+      cerr<<" (";
+      bool first = true;
+      for (auto const c : ::arg().getCommands()) {
+        if (!first) {
+          cerr<<", ";
+        }
+        first = false;
+        cerr<<c;
+      }
+      cerr<<") on the command line, perhaps a '--setting=123' statement missed the '='?"<<endl;
       exit(99);
     }
     
@@ -528,15 +541,15 @@ int main(int argc, char **argv)
 
     if(isGuarded(argv)) {
       g_log<<Logger::Warning<<"This is a guarded instance of pdns"<<endl;
-      dl=new DynListener; // listens on stdin 
+      dl=make_unique<DynListener>(); // listens on stdin 
     }
     else {
       g_log<<Logger::Warning<<"This is a standalone pdns"<<endl; 
       
       if(::arg().mustDo("control-console"))
-        dl=new DynListener();
+        dl=make_unique<DynListener>();
       else
-        dl=new DynListener(s_programname);
+        dl=std::unique_ptr<DynListener>(new DynListener(s_programname));
       
       writePid();
     }
@@ -575,7 +588,7 @@ int main(int argc, char **argv)
       if(gethostname(tmp, sizeof(tmp)-1) == 0) {
         ::arg().set("server-id")=tmp;
       } else {
-        g_log<<Logger::Warning<<"Unable to get the hostname, NSID and id.server values will be empty: "<<strerror(errno)<<endl;
+        g_log<<Logger::Warning<<"Unable to get the hostname, NSID and id.server values will be empty: "<<stringerror()<<endl;
       }
     }
 

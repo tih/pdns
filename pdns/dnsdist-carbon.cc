@@ -91,6 +91,7 @@ try
           boost::replace_all(serverName, ".", "_");
           const string base = namespace_name + "." + hostname + "." + instance_name + ".servers." + serverName + ".";
           str<<base<<"queries" << ' ' << state->queries.load() << " " << now << "\r\n";
+          str<<base<<"responses" << ' ' << state->responses.load() << " " << now << "\r\n";
           str<<base<<"drops" << ' ' << state->reuseds.load() << " " << now << "\r\n";
           str<<base<<"latency" << ' ' << (state->availability != DownstreamState::Availability::Down ? state->latencyUsec/1000.0 : 0) << " " << now << "\r\n";
           str<<base<<"senderrors" << ' ' << state->sendErrors.load() << " " << now << "\r\n";
@@ -120,6 +121,7 @@ try
 
           const string base = namespace_name + "." + hostname + "." + instance_name + ".frontends." + frontName + ".";
           str<<base<<"queries" << ' ' << front->queries.load() << " " << now << "\r\n";
+          str<<base<<"responses" << ' ' << front->responses.load() << " " << now << "\r\n";
           str<<base<<"tcpdiedreadingquery" << ' '<< front->tcpDiedReadingQuery.load() << " " << now << "\r\n";
           str<<base<<"tcpdiedsendingresponse" << ' '<< front->tcpDiedSendingResponse.load() << " " << now << "\r\n";
           str<<base<<"tcpgaveup" << ' '<< front->tcpGaveUp.load() << " " << now << "\r\n";
@@ -128,6 +130,32 @@ try
           str<<base<<"tcpcurrentconnections" << ' '<< front->tcpCurrentConnections.load() << " " << now << "\r\n";
           str<<base<<"tcpavgqueriesperconnection" << ' '<< front->tcpAvgQueriesPerConnection.load() << " " << now << "\r\n";
           str<<base<<"tcpavgconnectionduration" << ' '<< front->tcpAvgConnectionDuration.load() << " " << now << "\r\n";
+          str<<base<<"tls10-queries" << ' ' << front->tls10queries.load() << " " << now << "\r\n";
+          str<<base<<"tls11-queries" << ' ' << front->tls11queries.load() << " " << now << "\r\n";
+          str<<base<<"tls12-queries" << ' ' << front->tls12queries.load() << " " << now << "\r\n";
+          str<<base<<"tls13-queries" << ' ' << front->tls13queries.load() << " " << now << "\r\n";
+          str<<base<<"tls-unknown-queries" << ' ' << front->tlsUnknownqueries.load() << " " << now << "\r\n";
+          str<<base<<"tlsnewsessions" << ' ' << front->tlsNewSessions.load() << " " << now << "\r\n";
+          str<<base<<"tlsresumptions" << ' ' << front->tlsResumptions.load() << " " << now << "\r\n";
+          str<<base<<"tlsunknownticketkeys" << ' ' << front->tlsUnknownTicketKey.load() << " " << now << "\r\n";
+          str<<base<<"tlsinactiveticketkeys" << ' ' << front->tlsInactiveTicketKey.load() << " " << now << "\r\n";
+          const TLSErrorCounters* errorCounters = nullptr;
+          if (front->tlsFrontend != nullptr) {
+            errorCounters = &front->tlsFrontend->d_tlsCounters;
+          }
+          else if (front->dohFrontend != nullptr) {
+            errorCounters = &front->dohFrontend->d_tlsCounters;
+          }
+          if (errorCounters != nullptr) {
+            str<<base<<"tlsdhkeytoosmall" << ' ' << errorCounters->d_dhKeyTooSmall << " " << now << "\r\n";
+            str<<base<<"tlsinappropriatefallback" << ' ' << errorCounters->d_inappropriateFallBack << " " << now << "\r\n";
+            str<<base<<"tlsnosharedcipher" << ' ' << errorCounters->d_noSharedCipher << " " << now << "\r\n";
+            str<<base<<"tlsunknownciphertype" << ' ' << errorCounters->d_unknownCipherType << " " << now << "\r\n";
+            str<<base<<"tlsunknownkeyexchangetype" << ' ' << errorCounters->d_unknownKeyExchangeType << " " << now << "\r\n";
+            str<<base<<"tlsunknownprotocol" << ' ' << errorCounters->d_unknownProtocol << " " << now << "\r\n";
+            str<<base<<"tlsunsupportedec" << ' ' << errorCounters->d_unsupportedEC << " " << now << "\r\n";
+            str<<base<<"tlsunsupportedprotocol" << ' ' << errorCounters->d_unsupportedProtocol << " " << now << "\r\n";
+          }
         }
 
         auto localPools = g_pools.getLocal();
@@ -188,11 +216,6 @@ try
               {"http2-502-responses", doh->d_http2Stats.d_nb502Responses},
               {"http1-other-responses", doh->d_http1Stats.d_nbOtherResponses},
               {"http2-other-responses", doh->d_http2Stats.d_nbOtherResponses},
-              {"tls10-queries", doh->d_tls10queries},
-              {"tls11-queries", doh->d_tls11queries},
-              {"tls12-queries", doh->d_tls12queries},
-              {"tls13-queries", doh->d_tls13queries},
-              {"tls-unknown-queries", doh->d_tlsUnknownqueries},
               {"get-queries", doh->d_getqueries},
               {"post-queries", doh->d_postqueries},
               {"bad-requests", doh->d_badrequests},
@@ -223,7 +246,7 @@ try
 
         int ret = waitForRWData(s.getHandle(), false, 1 , 0);
         if(ret <= 0 ) {
-          vinfolog("Unable to write data to carbon server on %s: %s", server.toStringWithPort(), (ret<0 ? strerror(errno) : "Timeout"));
+          vinfolog("Unable to write data to carbon server on %s: %s", server.toStringWithPort(), (ret<0 ? stringerror() : "Timeout"));
           continue;
         }
         s.setBlocking();

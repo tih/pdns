@@ -163,10 +163,9 @@ public:
     d_lastget=d_last;
   }
 
-  DecayingEwma(const DecayingEwma& orig) : d_last(orig.d_last),  d_lastget(orig.d_lastget), d_val(orig.d_val), d_needinit(orig.d_needinit)
-  {
-  }
-
+  DecayingEwma(const DecayingEwma& orig) = delete;
+  DecayingEwma & operator=(const DecayingEwma& orig) = delete;
+  
   void submit(int val, const struct timeval* tv)
   {
     struct timeval now=*tv;
@@ -181,21 +180,21 @@ public:
       float diff= makeFloat(d_last - now);
 
       d_last=now;
-      double factor=exp(diff)/2.0; // might be '0.5', or 0.0001
-      d_val=(float)((1-factor)*val+ (float)factor*d_val);
+      float factor=expf(diff)/2.0f; // might be '0.5', or 0.0001
+      d_val=(1-factor)*val + factor*d_val;
     }
   }
 
-  double get(const struct timeval* tv)
+  float get(const struct timeval* tv)
   {
     struct timeval now=*tv;
     float diff=makeFloat(d_lastget-now);
     d_lastget=now;
-    float factor=exp(diff/60.0f); // is 1.0 or less
+    float factor=expf(diff/60.0f); // is 1.0 or less
     return d_val*=factor;
   }
 
-  double peek(void) const
+  float peek(void) const
   {
     return d_val;
   }
@@ -753,6 +752,7 @@ public:
   static bool s_rootNXTrust;
   static bool s_nopacketcache;
   static bool s_qnameminimization;
+  static bool s_hardenNXD;
 
   std::unordered_map<std::string,bool> d_discardedPolicies;
   DNSFilterEngine::Policy d_appliedPolicy;
@@ -1013,7 +1013,9 @@ public:
   enum stateenum {BYTE0, BYTE1, GETQUESTION, DONE} state{BYTE0};
   uint16_t qlen{0};
   uint16_t bytesread{0};
-
+  uint16_t d_requestsInFlight{0}; // number of mthreads spawned for this connection
+  // The max number of concurrent TCP requests we're willing to process
+  static uint16_t s_maxInFlight;
   static unsigned int getCurrentConnections() { return s_currentConnections; }
 private:
   const int d_fd;
@@ -1052,6 +1054,7 @@ void broadcastFunction(const pipefunc_t& func);
 void distributeAsyncFunction(const std::string& question, const pipefunc_t& func);
 
 int directResolve(const DNSName& qname, const QType& qtype, int qclass, vector<DNSRecord>& ret);
+int followCNAMERecords(std::vector<DNSRecord>& ret, const QType& qtype);
 
 template<class T> T broadcastAccFunction(const boost::function<T*()>& func);
 
@@ -1070,6 +1073,7 @@ uint64_t* pleaseWipePacketCache(const DNSName& canon, bool subtree);
 uint64_t* pleaseWipeAndCountNegCache(const DNSName& canon, bool subtree=false);
 void doCarbonDump(void*);
 void primeHints(void);
+void primeRootNSZones(bool);
 
 extern __thread struct timeval g_now;
 

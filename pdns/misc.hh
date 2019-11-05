@@ -20,7 +20,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #pragma once
-#include <errno.h>
 #include <inttypes.h>
 #include <cstring>
 #include <cstdio>
@@ -157,8 +156,8 @@ const string toLower(const string &upper);
 const string toLowerCanonic(const string &upper);
 bool IpToU32(const string &str, uint32_t *ip);
 string U32ToIP(uint32_t);
+string stringerror(int);
 string stringerror();
-string netstringerror();
 string itoa(int i);
 string uitoa(unsigned int i);
 string bitFlip(const string &str);
@@ -192,7 +191,8 @@ class DTime
 {
 public:
   DTime(); //!< Does not set the timer for you! Saves lots of gettimeofday() calls
-  DTime(const DTime &dt);
+  DTime(const DTime &dt) = default;
+  DTime & operator=(const DTime &dt) = default;
   time_t time();
   inline void set();  //!< Reset the timer
   inline int udiff(); //!< Return the number of microseconds since the timer was last set.
@@ -283,7 +283,7 @@ inline double getTime()
 
 inline void unixDie(const string &why)
 {
-  throw runtime_error(why+": "+strerror(errno));
+  throw runtime_error(why+": "+stringerror());
 }
 
 string makeHexDump(const string& str);

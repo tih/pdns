@@ -90,6 +90,7 @@ void loadMainConfig(const std::string& configdir)
   ::arg().set("max-nsec3-iterations","Limit the number of NSEC3 hash iterations")="500"; // RFC5155 10.3
   ::arg().set("max-signature-cache-entries", "Maximum number of signatures cache entries")="";
   ::arg().set("rng", "Specify random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
+  ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
   ::arg().laxFile(configname.c_str());
 
   if(!::arg()["load-modules"].empty()) {
@@ -126,7 +127,7 @@ void loadMainConfig(const std::string& configdir)
 
   // Keep this line below all ::arg().set() statements
   if (! ::arg().laxFile(configname.c_str()))
-    cerr<<"Warning: unable to read configuration file '"<<configname<<"': "<<strerror(errno)<<endl;
+    cerr<<"Warning: unable to read configuration file '"<<configname<<"': "<<stringerror()<<endl;
 
 #ifdef HAVE_LIBSODIUM
   if (sodium_init() == -1) {
@@ -193,11 +194,11 @@ void dbBench(const std::string& fname)
   unsigned int hits=0, misses=0;
   for(; n < 10000; ++n) {
     DNSName domain(domains[dns_random(domains.size())]);
-    B.lookup(QType(QType::NS), domain);
+    B.lookup(QType(QType::NS), domain, -1);
     while(B.get(rr)) {
       hits++;
     }
-    B.lookup(QType(QType::A), DNSName(std::to_string(random()))+domain);
+    B.lookup(QType(QType::A), DNSName(std::to_string(random()))+domain, -1);
     while(B.get(rr)) {
     }
     misses++;
@@ -299,7 +300,7 @@ int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, const vect
     if(B.getSOAUncached(parent, sd_p)) {
       bool ns=false;
       DNSZoneRecord zr;
-      B.lookup(QType(QType::ANY), zone, NULL, sd_p.domain_id);
+      B.lookup(QType(QType::ANY), zone, sd_p.domain_id);
       while(B.get(zr))
         ns |= (zr.dr.d_type == QType::NS);
       if (!ns) {
@@ -391,12 +392,16 @@ int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, const vect
 
     content.str("");
     content<<rr.qname<<" "<<rr.qtype.getName()<<" "<<rr.content;
-    if (recordcontents.count(toLower(content.str()))) {
+    string contentstr = content.str();
+    if (rr.qtype.getCode() != QType::TXT) {
+      contentstr=toLower(contentstr);
+    }
+    if (recordcontents.count(contentstr)) {
       cout<<"[Error] Duplicate record found in rrset: '"<<rr.qname<<" IN "<<rr.qtype.getName()<<" "<<rr.content<<"'"<<endl;
       numerrors++;
       continue;
     } else
-      recordcontents.insert(toLower(content.str()));
+      recordcontents.insert(contentstr);
 
     content.str("");
     content<<rr.qname<<" "<<rr.qtype.getName();
@@ -917,6 +922,7 @@ int editZone(const DNSName &zone) {
   }
   cmdline.clear();
   ZoneParserTNG zpt(tmpnam, g_rootdnsname);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
   DNSResourceRecord zrr;
   map<pair<DNSName,uint16_t>, vector<DNSRecord> > grouped;
   try {
@@ -977,12 +983,52 @@ int editZone(const DNSName &zone) {
     str<<"\033[0;32m+"<< d.d_name <<" "<<d.d_ttl<<" IN "<<DNSRecordContent::NumberToType(d.d_type)<<" "<<d.d_content->getZoneRepresentation(true)<<"\033[0m"<<endl;
     changed[{d.d_name,d.d_type}]+=str.str();
   }
-  if (changed.size() > 0)
-    cout<<"Detected the following changes:"<<endl;
+  cout<<"Detected the following changes:"<<endl;
   for(const auto& c : changed) {
     cout<<c.second;
   }
- reAsk2:;
+  if (changed.size() > 0) {
+    if (changed.find({zone, QType::SOA}) == changed.end()) {
+      cout<<endl<<"You have not updated the SOA record! Would you like to increase-serial?"<<endl;
+      cout<<"(y)es - increase serial, (n)o - leave SOA record as is, (e)dit your changes, (q)uit:"<<endl;
+      int c = read1char();
+      switch(c) {
+        case 'y':
+          {
+            DNSRecord oldSoaDR = grouped[{zone, QType::SOA}].at(0); // there should be only one SOA record, so we can use .at(0);
+            ostringstream str;
+            str<<"\033[0;31m-"<< oldSoaDR.d_name <<" "<<oldSoaDR.d_ttl<<" IN "<<DNSRecordContent::NumberToType(oldSoaDR.d_type)<<" "<<oldSoaDR.d_content->getZoneRepresentation(true)<<"\033[0m"<<endl;
+
+            SOAData sd;
+            B.getSOAUncached(zone, sd);
+            // TODO: do we need to check for presigned? here or maybe even all the way before edit-zone starts?
+
+            string soaEditKind;
+            dk.getSoaEdit(zone, soaEditKind);
+
+            DNSResourceRecord rr;
+            makeIncreasedSOARecord(sd, "SOA-EDIT-INCREASE", soaEditKind, rr);
+            DNSRecord dr(rr);
+            str<<"\033[0;32m+"<< dr.d_name <<" "<<dr.d_ttl<<" IN "<<DNSRecordContent::NumberToType(dr.d_type)<<" "<<dr.d_content->getZoneRepresentation(true)<<"\033[0m"<<endl;
+
+            changed[{dr.d_name, dr.d_type}]+=str.str();
+            grouped[{dr.d_name, dr.d_type}].at(0) = dr;
+          }
+        break;
+        case 'q':
+          return EXIT_FAILURE;
+          break;
+        case 'e':
+          goto editAgain;
+          break;
+        case 'n':
+        default:
+          goto reAsk2;
+          break;
+      }
+    }
+  }
+  reAsk2:;
   if(changed.empty()) {
     cout<<endl<<"No changes to apply."<<endl;
     return(EXIT_SUCCESS);
@@ -1048,6 +1094,7 @@ int loadZone(DNSName zone, const string& fname) {
   }
   DNSBackend* db = di.backend;
   ZoneParserTNG zpt(fname, zone);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
 
   DNSResourceRecord rr;
   if(!db->startTransaction(zone, di.id)) {
@@ -1192,7 +1239,7 @@ int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
   di.backend->startTransaction(zone, -1);
 
   if(addOrReplace) { // the 'add' case
-    di.backend->lookup(rr.qtype, rr.qname, 0, di.id);
+    di.backend->lookup(rr.qtype, rr.qname, di.id);
 
     while(di.backend->get(oldrr))
       newrrs.push_back(oldrr);
@@ -1209,7 +1256,7 @@ int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
     }
   }
 
-  di.backend->lookup(QType(QType::ANY), rr.qname, 0, di.id);
+  di.backend->lookup(QType(QType::ANY), rr.qname, di.id);
   bool found=false;
   if(rr.qtype.getCode() == QType::CNAME) { // this will save us SO many questions
 
@@ -1245,7 +1292,7 @@ int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
 
   di.backend->replaceRRSet(di.id, name, rr.qtype, newrrs);
   // need to be explicit to bypass the ueberbackend cache!
-  di.backend->lookup(rr.qtype, name, 0, di.id);
+  di.backend->lookup(rr.qtype, name, di.id);
   di.backend->commitTransaction();
   cout<<"New rrset:"<<endl;
   while(di.backend->get(rr)) {
@@ -1376,6 +1423,7 @@ void testSpeed(DNSSECKeeper& dk, const DNSName& zone, const string& remote, int 
 void verifyCrypto(const string& zone)
 {
   ZoneParserTNG zpt(zone);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
   DNSResourceRecord rr;
   DNSKEYRecordContent drc;
   RRSIGRecordContent rrc;
@@ -1571,9 +1619,8 @@ bool showZone(DNSSECKeeper& dk, const DNSName& zone, bool exportDS = false)
     vector<DNSKEYRecordContent> keys;
     DNSZoneRecord zr;
 
-    B.lookup(QType(QType::DNSKEY), zone);
-    while(B.get(zr)) {
-      if (zr.dr.d_type != QType::DNSKEY) continue;
+    di.backend->lookup(QType(QType::DNSKEY), zone, di.id );
+    while(di.backend->get(zr)) {
       keys.push_back(*getRR<DNSKEYRecordContent>(zr.dr));
     }
 
@@ -1609,16 +1656,16 @@ bool showZone(DNSSECKeeper& dk, const DNSName& zone, bool exportDS = false)
       }
 
       const std::string prefix(exportDS ? "" : "DS = ");
-      cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA1).getZoneRepresentation() << " ; ( SHA1 digest )" << endl;
-      cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA256).getZoneRepresentation() << " ; ( SHA256 digest )" << endl;
+      cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA1).getZoneRepresentation() << " ; ( SHA1 digest )" << endl;
+      cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA256).getZoneRepresentation() << " ; ( SHA256 digest )" << endl;
       try {
-        string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::GOST).getZoneRepresentation();
+        string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_GOST).getZoneRepresentation();
         cout<<prefix<<zone.toString()<<" IN DS "<<output<< " ; ( GOST R 34.11-94 digest )" << endl;
       }
       catch(...)
       {}
       try {
-        string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA384).getZoneRepresentation();
+        string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA384).getZoneRepresentation();
         cout<<prefix<<zone.toString()<<" IN DS "<<output<< " ; ( SHA-384 digest )" << endl;
       }
       catch(...)
@@ -1660,16 +1707,16 @@ bool showZone(DNSSECKeeper& dk, const DNSName& zone, bool exportDS = false)
       if (value.second.keyType == DNSSECKeeper::KSK || value.second.keyType == DNSSECKeeper::CSK) {
         const auto &key = value.first.getDNSKEY();
         const std::string prefix(exportDS ? "" : "DS = ");
-        cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA1).getZoneRepresentation() << " ; ( SHA1 digest )" << endl;
-        cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA256).getZoneRepresentation() << " ; ( SHA256 digest )" << endl;
+        cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA1).getZoneRepresentation() << " ; ( SHA1 digest )" << endl;
+        cout<<prefix<<zone.toString()<<" IN DS "<<makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA256).getZoneRepresentation() << " ; ( SHA256 digest )" << endl;
         try {
-          string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::GOST).getZoneRepresentation();
+          string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_GOST).getZoneRepresentation();
           cout<<prefix<<zone.toString()<<" IN DS "<<output<< " ; ( GOST R 34.11-94 digest )" << endl;
         }
         catch(...)
         {}
         try {
-          string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::SHA384).getZoneRepresentation();
+          string output=makeDSFromDNSKey(zone, key, DNSSECKeeper::DIGEST_SHA384).getZoneRepresentation();
           cout<<prefix<<zone.toString()<<" IN DS "<<output<< " ; ( SHA-384 digest )" << endl;
         }
         catch(...)
@@ -1811,7 +1858,7 @@ void testSchema(DNSSECKeeper& dk, const DNSName& zone)
   cout<<"Committing"<<endl;
   db->commitTransaction();
   cout<<"Querying TXT"<<endl;
-  db->lookup(QType(QType::TXT), zone, NULL, di.id);
+  db->lookup(QType(QType::TXT), zone, di.id);
   if(db->get(rrget))
   {
     DNSResourceRecord rrthrowaway;
@@ -1960,7 +2007,7 @@ try
     cout<<"add-record ZONE NAME TYPE [ttl] content"<<endl;
     cout<<"             [content..]           Add one or more records to ZONE"<<endl;
     cout<<"add-zone-key ZONE {zsk|ksk} [BITS] [active|inactive]"<<endl;
-    cout<<"             [rsasha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
+    cout<<"             [rsasha1|rsasha1-nsec3-sha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
 #if defined(HAVE_LIBSODIUM) || defined(HAVE_LIBDECAF)
     cout<<"|ed25519";
 #endif
@@ -2274,7 +2321,7 @@ try
   }
   else if(cmds[0] == "add-zone-key") {
     if(cmds.size() < 3 ) {
-      cerr << "Syntax: pdnsutil add-zone-key ZONE zsk|ksk [BITS] [active|inactive] [rsasha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
+      cerr << "Syntax: pdnsutil add-zone-key ZONE zsk|ksk [BITS] [active|inactive] [rsasha1|rsasha1-nsec3-sha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
 #if defined(HAVE_LIBSODIUM) || defined(HAVE_LIBDECAF)
       cerr << "|ed25519";
 #endif
@@ -2793,7 +2840,7 @@ try
   }
   else if(cmds[0] == "generate-zone-key") {
     if(cmds.size() < 2 ) {
-      cerr << "Syntax: pdnsutil generate-zone-key zsk|ksk [rsasha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
+      cerr << "Syntax: pdnsutil generate-zone-key zsk|ksk [rsasha1|rsasha1-nsec3-sha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
 #if defined(HAVE_LIBSODIUM) || defined(HAVE_LIBDECAF)
       cerr << "|ed25519";
 #endif

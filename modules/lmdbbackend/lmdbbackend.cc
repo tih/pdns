@@ -540,24 +540,20 @@ bool LMDBBackend::list(const DNSName &target, int id, bool include_disabled)
   return true;
 }
 
-void LMDBBackend::lookup(const QType &type, const DNSName &qdomain, DNSPacket *p, int zoneId)
+void LMDBBackend::lookup(const QType &type, const DNSName &qdomain, int zoneId, DNSPacket *p)
 {
   if(d_dolog) {
     g_log << Logger::Warning << "Got lookup for "<<qdomain<<"|"<<type.getName()<<" in zone "<< zoneId<<endl;
     d_dtime.set();
   }
   DNSName hunt(qdomain);
+  DomainInfo di;
   if(zoneId < 0) {
     auto rotxn = d_tdomains->getROTransaction();
     
-    for(;;) {
-      DomainInfo di;
-      if((zoneId = rotxn.get<0>(hunt, di))) {
-        break;
-      }
-      if(!hunt.chopOff())
-        break;
-    }
+    do {
+      zoneId = rotxn.get<0>(hunt, di);
+    } while (!zoneId && type != QType::SOA && hunt.chopOff());
     if(zoneId <= 0) {
       //      cout << "Did not find zone for "<< qdomain<<endl;
       d_getcursor.reset();
@@ -565,7 +561,6 @@ void LMDBBackend::lookup(const QType &type, const DNSName &qdomain, DNSPacket *p
     }
   }
   else {
-    DomainInfo di;
     if(!d_tdomains->getROTransaction().get(zoneId, di)) {
       // cout<<"Could not find a zone with id "<<zoneId<<endl;
       d_getcursor.reset();
@@ -640,7 +635,7 @@ bool LMDBBackend::get(DNSResourceRecord& rr)
 bool LMDBBackend::getSOA(const DNSName &domain, SOAData &sd)
 {
   //  cout <<"Native getSOA called"<<endl;
-  lookup(QType(QType::SOA), domain, 0, -1);
+  lookup(QType(QType::SOA), domain, -1);
   DNSZoneRecord dzr;
   bool found=false;
   while(get(dzr)) {
@@ -871,8 +866,8 @@ void LMDBBackend::getAllDomains(vector<DomainInfo> *domains, bool include_disabl
     DomainInfo di=*iter;
     di.id = iter.getID();
 
-    auto txn = getRecordsROTransaction(iter.getID());
-    if(!txn->txn.get(txn->db->dbi, co(di.id, g_rootdnsname, QType::SOA), val)) {
+    auto txn2 = getRecordsROTransaction(iter.getID());
+    if(!txn2->txn.get(txn2->db->dbi, co(di.id, g_rootdnsname, QType::SOA), val)) {
       DNSResourceRecord rr;
       serFromString(val.get<string_view>(), rr);
 
@@ -905,15 +900,8 @@ void LMDBBackend::getUnfreshSlaveInfos(vector<DomainInfo>* domains)
     if(!txn2->txn.get(txn2->db->dbi, co(iter.getID(), g_rootdnsname, QType::SOA), val)) {
       DNSResourceRecord rr;
       serFromString(val.get<string_view>(), rr);
-      struct soatimes 
-      {
-        uint32_t serial;
-        uint32_t refresh;
-        uint32_t retry;
-        uint32_t expire;
-        uint32_t minimum;
-      } st;
-
+      struct soatimes st;
+ 
       memcpy(&st, &rr.content[rr.content.size()-sizeof(soatimes)], sizeof(soatimes));
 
       if((time_t)(iter->last_check + ntohl(st.refresh)) >= now) { // still fresh
@@ -1010,9 +998,9 @@ bool LMDBBackend::activateDomainKey(const DNSName& name, unsigned int id)
   KeyDataDB kdb;
   if(txn.get(id, kdb)) {
     if(kdb.domain == name) {
-      txn.modify(id, [](KeyDataDB& kdb)
+      txn.modify(id, [](KeyDataDB& kdbarg)
                  {
-                   kdb.active = true;
+                   kdbarg.active = true;
                  });
       txn.commit();
       return true;
@@ -1029,9 +1017,9 @@ bool LMDBBackend::deactivateDomainKey(const DNSName& name, unsigned int id)
   KeyDataDB kdb;
   if(txn.get(id, kdb)) {
     if(kdb.domain == name) {
-      txn.modify(id, [](KeyDataDB& kdb)
+      txn.modify(id, [](KeyDataDB& kdbarg)
                  {
-                   kdb.active = false;
+                   kdbarg.active = false;
                  });
       txn.commit();
       return true;

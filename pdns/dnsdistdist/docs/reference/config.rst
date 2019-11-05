@@ -103,11 +103,12 @@ Listen Sockets
                                   higher than 0 to enable TCP Fast Open when available.
                                   Default is 0.
 
-.. function:: addDOHLocal(address, certFile(s), keyFile(s) [, urls [, options]])
+.. function:: addDOHLocal(address, [certFile(s) [, keyFile(s) [, urls [, options]]]])
 
   .. versionadded:: 1.4.0
 
   Listen on the specified address and TCP port for incoming DNS over HTTPS connections, presenting the specified X.509 certificate.
+  If no certificate (or key) files are specified, listen for incoming DNS over HTTP connections instead.
 
   :param str address: The IP Address with an optional port to listen on.
                       The default port is 443.
@@ -128,6 +129,14 @@ Listen Sockets
   * ``serverTokens``: str - The content of the Server: HTTP header returned by dnsdist. The default is "h2o/dnsdist".
   * ``customResponseHeaders={}``: table - Set custom HTTP header(s) returned by dnsdist.
   * ``ocspResponses``: list - List of files containing OCSP responses, in the same order than the certificates and keys, that will be used to provide OCSP stapling responses.
+  * ``minTLSVersion``: str - Minimum version of the TLS protocol to support. Possible values are 'tls1.0', 'tls1.1', 'tls1.2' and 'tls1.3'. Default is to require at least TLS 1.0.
+  * ``numberOfTicketsKeys``: int - The maximum number of tickets keys to keep in memory at the same time. Only one key is marked as active and used to encrypt new tickets while the remaining ones can still be used to decrypt existing tickets after a rotation. Default to 5.
+  * ``ticketKeyFile``: str - The path to a file from where TLS tickets keys should be loaded, to support RFC 5077. These keys should be rotated often and never written to persistent storage to preserve forward secrecy. The default is to generate a random key. dnsdist supports several tickets keys to be able to decrypt existing sessions after the rotation.
+  * ``ticketsKeysRotationDelay``: int - Set the delay before the TLS tickets key is rotated, in seconds. Default is 43200 (12h).
+  * ``sessionTickets``: bool - Whether session resumption via session tickets is enabled. Default is true, meaning tickets are enabled.
+  * ``numberOfStoredSessions``: int - The maximum number of sessions kept in memory at the same time. Default is 20480. Setting this value to 0 disables stored session entirely.
+  * ``preferServerCiphers``: bool - Whether to prefer the order of ciphers set by the server instead of the one set by the client. Default is false, meaning that the order of the client is used.
+  * ``keyLogFile``: str - Write the TLS keys in the specified file so that an external program can decrypt TLS exchanges, in the format described in https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format.
 
 .. function:: addTLSLocal(address, certFile(s), keyFile(s) [, options])
 
@@ -138,7 +147,7 @@ Listen Sockets
   .. versionchanged:: 1.3.3
     ``numberOfStoredSessions`` option added.
   .. versionchanged:: 1.4.0
-    ``ciphersTLS13`` and ``ocspResponses`` options added.
+    ``ciphersTLS13``, ``minTLSVersion``, ``ocspResponses``, ``preferServerCiphers``, ``keyLogFile`` options added.
 
   Listen on the specified address and TCP port for incoming DNS over TLS connections, presenting the specified X.509 certificate.
 
@@ -163,6 +172,9 @@ Listen Sockets
   * ``sessionTickets``: bool - Whether session resumption via session tickets is enabled. Default is true, meaning tickets are enabled.
   * ``numberOfStoredSessions``: int - The maximum number of sessions kept in memory at the same time. At this time this is only supported by the OpenSSL provider, as stored sessions are not supported with the GnuTLS one. Default is 20480. Setting this value to 0 disables stored session entirely.
   * ``ocspResponses``: list - List of files containing OCSP responses, in the same order than the certificates and keys, that will be used to provide OCSP stapling responses.
+  * ``minTLSVersion``: str - Minimum version of the TLS protocol to support. Possible values are 'tls1.0', 'tls1.1', 'tls1.2' and 'tls1.3'. Default is to require at least TLS 1.0. Note that this value is ignored when the GnuTLS provider is in use, and the ``ciphers`` option should be set accordingly instead. For example, 'NORMAL:!VERS-TLS1.0:!VERS-TLS1.1' will disable TLS 1.0 and 1.1.
+  * ``preferServerCiphers``: bool - Whether to prefer the order of ciphers set by the server instead of the one set by the client. Default is false, meaning that the order of the client is used.
+  * ``keyLogFile``: str - Write the TLS keys in the specified file so that an external program can decrypt TLS exchanges, in the format described in https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format.
 
 .. function:: setLocal(address[, options])
 
@@ -829,6 +841,12 @@ Status, Statistics and More
 
   Print the list of all availables DNS over TLS contexts.
 
+.. function:: showTLSErrorCounters()
+
+  .. versionadded:: 1.4.0
+
+  Display metrics about TLS handshake failures.
+
 .. function:: showVersion()
 
   Print the version of dnsdist
@@ -1041,6 +1059,14 @@ faster than the existing rules.
 
     Walk the in-memory query and response ring buffers and apply the configured rate-limiting rules, adding dynamic blocks when the limits have been exceeded.
 
+  .. method:: DynBlockRulesGroup:setQuiet(quiet)
+
+    .. versionadded:: 1.4.0
+
+    Set whether newly blocked clients or domains should be logged.
+
+    :param bool quiet: True means that insertions will not be logged, false that they will. Default is false.
+
   .. method:: DynBlockRulesGroup:excludeRange(netmasks)
 
     .. versionadded:: 1.3.1
@@ -1081,6 +1107,7 @@ If you are looking for exact name matching, your might want to consider using a 
   Represent a set of DNS suffixes for quick matching.
 
   .. method:: SuffixMatchNode:add(name)
+
     .. versionchanged:: 1.4.0
       This method now accepts strings, lists of DNSNames and lists of strings.
 
@@ -1116,6 +1143,20 @@ Other functions
 
   Hashes the password to generate a 16-byte key that can be used to pseudonymize IP addresses with IP cipher.
 
+.. function:: generateOCSPResponse(pathToServerCertificate, pathToCACertificate, pathToCAPrivateKey, outputFile, numberOfDaysOfValidity, numberOfMinutesOfValidity)
+
+  .. versionadded:: 1.4.0
+
+  When a local PKI is used to issue the certificate, or for testing purposes, :func:`generateOCSPResponse` can be used to generate an OCSP response file for a certificate, using the certificate and private key of the certification authority that signed that certificate.
+  The resulting file can be directly used with the :func:`addDOHLocal` or the :func:`addTLSLocal` functions.
+
+  :param string pathToServerCertificate: Path to a file containing the certificate used by the server.
+  :param string pathToCACertificate: Path to a file containing the certificate of the certification authority that was used to sign the server certificate.
+  :param string pathToCAPrivateKey: Path to a file containing the private key corresponding to the certification authority certificate.
+  :param string outputFile: Path to a file where the resulting OCSP response will be written to.
+  :param int numberOfDaysOfValidity: Number of days this OCSP response should be valid.
+  :param int numberOfMinutesOfValidity: Number of minutes this OCSP response should be valid, in addition to the number of days.
+
 DOHFrontend
 ~~~~~~~~~~~
 
@@ -1125,9 +1166,38 @@ DOHFrontend
 
   This object represents an address and port dnsdist is listening on for DNS over HTTPS queries.
 
+  .. method:: DOHFrontend:loadTicketsKeys(ticketsKeysFile)
+
+     Load new tickets keys from the selected file, replacing the existing ones. These keys should be rotated often and never written to persistent storage to preserve forward secrecy. The default is to generate a random key. dnsdist supports several tickets keys to be able to decrypt existing sessions after the rotation.
+
+    :param str ticketsKeysFile: The path to a file from where TLS tickets keys should be loaded.
+
   .. method:: DOHFrontend:reloadCertificates()
 
      Reload the current TLS certificate and key pairs.
+
+  .. method:: DOHFrontend:rotateTicketsKey()
+
+     Replace the current TLS tickets key by a new random one.
+
+  .. method:: DOHFrontend:setResponsesMap(rules)
+
+     Set a list of HTTP response rules allowing to intercept HTTP queries very early, before the DNS payload has been processed, and send custom responses including error pages, redirects and static content.
+
+     :param list of DOHResponseMapEntry objects rules: A list of DOHResponseMapEntry objects, obtained with :func:`newDOHResponseMapEntry`.
+
+
+.. function:: newDOHResponseMapEntry(regex, status, content [, headers]) -> DOHResponseMapEntry
+
+  .. versionadded:: 1.4.0
+
+  Return a DOHResponseMapEntry that can be used with :meth:`DOHFrontend.setResponsesMap`. Every query whose path matches the regular expression supplied in ``regex`` will be immediately answered with a HTTP response.
+  The status of the HTTP response will be the one supplied by ``status``, and the content set to the one supplied by ``content``, except if the status is a redirection (3xx) in which case the content is expected to be the URL to redirect to.
+
+  :param str regex: A regular expression to match the path against.
+  :param int status: The HTTP code to answer with.
+  :param str content: The content of the HTTP response, or a URL if the status is a redirection (3xx).
+  :param table of headers: The custom headers to set for the HTTP response, if any. The default is to use the value of the ``customResponseHeaders`` parameter passed to :func:`addDOHLocal`.
 
 TLSContext
 ~~~~~~~~~~

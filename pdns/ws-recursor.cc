@@ -30,6 +30,7 @@
 #include <iostream>
 #include "iputils.hh"
 #include "rec_channel.hh"
+#include "rec_metrics.hh"
 #include "arguments.hh"
 #include "misc.hh"
 #include "syncres.hh"
@@ -420,6 +421,50 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp) {
   resp->setBody(ret);
 }
 
+
+static void prometheusMetrics(HttpRequest *req, HttpResponse *resp) {
+    static MetricDefinitionStorage s_metricDefinitions;
+
+    if (req->method != "GET")
+        throw HttpMethodNotAllowedException();
+
+    registerAllStats();
+
+
+    std::ostringstream output;
+    typedef map <string, string> varmap_t;
+    varmap_t varmap = getAllStatsMap(
+            StatComponent::API); // Argument controls blacklisting of any stats. So stats-api-blacklist will be used to block returned stats.
+    for (const auto &tup :  varmap) {
+        std::string metricName = tup.first;
+
+        // Prometheus suggest using '_' instead of '-'
+        std::string prometheusMetricName = "pdns_recursor_" + boost::replace_all_copy(metricName, "-", "_");
+
+        MetricDefinition metricDetails;
+
+        if (s_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
+          std::string prometheusTypeName = s_metricDefinitions.getPrometheusStringMetricType(
+                  metricDetails.prometheusType);
+
+          if (prometheusTypeName.empty()) {
+            continue;
+          }
+
+          // for these we have the help and types encoded in the sources:
+          output << "# HELP " << prometheusMetricName << " " << metricDetails.description << "\n";
+          output << "# TYPE " << prometheusMetricName << " " << prometheusTypeName << "\n";
+        }
+        output << prometheusMetricName << " " << tup.second << "\n";
+    }
+
+    resp->body = output.str();
+    resp->headers["Content-Type"] = "text/plain";
+    resp->status = 200;
+
+}
+
+
 #include "htmlfiles.h"
 
 static void serveStuff(HttpRequest* req, HttpResponse* resp)
@@ -455,7 +500,7 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
 {
   registerAllStats();
 
-  d_ws = new AsyncWebServer(fdm, arg()["webserver-address"], arg().asNum("webserver-port"));
+  d_ws = std::unique_ptr<AsyncWebServer>(new AsyncWebServer(fdm, arg()["webserver-address"], arg().asNum("webserver-port")));
   d_ws->setApiKey(arg()["api-key"]);
   d_ws->setPassword(arg()["webserver-password"]);
   d_ws->setLogLevel(arg()["webserver-loglevel"]);
@@ -483,6 +528,7 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
   for(const auto& u : g_urlmap) 
     d_ws->registerWebHandler("/"+u.first, serveStuff);
   d_ws->registerWebHandler("/", serveStuff);
+  d_ws->registerWebHandler("/metrics", prometheusMetrics);
   d_ws->go();
 }
 

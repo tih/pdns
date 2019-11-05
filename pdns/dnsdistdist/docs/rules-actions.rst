@@ -32,7 +32,7 @@ For example::
 
   addAction(MaxQPSIPRule(5, 32, 48), DelayAction(100))
 
-This measures traffic per IPv4 address and per /48 of IPv6, and if traffic for such an address (range) exceeds 5 qps, it gets delayed by 100ms.
+This measures traffic per IPv4 address and per /48 of IPv6, and if traffic for such an address (range) exceeds 5 qps, it gets delayed by 100ms. (Please note: :func:`DelayAction` can only delay UDP traffic). 
 
 As another example::
 
@@ -576,6 +576,7 @@ These ``DNSRule``\ s be one of the following items:
   :param int rcode: The RCODE to match on
 
 .. function:: HTTPHeaderRule(name, regex)
+
   .. versionadded:: 1.4.0
 
   Matches DNS over HTTPS queries with a HTTP header ``name`` whose content matches the regular expression ``regex``.
@@ -584,18 +585,36 @@ These ``DNSRule``\ s be one of the following items:
   :param str regex: A regular expression to match the content of the specified header
 
 .. function:: HTTPPathRegexRule(regex)
+
   .. versionadded:: 1.4.0
 
   Matches DNS over HTTPS queries with a HTTP path matching the regular expression supplied in ``regex``. For example, if the query has been sent to the https://192.0.2.1:443/PowerDNS?dns=... URL, the path would be '/PowerDNS'.
+  Only valid DNS over HTTPS queries are matched. If you want to match all HTTP queries, see :meth:`DOHFrontend.setResponsesMap` instead.
 
   :param str regex: The regex to match on
 
 .. function:: HTTPPathRule(path)
+
   .. versionadded:: 1.4.0
 
   Matches DNS over HTTPS queries with a HTTP path of ``path``. For example, if the query has been sent to the https://192.0.2.1:443/PowerDNS?dns=... URL, the path would be '/PowerDNS'.
+  Only valid DNS over HTTPS queries are matched. If you want to match all HTTP queries, see :meth:`DOHFrontend.setResponsesMap` instead.
 
   :param str path: The exact HTTP path to match on
+
+.. function:: KeyValueStoreLookupRule(kvs, lookupKey)
+
+  .. versionadded:: 1.4.0
+
+  As of 1.4.0, this code is considered experimental.
+
+  Return true if the key returned by 'lookupKey' exists in the key value store referenced by 'kvs'.
+  The store can be a CDB (:func:`newCDBKVStore`) or a LMDB database (:func:`newLMDBKVStore`).
+  The key can be based on the qname (:func:`KeyValueLookupKeyQName` and :func:`KeyValueLookupKeySuffix`),
+  source IP (:func:`KeyValueLookupKeySourceIP`) or the value of an existing tag (:func:`KeyValueLookupKeyTag`).
+
+  :param KeyValueStore kvs: The key value store to query
+  :param KeyValueLookupKey lookupKey: The key to use for the lookup
 
 .. function:: MaxQPSIPRule(qps[, v4Mask[, v6Mask[, burst[, expiration[, cleanupDelay[, scanFraction]]]]]])
   .. versionchanged:: 1.3.1
@@ -758,6 +777,7 @@ These ``DNSRule``\ s be one of the following items:
   :param str regex: The regular expression to match the QNAME.
 
 .. function:: SNIRule(name)
+
   .. versionadded:: 1.4.0
 
   Matches against the TLS Server Name Indication value sent by the client, if any. Only makes
@@ -949,6 +969,7 @@ The following actions exist.
   :param int rcode: The extended RCODE to respond with.
 
 .. function:: HTTPStatusAction(status, body, contentType="")
+
   .. versionadded:: 1.4.0
 
   Return an HTTP response with a status code of ''status''. For HTTP redirects, ''body'' should be the redirect URL.
@@ -957,18 +978,44 @@ The following actions exist.
   :param string body: The body of the HTTP response, or a URL if the status code is a redirect (3xx).
   :param string contentType: The HTTP Content-Type header to return for a 200 response, ignored otherwise. Default is ''application/dns-message''.
 
-.. function:: LogAction([filename[, binary[, append[, buffered]]]])
+.. function:: KeyValueStoreLookupAction(kvs, lookupKey, destinationTag)
 
-  Log a line for each query, to the specified ``file`` if any, to the console (require verbose) otherwise.
-  When logging to a file, the ``binary`` optional parameter specifies whether we log in binary form (default) or in textual form.
+  .. versionadded:: 1.4.0
+
+  As of 1.4.0, this code is considered experimental.
+
+  Does a lookup into the key value store referenced by 'kvs' using the key returned by 'lookupKey',
+  and storing the result if any into the tag named 'destinationTag'.
+  The store can be a CDB (:func:`newCDBKVStore`) or a LMDB database (:func:`newLMDBKVStore`).
+  The key can be based on the qname (:func:`KeyValueLookupKeyQName` and :func:`KeyValueLookupKeySuffix`),
+  source IP (:func:`KeyValueLookupKeySourceIP`) or the value of an existing tag (:func:`KeyValueLookupKeyTag`).
+
+  :param KeyValueStore kvs: The key value store to query
+  :param KeyValueLookupKey lookupKey: The key to use for the lookup
+  :param string destinationTag: The name of the tag to store the result into
+
+.. function:: LogAction([filename[, binary[, append[, buffered[, verboseOnly[, includeTimestamp]]]]]])
+
+  .. versionchanged:: 1.4.0
+    Added the optional parameters ``verboseOnly`` and ``includeTimestamp``, made ``filename`` optional.
+
+  Log a line for each query, to the specified ``file`` if any, to the console (require verbose) if the empty string is given as filename.
+
+  If an empty string is supplied in the file name, the logging is done to stdout, and only in verbose mode by default. This can be changed by setting ``verboseOnly`` to true.
+
+  When logging to a file, the ``binary`` optional parameter specifies whether we log in binary form (default) or in textual form. Before 1.4.0 the binary log format only included the qname and qtype. Since 1.4.0 it includes an optional timestamp, the query ID, qname, qtype, remote address and port.
+
   The ``append`` optional parameter specifies whether we open the file for appending or truncate each time (default).
   The ``buffered`` optional parameter specifies whether writes to the file are buffered (default) or not.
+
   Subsequent rules are processed after this action.
 
   :param string filename: File to log to. Set to an empty string to log to the normal stdout log, this only works when ``-v`` is set on the command line.
   :param bool binary: Do binary logging. Default true
   :param bool append: Append to the log. Default false
-  :param bool buffered: Use buffered I/O. default true
+  :param bool buffered: Use buffered I/O. Default true
+  :param bool verboseOnly: Whether to log only in verbose mode when logging to stdout. Default is true
+  :param bool includeTimestamp: Whether to include a timestamp for every entry. Default is false
 
 .. function:: LuaAction(function)
 

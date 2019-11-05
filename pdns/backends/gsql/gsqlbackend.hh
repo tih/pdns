@@ -41,15 +41,13 @@ public:
   virtual ~GSQLBackend()
   {
     freeStatements();
-    if(d_db)
-      delete d_db;    
+    d_db.reset();
   }
   
   void setDB(SSql *db)
   {
     freeStatements();
-    delete d_db;
-    d_db=db;
+    d_db=std::unique_ptr<SSql>(db);
     if (d_db) {
       d_db->setLog(::arg().mustDo("query-logging"));
       allocateStatements();
@@ -179,7 +177,7 @@ public:
     d_SearchCommentsQuery_stmt.reset();
   }
 
-  void lookup(const QType &, const DNSName &qdomain, DNSPacket *p=0, int zoneId=-1) override;
+  void lookup(const QType &, const DNSName &qdomain, int zoneId, DNSPacket *p=nullptr) override;
   bool list(const DNSName &target, int domain_id, bool include_disabled=false) override;
   bool get(DNSResourceRecord &r) override;
   void getAllDomains(vector<DomainInfo> *domains, bool include_disabled=false) override;
@@ -399,7 +397,7 @@ private:
   unique_ptr<SSqlStatement> d_SearchCommentsQuery_stmt;
 
 protected:
-  SSql *d_db{nullptr};
+  std::unique_ptr<SSql> d_db{nullptr};
   bool d_dnssecQueries;
   bool d_inTransaction{false};
 };

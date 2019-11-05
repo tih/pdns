@@ -25,6 +25,7 @@
 #include "dnsdist-ecs.hh"
 #include "dnsdist-lua.hh"
 #include "dnsdist-protobuf.hh"
+#include "dnsdist-kvs.hh"
 
 #include "dolog.hh"
 #include "dnstap.hh"
@@ -549,44 +550,70 @@ public:
 class LogAction : public DNSAction, public boost::noncopyable
 {
 public:
-  LogAction() : d_fp(0)
+  LogAction(): d_fp(nullptr, fclose)
   {
   }
-  LogAction(const std::string& str, bool binary=true, bool append=false, bool buffered=true) : d_fname(str), d_binary(binary)
+
+  LogAction(const std::string& str, bool binary=true, bool append=false, bool buffered=true, bool verboseOnly=true, bool includeTimestamp=false): d_fname(str), d_binary(binary), d_verboseOnly(verboseOnly), d_includeTimestamp(includeTimestamp)
   {
     if(str.empty())
       return;
     if(append)
-      d_fp = fopen(str.c_str(), "a+");
+      d_fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(str.c_str(), "a+"), fclose);
     else
-      d_fp = fopen(str.c_str(), "w");
+      d_fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(str.c_str(), "w"), fclose);
     if(!d_fp)
-      throw std::runtime_error("Unable to open file '"+str+"' for logging: "+std::string(strerror(errno)));
+      throw std::runtime_error("Unable to open file '"+str+"' for logging: "+stringerror());
     if(!buffered)
-      setbuf(d_fp, 0);
+      setbuf(d_fp.get(), 0);
   }
-  ~LogAction() override
-  {
-    if(d_fp)
-      fclose(d_fp);
-  }
+
   DNSAction::Action operator()(DNSQuestion* dq, std::string* ruleresult) const override
   {
-    if(!d_fp) {
-      vinfolog("Packet from %s for %s %s with id %d", dq->remote->toStringWithPort(), dq->qname->toString(), QType(dq->qtype).getName(), dq->dh->id);
+    if (!d_fp) {
+      if (!d_verboseOnly || g_verbose) {
+        if (d_includeTimestamp) {
+          infolog("[%u.%u] Packet from %s for %s %s with id %d", static_cast<unsigned long long>(dq->queryTime->tv_sec), static_cast<unsigned long>(dq->queryTime->tv_nsec), dq->remote->toStringWithPort(), dq->qname->toString(), QType(dq->qtype).getName(), dq->dh->id);
+        }
+        else {
+          infolog("Packet from %s for %s %s with id %d", dq->remote->toStringWithPort(), dq->qname->toString(), QType(dq->qtype).getName(), dq->dh->id);
+        }
+      }
     }
     else {
-      if(d_binary) {
+      if (d_binary) {
         std::string out = dq->qname->toDNSString();
-        fwrite(out.c_str(), 1, out.size(), d_fp);
-        fwrite((void*)&dq->qtype, 1, 2, d_fp);
+        if (d_includeTimestamp) {
+          uint64_t tv_sec = static_cast<uint64_t>(dq->queryTime->tv_sec);
+          uint32_t tv_nsec = static_cast<uint32_t>(dq->queryTime->tv_nsec);
+          fwrite(&tv_sec, sizeof(tv_sec), 1, d_fp.get());
+          fwrite(&tv_nsec, sizeof(tv_nsec), 1, d_fp.get());
+        }
+        uint16_t id = dq->dh->id;
+        fwrite(&id, sizeof(id), 1, d_fp.get());
+        fwrite(out.c_str(), 1, out.size(), d_fp.get());
+        fwrite(&dq->qtype, sizeof(dq->qtype), 1, d_fp.get());
+        fwrite(&dq->remote->sin4.sin_family, sizeof(dq->remote->sin4.sin_family), 1, d_fp.get());
+        if (dq->remote->sin4.sin_family == AF_INET) {
+          fwrite(&dq->remote->sin4.sin_addr.s_addr, sizeof(dq->remote->sin4.sin_addr.s_addr), 1, d_fp.get());
+        }
+        else if (dq->remote->sin4.sin_family == AF_INET6) {
+          fwrite(&dq->remote->sin6.sin6_addr.s6_addr, sizeof(dq->remote->sin6.sin6_addr.s6_addr), 1, d_fp.get());
+        }
+        fwrite(&dq->remote->sin4.sin_port, sizeof(dq->remote->sin4.sin_port), 1, d_fp.get());
       }
       else {
-        fprintf(d_fp, "Packet from %s for %s %s with id %d\n", dq->remote->toStringWithPort().c_str(), dq->qname->toString().c_str(), QType(dq->qtype).getName().c_str(), dq->dh->id);
+        if (d_includeTimestamp) {
+          fprintf(d_fp.get(), "[%llu.%lu] Packet from %s for %s %s with id %d\n", static_cast<unsigned long long>(dq->queryTime->tv_sec), static_cast<unsigned long>(dq->queryTime->tv_nsec), dq->remote->toStringWithPort().c_str(), dq->qname->toString().c_str(), QType(dq->qtype).getName().c_str(), dq->dh->id);
+        }
+        else {
+          fprintf(d_fp.get(), "Packet from %s for %s %s with id %d\n", dq->remote->toStringWithPort().c_str(), dq->qname->toString().c_str(), QType(dq->qtype).getName().c_str(), dq->dh->id);
+        }
       }
     }
     return Action::None;
   }
+
   std::string toString() const override
   {
     if (!d_fname.empty()) {
@@ -596,8 +623,10 @@ public:
   }
 private:
   std::string d_fname;
-  FILE* d_fp{0};
+  std::unique_ptr<FILE, int(*)(FILE*)> d_fp{nullptr, fclose};
   bool d_binary{true};
+  bool d_verboseOnly{true};
+  bool d_includeTimestamp{false};
 };
 
 
@@ -1076,7 +1105,6 @@ private:
   std::shared_ptr<DNSAction> d_action;
 };
 
-
 #ifdef HAVE_DNS_OVER_HTTPS
 class HTTPStatusAction: public DNSAction
 {
@@ -1106,6 +1134,43 @@ private:
   int d_code;
 };
 #endif /* HAVE_DNS_OVER_HTTPS */
+
+class KeyValueStoreLookupAction : public DNSAction
+{
+public:
+  KeyValueStoreLookupAction(std::shared_ptr<KeyValueStore>& kvs, std::shared_ptr<KeyValueLookupKey>& lookupKey, const std::string& destinationTag): d_kvs(kvs), d_key(lookupKey), d_tag(destinationTag)
+  {
+  }
+
+  DNSAction::Action operator()(DNSQuestion* dq, std::string* ruleresult) const override
+  {
+    std::vector<std::string> keys = d_key->getKeys(*dq);
+    std::string result;
+    for (const auto& key : keys) {
+      if (d_kvs->getValue(key, result) == true) {
+        break;
+      }
+    }
+
+    if (!dq->qTag) {
+      dq->qTag = std::make_shared<QTag>();
+    }
+
+    dq->qTag->insert({d_tag, std::move(result)});
+
+    return Action::None;
+  }
+
+  std::string toString() const override
+  {
+    return "lookup key-value store based on '" + d_key->toString() + "' and set the result in tag '" + d_tag + "'";
+  }
+
+private:
+  std::shared_ptr<KeyValueStore> d_kvs;
+  std::shared_ptr<KeyValueLookupKey> d_key;
+  std::string d_tag;
+};
 
 template<typename T, typename ActionT>
 static void addAction(GlobalStateHolder<vector<T> > *someRulActions, luadnsrule_t var, std::shared_ptr<ActionT> action, boost::optional<luaruleparams_t> params) {
@@ -1255,8 +1320,8 @@ void setupLuaActions()
       return std::shared_ptr<DNSAction>(new DisableValidationAction);
     });
 
-  g_lua.writeFunction("LogAction", [](const std::string& fname, boost::optional<bool> binary, boost::optional<bool> append, boost::optional<bool> buffered) {
-      return std::shared_ptr<DNSAction>(new LogAction(fname, binary ? *binary : true, append ? *append : false, buffered ? *buffered : false));
+  g_lua.writeFunction("LogAction", [](boost::optional<std::string> fname, boost::optional<bool> binary, boost::optional<bool> append, boost::optional<bool> buffered, boost::optional<bool> verboseOnly, boost::optional<bool> includeTimestamp) {
+      return std::shared_ptr<DNSAction>(new LogAction(fname ? *fname : "", binary ? *binary : true, append ? *append : false, buffered ? *buffered : false, verboseOnly ? *verboseOnly : true, includeTimestamp ? *includeTimestamp : false));
     });
 
   g_lua.writeFunction("RCodeAction", [](uint8_t rcode) {
@@ -1293,11 +1358,13 @@ void setupLuaActions()
     });
 
   g_lua.writeFunction("RemoteLogAction", [](std::shared_ptr<RemoteLoggerInterface> logger, boost::optional<std::function<void(DNSQuestion*, DNSDistProtoBufMessage*)> > alterFunc, boost::optional<std::unordered_map<std::string, std::string>> vars) {
-      // avoids potentially-evaluated-expression warning with clang.
-      RemoteLoggerInterface& rl = *logger.get();
-      if (typeid(rl) != typeid(RemoteLogger)) {
-        // We could let the user do what he wants, but wrapping PowerDNS Protobuf inside a FrameStream tagged as dnstap is logically wrong.
-        throw std::runtime_error(std::string("RemoteLogAction only takes RemoteLogger. For other types, please look at DnstapLogAction."));
+      if (logger) {
+        // avoids potentially-evaluated-expression warning with clang.
+        RemoteLoggerInterface& rl = *logger.get();
+        if (typeid(rl) != typeid(RemoteLogger)) {
+          // We could let the user do what he wants, but wrapping PowerDNS Protobuf inside a FrameStream tagged as dnstap is logically wrong.
+          throw std::runtime_error(std::string("RemoteLogAction only takes RemoteLogger. For other types, please look at DnstapLogAction."));
+        }
       }
 
       std::string serverID;
@@ -1319,11 +1386,13 @@ void setupLuaActions()
     });
 
   g_lua.writeFunction("RemoteLogResponseAction", [](std::shared_ptr<RemoteLoggerInterface> logger, boost::optional<std::function<void(DNSResponse*, DNSDistProtoBufMessage*)> > alterFunc, boost::optional<bool> includeCNAME, boost::optional<std::unordered_map<std::string, std::string>> vars) {
-      // avoids potentially-evaluated-expression warning with clang.
-      RemoteLoggerInterface& rl = *logger.get();
-      if (typeid(rl) != typeid(RemoteLogger)) {
-        // We could let the user do what he wants, but wrapping PowerDNS Protobuf inside a FrameStream tagged as dnstap is logically wrong.
-        throw std::runtime_error("RemoteLogResponseAction only takes RemoteLogger. For other types, please look at DnstapLogResponseAction.");
+      if (logger) {
+        // avoids potentially-evaluated-expression warning with clang.
+        RemoteLoggerInterface& rl = *logger.get();
+        if (typeid(rl) != typeid(RemoteLogger)) {
+          // We could let the user do what he wants, but wrapping PowerDNS Protobuf inside a FrameStream tagged as dnstap is logically wrong.
+          throw std::runtime_error("RemoteLogResponseAction only takes RemoteLogger. For other types, please look at DnstapLogResponseAction.");
+        }
       }
 
       std::string serverID;
@@ -1416,4 +1485,8 @@ void setupLuaActions()
       return std::shared_ptr<DNSAction>(new HTTPStatusAction(status, body, contentType ? *contentType : ""));
     });
 #endif /* HAVE_DNS_OVER_HTTPS */
+
+  g_lua.writeFunction("KeyValueStoreLookupAction", [](std::shared_ptr<KeyValueStore>& kvs, std::shared_ptr<KeyValueLookupKey>& lookupKey, const std::string& destinationTag) {
+      return std::shared_ptr<DNSAction>(new KeyValueStoreLookupAction(kvs, lookupKey, destinationTag));
+    });
 }

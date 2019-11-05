@@ -88,6 +88,7 @@ bool SyncRes::s_nopacketcache;
 bool SyncRes::s_rootNXTrust;
 bool SyncRes::s_noEDNS;
 bool SyncRes::s_qnameminimization;
+bool SyncRes::s_hardenNXD;
 
 #define LOG(x) if(d_lm == Log) { g_log <<Logger::Warning << x; } else if(d_lm == Store) { d_trace << x; }
 
@@ -414,7 +415,8 @@ uint64_t SyncRes::doEDNSDump(int fd)
   fprintf(fp.get(),"; edns from thread follows\n;\n");
   for(const auto& eds : t_sstorage.ednsstatus) {
     count++;
-    fprintf(fp.get(), "%s\t%d\t%s", eds.first.toString().c_str(), (int)eds.second.mode, ctime(&eds.second.modeSetAt));
+    char tmp[26];
+    fprintf(fp.get(), "%s\t%d\t%s", eds.first.toString().c_str(), (int)eds.second.mode, ctime_r(&eds.second.modeSetAt, tmp));
   }
   return count;
 }
@@ -456,8 +458,9 @@ uint64_t SyncRes::doDumpThrottleMap(int fd)
   for(const auto& i : throttleMap)
   {
     count++;
+    char tmp[26];
     // remote IP, dns name, qtype, count, ttd
-    fprintf(fp.get(), "%s\t%s\t%d\t%u\t%s", i.first.get<0>().toString().c_str(), i.first.get<1>().toLogString().c_str(), i.first.get<2>(), i.second.count, ctime(&i.second.ttd));
+    fprintf(fp.get(), "%s\t%s\t%d\t%u\t%s", i.first.get<0>().toString().c_str(), i.first.get<1>().toLogString().c_str(), i.first.get<2>(), i.second.count, ctime_r(&i.second.ttd, tmp));
   }
 
   return count;
@@ -1022,6 +1025,7 @@ void SyncRes::getBestNSFromCache(const DNSName &qname, const QType& qtype, vecto
     if(subdomain.isRoot() && !brokeloop) {
       // We lost the root NS records
       primeHints();
+      primeRootNSZones(g_dnssecmode != DNSSECMode::Off);
       LOG(prefix<<qname<<": reprimed the root"<<endl);
       /* let's prevent an infinite loop */
       if (!d_updatingRootNS) {
@@ -1385,7 +1389,7 @@ bool SyncRes::doCacheCheck(const DNSName &qname, const DNSName& authname, bool w
   const NegCache::NegCacheEntry* ne = nullptr;
 
   if(s_rootNXTrust &&
-     t_sstorage.negcache.getRootNXTrust(qname, d_now, &ne) &&
+      t_sstorage.negcache.getRootNXTrust(qname, d_now, &ne) &&
       ne->d_auth.isRoot() &&
       !(wasForwardedOrAuthZone && !authname.isRoot())) { // when forwarding, the root may only neg-cache if it was forwarded to.
     sttl = ne->d_ttd - d_now.tv_sec;
@@ -1393,25 +1397,39 @@ bool SyncRes::doCacheCheck(const DNSName &qname, const DNSName& authname, bool w
     res = RCode::NXDomain;
     giveNegative = true;
     cachedState = ne->d_validationState;
-  }
-  else if (t_sstorage.negcache.get(qname, qtype, d_now, &ne)) {
+  } else if (t_sstorage.negcache.get(qname, qtype, d_now, &ne)) {
     /* If we are looking for a DS, discard NXD if auth == qname
        and ask for a specific denial instead */
     if (qtype != QType::DS || ne->d_qtype.getCode() || ne->d_auth != qname ||
         t_sstorage.negcache.get(qname, qtype, d_now, &ne, true))
     {
-      res = 0;
+      res = RCode::NXDomain;
       sttl = ne->d_ttd - d_now.tv_sec;
       giveNegative = true;
       cachedState = ne->d_validationState;
-      if(ne->d_qtype.getCode()) {
+      if (ne->d_qtype.getCode()) {
         LOG(prefix<<qname<<": "<<qtype.getName()<<" is negatively cached via '"<<ne->d_auth<<"' for another "<<sttl<<" seconds"<<endl);
         res = RCode::NoError;
+      } else {
+        LOG(prefix<<qname<<": Entire name '"<<qname<<" is negatively cached via '"<<ne->d_auth<<"' for another "<<sttl<<" seconds"<<endl);
       }
-      else {
-        LOG(prefix<<qname<<": Entire name '"<<qname<<"', is negatively cached via '"<<ne->d_auth<<"' for another "<<sttl<<" seconds"<<endl);
+    }
+  } else if (s_hardenNXD && !qname.isRoot() && !wasForwardedOrAuthZone) {
+    auto labels = qname.getRawLabels();
+    DNSName negCacheName(g_rootdnsname);
+    negCacheName.prependRawLabel(labels.back());
+    labels.pop_back();
+    while(!labels.empty()) {
+      if (t_sstorage.negcache.get(negCacheName, QType(0), d_now, &ne, true)) {
         res = RCode::NXDomain;
+        sttl = ne->d_ttd - d_now.tv_sec;
+        giveNegative = true;
+        cachedState = ne->d_validationState;
+        LOG(prefix<<qname<<": Name '"<<negCacheName<<"' and below, is negatively cached via '"<<ne->d_auth<<"' for another "<<sttl<<" seconds"<<endl);
+        break;
       }
+      negCacheName.prependRawLabel(labels.back());
+      labels.pop_back();
     }
   }
 
@@ -1924,10 +1942,10 @@ vState SyncRes::getDSRecords(const DNSName& zone, dsmap_t& ds, bool taOnly, unsi
         const auto dscontent = getRR<DSRecordContent>(record);
         if (dscontent && isSupportedDS(*dscontent)) {
           // Make GOST a lower prio than SHA256
-          if (dscontent->d_digesttype == DNSSECKeeper::GOST && bestDigestType == DNSSECKeeper::SHA256) {
+          if (dscontent->d_digesttype == DNSSECKeeper::DIGEST_GOST && bestDigestType == DNSSECKeeper::DIGEST_SHA256) {
             continue;
           }
-          if (dscontent->d_digesttype > bestDigestType || (bestDigestType == DNSSECKeeper::GOST && dscontent->d_digesttype == DNSSECKeeper::SHA256)) {
+          if (dscontent->d_digesttype > bestDigestType || (bestDigestType == DNSSECKeeper::DIGEST_GOST && dscontent->d_digesttype == DNSSECKeeper::DIGEST_SHA256)) {
             bestDigestType = dscontent->d_digesttype;
           }
           ds.insert(*dscontent);
@@ -2880,7 +2898,7 @@ bool SyncRes::processRecords(const std::string& prefix, const DNSName& qname, co
       if (state == Secure && needWildcardProof) {
         /* We have a positive answer synthetized from a wildcard, we need to check that we have
            proof that the exact name doesn't exist so the wildcard can be used,
-           as described in section 5.3.4 of RFC 4035 and 5.3 of FRC 7129.
+           as described in section 5.3.4 of RFC 4035 and 5.3 of RFC 7129.
         */
         NegCache::NegCacheEntry ne;
 
@@ -3108,7 +3126,8 @@ bool SyncRes::doResolveAtThisIP(const std::string& prefix, const DNSName& qname,
       /* -1 means server unreachable */
       s_unreachables++;
       d_unreachables++;
-      LOG(prefix<<qname<<": error resolving from "<<remoteIP.toString()<< (doTCP ? " over TCP" : "") <<", possible error: "<<strerror(errno)<< endl);
+      // XXX questionable use of errno
+      LOG(prefix<<qname<<": error resolving from "<<remoteIP.toString()<< (doTCP ? " over TCP" : "") <<", possible error: "<<stringerror()<< endl);
     }
 
     if(resolveret != -2 && !chained && !dontThrottle) {

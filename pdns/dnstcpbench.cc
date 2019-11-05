@@ -108,10 +108,10 @@ try
   Socket sock(g_dest.sin4.sin_family, SOCK_STREAM);
   int tmp=1;
   if(setsockopt(sock.getHandle(),SOL_SOCKET,SO_REUSEADDR,(char*)&tmp,sizeof tmp)<0) 
-    throw runtime_error("Unable to set socket reuse: "+string(strerror(errno)));
+    throw runtime_error("Unable to set socket reuse: "+stringerror());
     
   if(g_tcpNoDelay && setsockopt(sock.getHandle(), IPPROTO_TCP, TCP_NODELAY,(char*)&tmp,sizeof tmp)<0) 
-    throw runtime_error("Unable to set socket no delay: "+string(strerror(errno)));
+    throw runtime_error("Unable to set socket no delay: "+stringerror());
 
   sock.connect(g_dest);
   uint16_t len = htons(packet.size());
@@ -132,18 +132,17 @@ try
     throw PDNSException("tcp read failed");
   
   len=ntohs(len);
-  char *creply = new char[len];
+  std::unique_ptr<char[]> creply(new char[len]);
   int n=0;
   int numread;
   while(n<len) {
-    numread=sock.read(creply+n, len-n);
+    numread=sock.read(creply.get()+n, len-n);
     if(numread<0)
       throw PDNSException("tcp read failed");
     n+=numread;
   }
   
-  reply=string(creply, len);
-  delete[] creply;
+  reply=string(creply.get(), len);
   
   gettimeofday(&now, 0);
   q->tcpUsec = makeUsec(now - tv);

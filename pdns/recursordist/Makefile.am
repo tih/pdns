@@ -35,6 +35,8 @@ BUILT_SOURCES=htmlfiles.h \
 CLEANFILES = htmlfiles.h \
 	dnsmessage.pb.cc \
 	dnsmessage.pb.h \
+	dnstap.pb.cc \
+	dnstap.pb.h \
 	recursor.conf-dist
 
 htmlfiles.h: html/*
@@ -150,7 +152,7 @@ pdns_recursor_SOURCES = \
 	rec-lua-conf.hh rec-lua-conf.cc \
 	rec-protobuf.cc rec-protobuf.hh \
 	rec-snmp.hh rec-snmp.cc \
-	rec_channel.cc rec_channel.hh \
+	rec_channel.cc rec_channel.hh rec_metrics.hh \
 	rec_channel_rec.cc \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
@@ -253,6 +255,8 @@ testrunner_SOURCES = \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
 	responsestats.cc \
+	rpzloader.cc rpzloader.hh \
+	resolver.hh resolver.cc \
 	root-dnssec.hh \
 	secpoll.cc \
 	sillyrecords.cc \
@@ -281,6 +285,7 @@ testrunner_SOURCES = \
 	test-rcpgenerator_cc.cc \
 	test-recpacketcache_cc.cc \
 	test-recursorcache_cc.cc \
+	test-rpzloader_cc.cc \
 	test-secpoll_cc.cc \
 	test-signers.cc \
 	test-syncres_cc.hh \

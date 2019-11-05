@@ -557,21 +557,21 @@ void setupLuaInspection()
   g_lua.writeFunction("showTCPStats", [] {
       setLuaNoSideEffect();
       ostringstream ret;
-      boost::format fmt("%-10d %-10d %-10d %-10d\n");
-      ret << (fmt % "Clients" % "MaxClients" % "Queued" % "MaxQueued") << endl;
+      boost::format fmt("%-12d %-12d %-12d %-12d");
+      ret << (fmt % "Workers" % "Max Workers" % "Queued" % "Max Queued") << endl;
       ret << (fmt % g_tcpclientthreads->getThreadsCount() % g_maxTCPClientThreads % g_tcpclientthreads->getQueuedCount() % g_maxTCPQueuedConnections) << endl;
-      ret <<endl;
+      ret << endl;
 
       ret << "Query distribution mode is: " << std::string(g_useTCPSinglePipe ? "single queue" : "per-thread queues") << endl;
       ret << endl;
 
       ret << "Frontends:" << endl;
-      fmt = boost::format("%-3d %-20.20s %-20d %-20d %-25d %-20d %-20d %-20d %-20f %-20f");
-      ret << (fmt % "#" % "Address" % "Connections" % "Died reading query" % "Died sending response" % "Gave up" % "Client timeouts" % "Downstream timeouts" % "Avg queries/conn" % "Avg duration") << endl;
+      fmt = boost::format("%-3d %-20.20s %-20d %-20d %-25d %-20d %-20d %-20d %-20f %-20f %-20d %-20d %-25d %-25d %-15d %-15d %-15d %-15d %-15d");
+      ret << (fmt % "#" % "Address" % "Connections" % "Died reading query" % "Died sending response" % "Gave up" % "Client timeouts" % "Downstream timeouts" % "Avg queries/conn" % "Avg duration" % "TLS new sessions" % "TLS Resumptions" % "TLS unknown ticket keys" % "TLS inactive ticket keys" % "TLS 1.0" % "TLS 1.1" % "TLS 1.2" % "TLS 1.3" % "TLS other") << endl;
 
       size_t counter = 0;
       for(const auto& f : g_frontends) {
-        ret << (fmt % counter % f->local.toStringWithPort() % f->tcpCurrentConnections % f->tcpDiedReadingQuery % f->tcpDiedSendingResponse % f->tcpGaveUp % f->tcpClientTimeouts % f->tcpDownstreamTimeouts % f->tcpAvgQueriesPerConnection % f->tcpAvgConnectionDuration) << endl;
+        ret << (fmt % counter % f->local.toStringWithPort() % f->tcpCurrentConnections % f->tcpDiedReadingQuery % f->tcpDiedSendingResponse % f->tcpGaveUp % f->tcpClientTimeouts % f->tcpDownstreamTimeouts % f->tcpAvgQueriesPerConnection % f->tcpAvgConnectionDuration % f->tlsNewSessions % f->tlsResumptions % f->tlsUnknownTicketKey % f->tlsInactiveTicketKey % f->tls10queries % f->tls11queries % f->tls12queries % f->tls13queries % f->tlsUnknownqueries) << endl;
         ++counter;
       }
       ret << endl;
@@ -586,6 +586,37 @@ void setupLuaInspection()
         ret << (fmt % counter % s->name % s->remote.toStringWithPort() % s->tcpCurrentConnections % s->tcpDiedSendingQuery % s->tcpDiedReadingResponse % s->tcpGaveUp % s->tcpReadTimeouts % s->tcpWriteTimeouts % s->tcpAvgQueriesPerConnection % s->tcpAvgConnectionDuration) << endl;
         ++counter;
       }
+
+      g_outputBuffer=ret.str();
+    });
+
+  g_lua.writeFunction("showTLSErrorCounters", [] {
+      setLuaNoSideEffect();
+      ostringstream ret;
+      boost::format fmt("%-3d %-20.20s %-23d %-23d %-23d %-23d %-23d %-23d %-23d %-23d");
+
+      ret << (fmt % "#" % "Address" % "DH key too small" % "Inappropriate fallback" % "No shared cipher" % "Unknown cipher type" % "Unknown exchange type" % "Unknown protocol" % "Unsupported EC" % "Unsupported protocol") << endl;
+
+      size_t counter = 0;
+      for(const auto& f : g_frontends) {
+        if (!f->hasTLS()) {
+          continue;
+        }
+        const TLSErrorCounters* errorCounters = nullptr;
+        if (f->tlsFrontend != nullptr) {
+          errorCounters = &f->tlsFrontend->d_tlsCounters;
+        }
+        else if (f->dohFrontend != nullptr) {
+          errorCounters = &f->dohFrontend->d_tlsCounters;
+        }
+        if (errorCounters == nullptr) {
+          continue;
+        }
+
+        ret << (fmt % counter % f->local.toStringWithPort() % errorCounters->d_dhKeyTooSmall % errorCounters->d_inappropriateFallBack % errorCounters->d_noSharedCipher % errorCounters->d_unknownCipherType % errorCounters->d_unknownKeyExchangeType % errorCounters->d_unknownProtocol % errorCounters->d_unsupportedEC % errorCounters->d_unsupportedProtocol) << endl;
+        ++counter;
+      }
+      ret << endl;
 
       g_outputBuffer=ret.str();
     });
@@ -745,5 +776,6 @@ void setupLuaInspection()
   g_lua.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)()>("apply", [](std::shared_ptr<DynBlockRulesGroup>& group) {
     group->apply();
   });
+  g_lua.registerFunction("setQuiet", &DynBlockRulesGroup::setQuiet);
   g_lua.registerFunction("toString", &DynBlockRulesGroup::toString);
 }

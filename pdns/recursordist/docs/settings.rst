@@ -861,6 +861,32 @@ Maximum number of seconds to cache an item in the DNS cache, no matter what the 
 
     The minimum value of this setting is 15. i.e. setting this to lower than 15 will make this value 15.
 
+.. _setting max-concurrent-requests-per-tcp-connection:
+
+``max-concurrent-requests-per-tcp-connection``
+----------------------------------------------
+-  Integer
+-  Default: 10
+
+Maximum number of incoming requests handled concurrently per tcp
+connection. This number must be larger than 0 and smaller than 65536
+and also smaller than `max-mthreads`.
+
+.. _setting-max-generate-steps:
+
+``max-generate-steps``
+----------------------
+
+.. versionadded:: 4.3.0
+
+-  Integer
+-  Default: 0
+
+Maximum number of steps for a '$GENERATE' directive when parsing a
+zone file. This is a protection measure to prevent consuming a lot of
+CPU and memory when untrusted zones are loaded. Default to 0 which
+means unlimited.
+
 .. _setting-max-mthreads:
 
 ``max-mthreads``
@@ -1105,6 +1131,21 @@ a new domain is observed.
 -  Default: 1500
 
 Number of milliseconds to wait for a remote authoritative server to respond.
+
+.. _setting-nothing-below-nxdomain:
+
+``nothing-below-nxdomain``
+--------------------------
+.. versionadded:: 4.3.0
+
+- Boolean
+- Default: true
+
+Enables :rfc:`8020` handling of cached NXDOMAIN responses.
+This RFC specifies that NXDOMAIN means that the DNS tree under the denied name MUST be empty.
+When an NXDOMAIN exists in the cache for a shorter name than the qname, no lookup is done and an NXDOMAIN is sent to the client.
+
+For instance, when ``foo.example.net`` is negatively cached, any query matching ``*.foo.example.net`` will be answered with NXDOMAIN directly without consulting authoritative servers.
 
 .. _setting-nsec3-max-iterations:
 

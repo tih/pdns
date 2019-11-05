@@ -2,6 +2,567 @@ Changelog
 =========
 
 .. changelog::
+  :version: 1.4.0-rc5
+  :released: 30th of October 2019
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, Metrics
+    :pullreq: 8465
+
+    Rename the 'address' label to 'frontend' for DoH metrics
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 8471
+
+    Increment the DOHUnit ref count when it's set in the IDState
+
+.. changelog::
+  :version: 1.4.0-rc4
+  :released: 25th of October 2019
+
+  .. change::
+    :tags: New Features, DNS over HTTPS, DNS over TLS
+    :pullreq: 8442
+
+    Add support dumping TLS keys via keyLogFile
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 8416
+
+    Implement reference counting for the DOHUnit object
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS, Metrics
+    :pullreq: 8447
+
+    Add metrics about TLS handshake failures for DoH and DoT
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8411
+    :tickets: 8390
+
+    Add more options to LogAction (non-verbose mode, timestamps)
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 8383
+
+    Merge the setup of TLS contexts in DoH and DoT
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8408
+
+    Fix the caching of large entries
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8415
+
+    Fix formatting in showTCPStats()
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8413
+    :tickets: 8412
+
+    Work around cmsg_space somehow not being a constexpr on macOS
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8372
+
+    Use SO_BINDTODEVICE when available for newServer's source interface
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 8409
+
+    Add missing prometheus descriptions for cache-related metrics
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS, Metrics
+    :pullreq: 8406
+
+    Add metrics about unknown/inactive TLS ticket keys
+
+  .. change::
+    :tags: Improvements, DNS over TLS, Metrics
+    :pullreq: 8387
+
+    Add metrics about TLS versions with DNS over TLS
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, Metrics
+    :pullreq: 8395
+
+    Count the number of concurrent connections for DoH as well
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 8388
+
+    Clear the DoH session ticket encryption key in the ctor
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 8382
+
+    Add a 'preferServerCiphers' option for DoH and DoT
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 8381
+
+    Add a prometheus 'thread' label to distinguish identical frontends
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 8378
+
+    Fix a typo in the prometheus description of 'senderrors'
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 8368
+
+    More prometheus fixes
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 8365
+    :tickets: 8353
+
+    Lowercase custom DoH header names
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8364
+    :tickets: 8362
+
+    Check the address supplied to 'webserver' in check-config
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, Metrics
+    :pullreq: 8361
+
+    Refactor DoH prometheus metrics again
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8359
+
+    Fix the creation order of rules when inserted via setRules()
+
+.. changelog::
+  :version: 1.4.0-rc3
+  :released: 30th of September 2019
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8083
+    :tickets: 7845
+
+    Clean up our interactions with errno
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 8264
+
+    Display the DoH and DoT binds in the web view
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8265
+    :tickets: 5514
+
+    Remove the 'blockfilter' stat from the web view
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 8267
+
+    Allow accepting DoH queries over HTTP instead of HTTPS
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8268
+
+    Fix some spelling mistakes noticed by lintian (Chris Hofstaedtler)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8281
+
+    Fix the newCDBKVStore console completion when LMDB is not enabled (phonedph1)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8283
+
+    Allow configure CDB_CFLAGS to work (phonedph1)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8285
+
+    dnsdistconf.lua use non-deprecated versions for 1.4.0 (phonedph1)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8303
+
+    Fix the warning message on an invalid secpoll answer
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8304
+    :tickets: 8300
+
+    Don't connect to remote logger in client/command mode
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8318
+
+    Better use of labels in our DoH prometheus export
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 8349
+
+    Implement TLS session ticket keys management for DoH
+
+.. changelog::
+  :version: 1.4.0-rc2
+  :released: 2nd of September 2019
+
+  .. change::
+    :tags: New Features
+    :pullreq: 8139
+
+    Add a KeyValueStoreLookup action based on CDB or LMDB
+
+  .. change::
+    :tags: Security
+    :pullreq: 8200
+
+    Update h2o to 2.2.6, fixing CVE-2019-9512, CVE-2019-9514 and CVE-2019-9515 for repo.powerdns.com packages
+
+  .. change::
+    :tags: New Features, DNS over HTTPS
+    :pullreq: 8206
+
+    Add support for early DoH HTTP responses
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 8207
+    :tickets: 8202
+
+    Add minTLSVersion for DoH and DoT
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8250
+
+    Split dnsdist-lua-bindings.cc to reduce memory consumption during compilation
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8252
+
+    Add a Lua binding for `dynBlockRulesGroup:setQuiet(quiet)`
+
+.. changelog::
+  :version: 1.4.0-rc1
+  :released: 12th of August 2019
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7860
+
+    Disallow TCP disablement
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7862
+
+    Update boost.m4 to the latest version
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 7886
+
+     SuffixMatchTree: fix root removal, partial match of non-leaf nodes
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7909
+
+    Print stats from expungeByName (Matti Hiljanen)
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 7911
+    :tickets: 7894
+
+    Properly override the HTTP Server header for DoH
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, DNS over TLS
+    :pullreq: 7915
+
+    Exit when requested DoT/DoH support is not compiled in
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 7917
+
+    Send better HTTP status codes, handle ACL drops earlier
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 7927
+    :tickets: 7917
+
+    Proper HTTP response for timeouts over DoH
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 7933
+    :tickets: 7898
+
+    Add more stats about DoH HTTP responses
+
+  .. change::
+    :tags: Bug Fixes, Carbon, Prometheus
+    :pullreq: 7934
+    :tickets: 7933
+
+    Deduplicate frontends entries with carbon and prometheus
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 7951
+    :tickets: 6942, 8084
+
+    Update boost.m4
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7952
+    :tickets: 7950
+
+    Squelch unused function warning
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 7974
+    :tickets: 7971
+
+    Fix short IOs over TCP
+
+  .. change::
+    :tags: Improvements, DNS over TLS
+    :pullreq: 7978
+
+    Improve error messages for DoT issues
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 7979
+
+    Fix handling of backend connection failing over TCP
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7985
+
+    SuffixMatchNode:add(): accept more types
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7990
+    :tickets: 7981
+
+    Explicitly align the buffer used for cmsgs
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7992
+
+    Add `quiet` parameter to NetmaskGroupRule
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 7996
+    :tickets: 7981
+
+    Clear cmsg_space(sizeof(data)) in cmsghdr to appease Valgrind
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8003
+
+    Insert the response into the ringbuffer right after sending it
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8007
+
+    Add static assertions for the size of the src address control buffer
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8013
+
+    Don't create temporary strings to escape DNSName labels
+
+  .. change::
+    :tags: Bug Fixes, DNSCrypt
+    :pullreq: 8015
+    :tickets: 8014
+
+    Skip non-dnscrypt binds in `showDNSCryptBinds()`
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8024
+
+    Display TCP/DoT queries and responses in verbose mode, opcode in grepq
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8025
+
+    Be a bit more explicit about what failed in testCrypto()
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8030
+    :tickets: 8021
+
+    Handle ENOTCONN on read() over TCP
+
+  .. change::
+    :tags: Improvements, DNSCrypt
+    :pullreq: 8042
+    :tickets: 8020
+
+    Accept more than one certificate in `addDNSCryptBind()`
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8067
+
+    Make sure we always compile with BOOST_CB_ENABLE_DEBUG set to 0
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8078
+
+    Catch exceptions thrown when handling a TCP response
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8079
+
+    Fix unlimited retries when TCP Fast Open is enabled
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8081
+
+    M4/systemd.m4: fail when systemctl is not available
+
+  .. change::
+    :tags: Bug Fixes, Prometheus
+    :pullreq: 8105
+
+    Fix a typo in the Server's latency description for Prometheus (phonedph1)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8110
+
+    Update URLs to use HTTPS scheme (Chris Hofstaedtler)
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 8112
+
+    Prevent a dangling DOHUnit pointer when send() failed
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8113
+
+    Double-check we only increment the outstanding counter once
+
+  .. change::
+    :tags: New Features
+    :pullreq: 8117
+
+    Implement ContinueAction()
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8131
+    :tickets: 8130
+
+    Console: flush cout after printing g_outputbuffer (Doug Freed)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8135
+    :tickets: 8108
+
+    ext/ipcrypt: ship license in tarballs (Chris Hofstaedtler)
+
+  .. change::
+    :tags: New Features, DNS over HTTPS, DNS over TLS
+    :pullreq: 8141
+    :tickets: 7812
+
+    Add OCSP stapling (from files) for DoT and DoH
+
+  .. change::
+    :tags: New Features, DNS over HTTPS
+    :pullreq: 8148
+    :tickets: 7957, 7900
+
+    Add support for custom DoH headers (Melissa Voegeli)
+
+  .. change::
+    :tags: New Features, DNS over HTTPS
+    :pullreq: 8153
+    :tickets: 8133
+
+    Add lua bindings, rules and action for DoH
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8154
+
+    Use a counter to mark IDState usage instead of the FD
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 8158
+
+    Fix signedness issue in isEDNSOptionInOpt()
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8175
+
+    Increase the default value of setMaxUDPOutstanding to 65535
+
+.. changelog::
   :version: 1.4.0-beta1
   :released: 6th of June 2019
 

@@ -1,3 +1,4 @@
+#include "arguments.hh"
 #include "dnsparser.hh"
 #include "dnsrecords.hh"
 #include "ixfr.hh"
@@ -9,7 +10,7 @@
 #include "zoneparser-tng.hh"
 #include "threadname.hh"
 
-static Netmask makeNetmaskFromRPZ(const DNSName& name)
+Netmask makeNetmaskFromRPZ(const DNSName& name)
 {
   auto parts = name.getRawLabels();
   /*
@@ -46,14 +47,14 @@ static Netmask makeNetmaskFromRPZ(const DNSName& name)
 
   string v6;
 
+  if (parts[parts.size()-1] == "") {
+    v6 += ":";
+  }
   for (uint8_t i = parts.size()-1 ; i > 0; i--) {
     v6 += parts[i];
-    if (parts[i] == "" && i == 1 && i == parts.size()-1)
-        v6+= "::";
-    if (parts[i] == "" && i != parts.size()-1)
-        v6+= ":";
-    if (parts[i] != "" && i != 1)
+    if (i > 1 || (i == 1 && parts[i] == "")) {
       v6 += ":";
+    }
   }
   v6 += "/" + parts[0];
 
@@ -235,6 +236,7 @@ std::shared_ptr<SOARecordContent> loadRPZFromFile(const std::string& fname, std:
 {
   shared_ptr<SOARecordContent> sr = nullptr;
   ZoneParserTNG zpt(fname);
+  zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
   DNSResourceRecord drr;
   DNSName domain;
   while(zpt.get(drr)) {
@@ -322,22 +324,22 @@ static bool dumpZoneToDisk(const DNSName& zoneName, const std::shared_ptr<DNSFil
   }
 
   if (fflush(fp.get()) != 0) {
-    g_log<<Logger::Warning<<"Error while flushing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<strerror(errno)<<endl;
+    g_log<<Logger::Warning<<"Error while flushing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (fsync(fileno(fp.get())) != 0) {
-    g_log<<Logger::Warning<<"Error while syncing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<strerror(errno)<<endl;
+    g_log<<Logger::Warning<<"Error while syncing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (fclose(fp.release()) != 0) {
-    g_log<<Logger::Warning<<"Error while writing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<strerror(errno)<<endl;
+    g_log<<Logger::Warning<<"Error while writing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (rename(temp.c_str(), dumpZoneFileName.c_str()) != 0) {
-    g_log<<Logger::Warning<<"Error while moving the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<strerror(errno)<<endl;
+    g_log<<Logger::Warning<<"Error while moving the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 

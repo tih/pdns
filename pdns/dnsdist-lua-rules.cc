@@ -259,7 +259,7 @@ void setupLuaRules()
             const auto& newruleaction = pair.second;
             if (newruleaction->d_action) {
               auto rule=makeRule(newruleaction->d_rule);
-              gruleactions.push_back({rule, newruleaction->d_action, newruleaction->d_id});
+              gruleactions.push_back({rule, newruleaction->d_action, newruleaction->d_id, newruleaction->d_creationOrder});
             }
           }
         });
@@ -481,5 +481,9 @@ void setupLuaRules()
 
   g_lua.writeFunction("QNameSetRule", [](const DNSNameSet& names) {
       return std::shared_ptr<DNSRule>(new QNameSetRule(names));
+    });
+
+  g_lua.writeFunction("KeyValueStoreLookupRule", [](std::shared_ptr<KeyValueStore>& kvs, std::shared_ptr<KeyValueLookupKey>& lookupKey) {
+      return std::shared_ptr<DNSRule>(new KeyValueStoreLookupRule(kvs, lookupKey));
     });
 }
