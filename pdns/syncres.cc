@@ -71,6 +71,7 @@ std::atomic<uint64_t> SyncRes::s_outqueries;
 std::atomic<uint64_t> SyncRes::s_tcpoutqueries;
 std::atomic<uint64_t> SyncRes::s_throttledqueries;
 std::atomic<uint64_t> SyncRes::s_dontqueries;
+std::atomic<uint64_t> SyncRes::s_qnameminfallbacksuccess;
 std::atomic<uint64_t> SyncRes::s_nodelegated;
 std::atomic<uint64_t> SyncRes::s_unreachables;
 std::atomic<uint64_t> SyncRes::s_ecsqueries;
@@ -404,10 +405,21 @@ bool SyncRes::doOOBResolve(const DNSName &qname, const QType &qtype, vector<DNSR
   return doOOBResolve(iter->second, qname, qtype, ret, res);
 }
 
+bool SyncRes::isForwardOrAuth(const DNSName &qname) const {
+  DNSName authname(qname);
+  domainmap_t::const_iterator iter = getBestAuthZone(&authname);
+  return iter != t_sstorage.domainmap->end();
+}
+
 uint64_t SyncRes::doEDNSDump(int fd)
 {
-  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(dup(fd), "w"), fclose);
+  int newfd = dup(fd);
+  if (newfd == -1) {
+    return 0;
+  }
+  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(newfd, "w"), fclose);
   if (!fp) {
+    close(newfd);
     return 0;
   }
   uint64_t count = 0;
@@ -423,9 +435,15 @@ uint64_t SyncRes::doEDNSDump(int fd)
 
 uint64_t SyncRes::doDumpNSSpeeds(int fd)
 {
-  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(dup(fd), "w"), fclose);
-  if(!fp)
+  int newfd = dup(fd);
+  if (newfd == -1) {
     return 0;
+  }
+  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(newfd, "w"), fclose);
+  if (!fp) {
+    close(newfd);
+    return 0;
+  }
   fprintf(fp.get(), "; nsspeed dump from thread follows\n;\n");
   uint64_t count=0;
 
@@ -447,9 +465,15 @@ uint64_t SyncRes::doDumpNSSpeeds(int fd)
 
 uint64_t SyncRes::doDumpThrottleMap(int fd)
 {
-  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(dup(fd), "w"), fclose);
-  if(!fp)
+  int newfd = dup(fd);
+  if (newfd == -1) {
     return 0;
+  }
+  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(newfd, "w"), fclose);
+  if (!fp) {
+    close(newfd);
+    return 0;
+  }
   fprintf(fp.get(), "; throttle map dump follows\n");
   fprintf(fp.get(), "; remote IP\tqname\tqtype\tcount\tttd\n");
   uint64_t count=0;
@@ -461,6 +485,33 @@ uint64_t SyncRes::doDumpThrottleMap(int fd)
     char tmp[26];
     // remote IP, dns name, qtype, count, ttd
     fprintf(fp.get(), "%s\t%s\t%d\t%u\t%s", i.first.get<0>().toString().c_str(), i.first.get<1>().toLogString().c_str(), i.first.get<2>(), i.second.count, ctime_r(&i.second.ttd, tmp));
+  }
+
+  return count;
+}
+
+uint64_t SyncRes::doDumpFailedServers(int fd)
+{
+  int newfd = dup(fd);
+  if (newfd == -1) {
+    return 0;
+  }
+  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(newfd, "w"), fclose);
+  if (!fp) {
+    close(newfd);
+    return 0;
+  }
+  fprintf(fp.get(), "; failed servers dump follows\n");
+  fprintf(fp.get(), "; remote IP\tcount\ttimestamp\n");
+  uint64_t count=0;
+
+  for(const auto& i : t_sstorage.fails.getMap())
+  {
+    count++;
+    char tmp[26];
+    ctime_r(&i.second.last, tmp);
+    fprintf(fp.get(), "%s\t%lld\t%s", i.first.toString().c_str(),
+            static_cast<long long>(i.second.value), tmp);
   }
 
   return count;
@@ -509,16 +560,15 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
      If '3', send bare queries
   */
 
-  SyncRes::EDNSStatus* ednsstatus;
-  ednsstatus = &t_sstorage.ednsstatus[ip]; // does this include port? YES
+  SyncRes::EDNSStatus* ednsstatus = &t_sstorage.ednsstatus[ip]; // does this include port? YES
 
-  if(ednsstatus->modeSetAt && ednsstatus->modeSetAt + 3600 < d_now.tv_sec) {
-    *ednsstatus=SyncRes::EDNSStatus();
+  if (ednsstatus->modeSetAt && ednsstatus->modeSetAt + 3600 < d_now.tv_sec) {
+    *ednsstatus = SyncRes::EDNSStatus();
     //    cerr<<"Resetting EDNS Status for "<<ip.toString()<<endl);
   }
 
-  SyncRes::EDNSStatus::EDNSMode& mode=ednsstatus->mode;
-  SyncRes::EDNSStatus::EDNSMode oldmode = mode;
+  SyncRes::EDNSStatus::EDNSMode *mode = &ednsstatus->mode;
+  SyncRes::EDNSStatus::EDNSMode oldmode = *mode;
   int EDNSLevel = 0;
   auto luaconfsLocal = g_luaconfs.getLocal();
   ResolveContext ctx;
@@ -533,11 +583,11 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
   for(int tries = 0; tries < 3; ++tries) {
     //    cerr<<"Remote '"<<ip.toString()<<"' currently in mode "<<mode<<endl;
     
-    if(mode==EDNSStatus::NOEDNS) {
+    if (*mode == EDNSStatus::NOEDNS) {
       g_stats.noEdnsOutQueries++;
       EDNSLevel = 0; // level != mode
     }
-    else if(ednsMANDATORY || mode==EDNSStatus::UNKNOWN || mode==EDNSStatus::EDNSOK || mode==EDNSStatus::EDNSIGNORANT)
+    else if (ednsMANDATORY || *mode == EDNSStatus::UNKNOWN || *mode == EDNSStatus::EDNSOK || *mode == EDNSStatus::EDNSIGNORANT)
       EDNSLevel = 1;
 
     DNSName sendQname(domain);
@@ -550,6 +600,9 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
     else {
       ret=asyncresolve(ip, sendQname, type, doTCP, sendRDQuery, EDNSLevel, now, srcmask, ctx, d_outgoingProtobufServers, d_frameStreamServers, luaconfsLocal->outgoingProtobufExportConfig.exportTypes, res, chained);
     }
+    // ednsstatus might be cleared, so do a new lookup
+    ednsstatus = &t_sstorage.ednsstatus[ip]; // does this include port? YES
+    mode = &ednsstatus->mode;
     if(ret < 0) {
       return ret; // transport error, nothing to learn here
     }
@@ -557,25 +610,25 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
     if(ret == 0) { // timeout, not doing anything with it now
       return ret;
     }
-    else if(mode==EDNSStatus::UNKNOWN || mode==EDNSStatus::EDNSOK || mode == EDNSStatus::EDNSIGNORANT ) {
+    else if (*mode == EDNSStatus::UNKNOWN || *mode == EDNSStatus::EDNSOK || *mode == EDNSStatus::EDNSIGNORANT ) {
       if(res->d_validpacket && !res->d_haveEDNS && res->d_rcode == RCode::FormErr)  {
 	//	cerr<<"Downgrading to NOEDNS because of "<<RCode::to_s(res->d_rcode)<<" for query to "<<ip.toString()<<" for '"<<domain<<"'"<<endl;
-        mode = EDNSStatus::NOEDNS;
+        *mode = EDNSStatus::NOEDNS;
         continue;
       }
       else if(!res->d_haveEDNS) {
-        if(mode != EDNSStatus::EDNSIGNORANT) {
-          mode = EDNSStatus::EDNSIGNORANT;
+        if (*mode != EDNSStatus::EDNSIGNORANT) {
+          *mode = EDNSStatus::EDNSIGNORANT;
 	  //	  cerr<<"We find that "<<ip.toString()<<" is an EDNS-ignorer for '"<<domain<<"', moving to mode 2"<<endl;
 	}
       }
       else {
-	mode = EDNSStatus::EDNSOK;
+	*mode = EDNSStatus::EDNSOK;
 	//	cerr<<"We find that "<<ip.toString()<<" is EDNS OK!"<<endl;
       }
       
     }
-    if(oldmode != mode || !ednsstatus->modeSetAt)
+    if (oldmode != *mode || !ednsstatus->modeSetAt)
       ednsstatus->modeSetAt=d_now.tv_sec;
     //    cerr<<"Result: ret="<<ret<<", EDNS-level: "<<EDNSLevel<<", haveEDNS: "<<res->d_haveEDNS<<", new mode: "<<mode<<endl;  
     return ret;
@@ -587,7 +640,7 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
 
 int SyncRes::doResolve(const DNSName &qname, const QType &qtype, vector<DNSRecord>&ret, unsigned int depth, set<GetBestNSAnswer>& beenthere, vState& state) {
 
-  if (!getQNameMinimization()) {
+  if (!getQNameMinimization() || isForwardOrAuth(qname)) {
     return doResolveNoQNameMinimization(qname, qtype, ret, depth, beenthere, state);
   }
 
@@ -685,6 +738,11 @@ int SyncRes::doResolve(const DNSName &qname, const QType &qtype, vector<DNSRecor
         QLOG("Step5: other rcode, last effort final resolve");
         setQNameMinimization(false);
         res = doResolveNoQNameMinimization(qname, qtype, ret, depth + 1, beenthere, state);
+
+        if(res == RCode::NoError) {
+          s_qnameminfallbacksuccess++;
+        }
+
         QLOG("Step5 End resolve: " << RCode::to_s(res) << "/" << ret.size());
         return res;
       }
@@ -3144,7 +3202,7 @@ bool SyncRes::doResolveAtThisIP(const std::string& prefix, const DNSName& qname,
       t_sstorage.nsSpeeds[nsName.empty()? DNSName(remoteIP.toStringWithPort()) : nsName].submit(remoteIP, 1000000, &d_now); // 1 sec
 
       // code below makes sure we don't filter COM or the root
-      if (s_serverdownmaxfails > 0 && (auth != g_rootdnsname) && t_sstorage.fails.incr(remoteIP) >= s_serverdownmaxfails) {
+      if (s_serverdownmaxfails > 0 && (auth != g_rootdnsname) && t_sstorage.fails.incr(remoteIP, d_now) >= s_serverdownmaxfails) {
         LOG(prefix<<qname<<": Max fails reached resolving on "<< remoteIP.toString() <<". Going full throttle for "<< s_serverdownthrottletime <<" seconds" <<endl);
         // mark server as down
         t_sstorage.throttle.throttle(d_now.tv_sec, boost::make_tuple(remoteIP, "", 0), s_serverdownthrottletime, 10000);

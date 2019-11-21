@@ -1150,16 +1150,16 @@ matching ``*.foo.example.net`` will be answered with NXDOMAIN directly
 without consulting authoritative servers.
 
 no
-~~
+^^
 No :rfc:`8020` processing is done.
 
 dnssec
-~~~~~~
+^^^^^^
 :rfc:`8020` processing is only done using cached NXDOMAIN records that are
 DNSSEC validated.
 
 yes
-~~~
+^^^
 :rfc:`8020` processing is done using any non-Bogus NXDOMAIN record
 available in the cache.
 
@@ -1239,9 +1239,9 @@ Path to the Public Suffix List file, if any. If set, PowerDNS will try to load t
 .. versionadded:: 4.3.0
 
 -  Boolean
--  Default: no
+-  Default: yes
 
-Enable Query Name Minimization. This is a experimental feature, implementing a relaxed form of Query Name Mimimization as
+Enable Query Name Minimization. This implements a relaxed form of Query Name Mimimization as
 described in :rfc:`7816`.
 
 .. _setting-query-local-address:

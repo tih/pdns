@@ -2844,7 +2844,9 @@ static void doStats(void)
 
     g_log<<Logger::Notice<<"stats: throttle map: "
       << broadcastAccFunction<uint64_t>(pleaseGetThrottleSize) <<", ns speeds: "
-      << broadcastAccFunction<uint64_t>(pleaseGetNsSpeedsSize)<<endl;
+      << broadcastAccFunction<uint64_t>(pleaseGetNsSpeedsSize)<<", failed ns: "
+      << broadcastAccFunction<uint64_t>(pleaseGetFailedServersSize)<<", ednsmap: "
+      <<broadcastAccFunction<uint64_t>(pleaseGetEDNSStatusesSize)<<endl;
     g_log<<Logger::Notice<<"stats: outpacket/query ratio "<<(int)(SyncRes::s_outqueries*100.0/SyncRes::s_queries)<<"%";
     g_log<<Logger::Notice<<", "<<(int)(SyncRes::s_throttledqueries*100.0/(SyncRes::s_outqueries+SyncRes::s_throttledqueries))<<"% throttled, "
      <<SyncRes::s_nodelegated<<" no-delegation drops"<<endl;
@@ -2908,6 +2910,10 @@ static void houseKeeping(void *)
       if(!((cleanCounter++)%40)) {  // this is a full scan!
 	time_t limit=now.tv_sec-300;
         SyncRes::pruneNSSpeeds(limit);
+        limit = now.tv_sec - SyncRes::s_serverdownthrottletime * 10;
+        SyncRes::pruneFailedServers(limit);
+        limit = now.tv_sec - 2*3600;
+        SyncRes::pruneEDNSStatuses(limit);
       }
       last_prune=time(0);
     }
@@ -4279,16 +4285,29 @@ static int serviceMain(int argc, char*argv[])
     infos.isListener = true;
     infos.isWorker = true;
     recursorThread(currentThreadId++, "worker");
+    
+    handlerInfos.thread.join();
   }
   else {
+
+    
+    if (g_weDistributeQueries) {
+      for(unsigned int n=0; n < g_numDistributorThreads; ++n) {
+        auto& infos = s_threadInfos.at(currentThreadId + n);
+        infos.isListener = true;
+      }
+    }
+    for(unsigned int n=0; n < g_numWorkerThreads; ++n) {
+      auto& infos = s_threadInfos.at(currentThreadId + (g_weDistributeQueries ? g_numDistributorThreads : 0) + n);
+      infos.isListener = !g_weDistributeQueries;
+      infos.isWorker = true;
+    }
 
     if (g_weDistributeQueries) {
       g_log<<Logger::Warning<<"Launching "<< g_numDistributorThreads <<" distributor threads"<<endl;
       for(unsigned int n=0; n < g_numDistributorThreads; ++n) {
         auto& infos = s_threadInfos.at(currentThreadId);
-        infos.isListener = true;
         infos.thread = std::thread(recursorThread, currentThreadId++, "distr");
-
         setCPUMap(cpusMap, currentThreadId, infos.thread.native_handle());
       }
     }
@@ -4297,10 +4316,7 @@ static int serviceMain(int argc, char*argv[])
 
     for(unsigned int n=0; n < g_numWorkerThreads; ++n) {
       auto& infos = s_threadInfos.at(currentThreadId);
-      infos.isListener = g_weDistributeQueries ? false : true;
-      infos.isWorker = true;
       infos.thread = std::thread(recursorThread, currentThreadId++, "worker");
-
       setCPUMap(cpusMap, currentThreadId, infos.thread.native_handle());
     }
 
@@ -4313,8 +4329,14 @@ static int serviceMain(int argc, char*argv[])
     infos.isHandler = true;
     infos.thread = std::thread(recursorThread, 0, "web+stat");
 
-    s_threadInfos.at(0).thread.join();
+    for (auto & ti : s_threadInfos) {
+      ti.thread.join();
+    }
   }
+
+#ifdef HAVE_PROTOBUF
+  google::protobuf::ShutdownProtobufLibrary();
+#endif /* HAVE_PROTOBUF */
   return 0;
 }
 
@@ -4399,11 +4421,13 @@ try
 
   t_fdm=getMultiplexer();
 
+  RecursorWebServer *rws = nullptr;
+  
   if(threadInfo.isHandler) {
     if(::arg().mustDo("webserver")) {
       g_log<<Logger::Warning << "Enabling web server" << endl;
       try {
-        new RecursorWebServer(t_fdm);
+        rws = new RecursorWebServer(t_fdm);
       }
       catch(PDNSException &e) {
         g_log<<Logger::Error<<"Exception: "<<e.reason<<endl;
@@ -4448,7 +4472,8 @@ try
   time_t carbonInterval=::arg().asNum("carbon-interval");
   time_t luaMaintenanceInterval=::arg().asNum("lua-maintenance-interval");
   counter.store(0); // used to periodically execute certain tasks
-  for(;;) {
+
+  while (!RecursorControlChannel::stop) {
     while(MT->schedule(&g_now)); // MTasker letting the mthreads do their thing
 
     if(!(counter%500)) {
@@ -4516,6 +4541,9 @@ try
       }
     }
   }
+  delete rws;
+  delete t_fdm;
+  return 0;
 }
 catch(PDNSException &ae) {
   g_log<<Logger::Error<<"Exception: "<<ae.reason<<endl;
@@ -4706,7 +4734,8 @@ int main(int argc, char **argv)
     ::arg().set("rng", "Specify random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
     ::arg().set("public-suffix-list-file", "Path to the Public Suffix List file, if any")="";
     ::arg().set("distribution-load-factor", "The load factor used when PowerDNS is distributing queries to worker threads")="0.0";
-    ::arg().setSwitch("qname-minimization", "Use Query Name Minimization")="no";
+
+    ::arg().setSwitch("qname-minimization", "Use Query Name Minimization")="yes";
     ::arg().setSwitch("nothing-below-nxdomain", "When an NXDOMAIN exists in cache for a name with fewer labels than the qname, send NXDOMAIN without doing a lookup (see RFC 8020)")="dnssec";
     ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
 
