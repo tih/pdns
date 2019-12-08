@@ -1771,7 +1771,7 @@ static cspmap_t harvestCSPFromNE(const NegCache::NegCacheEntry& ne)
     }
   }
   for(const auto& rec : ne.DNSSECRecords.records) {
-    cspmap[{rec.d_name, rec.d_type}].records.push_back(rec.d_content);
+    cspmap[{rec.d_name, rec.d_type}].records.insert(rec.d_content);
   }
   return cspmap;
 }
@@ -2229,14 +2229,14 @@ vState SyncRes::validateDNSKeys(const DNSName& zone, const std::vector<DNSRecord
   }
 
   skeyset_t tentativeKeys;
-  std::vector<shared_ptr<DNSRecordContent> > toSign;
+  sortedRecords_t toSign;
 
   for (const auto& dnskey : dnskeys) {
     if (dnskey.d_type == QType::DNSKEY) {
       auto content = getRR<DNSKEYRecordContent>(dnskey);
       if (content) {
         tentativeKeys.insert(content);
-        toSign.push_back(content);
+        toSign.insert(content);
       }
     }
   }
@@ -2316,9 +2316,9 @@ vState SyncRes::validateRecordsWithSigs(unsigned int depth, const DNSName& qname
     return Bogus;
   }
 
-  std::vector<std::shared_ptr<DNSRecordContent> > recordcontents;
+  sortedRecords_t recordcontents;
   for (const auto& record : records) {
-    recordcontents.push_back(record.d_content);
+    recordcontents.insert(record.d_content);
   }
 
   LOG(d_prefix<<"Going to validate "<<recordcontents.size()<< " record contents with "<<signatures.size()<<" sigs and "<<keys.size()<<" keys for "<<name<<endl);
@@ -2784,8 +2784,8 @@ RCode::rcodes_ SyncRes::updateCacheFromRecords(unsigned int depth, LWResult& lwr
       if (i->first.place == DNSResourceRecord::ANSWER && ednsmask) {
         // If ednsmask is relevant, we do not want to cache if the scope prefix length is large and TTL is small
         if (SyncRes::s_ecscachelimitttl > 0) {
-          bool manyMaskBits = (ednsmask->isIpv4() && ednsmask->getBits() > SyncRes::s_ecsipv4cachelimit) ||
-            (ednsmask->isIpv6() && ednsmask->getBits() > SyncRes::s_ecsipv6cachelimit);
+          bool manyMaskBits = (ednsmask->isIPv4() && ednsmask->getBits() > SyncRes::s_ecsipv4cachelimit) ||
+            (ednsmask->isIPv6() && ednsmask->getBits() > SyncRes::s_ecsipv6cachelimit);
 
           if (manyMaskBits) {
             uint32_t minttl = UINT32_MAX;
@@ -3141,7 +3141,7 @@ bool SyncRes::doResolveAtThisIP(const std::string& prefix, const DNSName& qname,
       s_ecsresponses++;
       LOG(prefix<<qname<<": Received EDNS Client Subnet Mask "<<ednsmask->toString()<<" on response"<<endl);
       if (ednsmask->getBits() > 0) {
-        if (ednsmask->isIpv4()) {
+        if (ednsmask->isIPv4()) {
           ++SyncRes::s_ecsResponsesBySubnetSize4.at(ednsmask->getBits()-1);
         }
         else {
@@ -3556,7 +3556,7 @@ void SyncRes::setQuerySource(const ComboAddress& requestor, boost::optional<cons
 
   if (incomingECS && incomingECS->source.getBits() > 0) {
     d_cacheRemote = incomingECS->source.getMaskedNetwork();
-    uint8_t bits = std::min(incomingECS->source.getBits(), (incomingECS->source.isIpv4() ? s_ecsipv4limit : s_ecsipv6limit));
+    uint8_t bits = std::min(incomingECS->source.getBits(), (incomingECS->source.isIPv4() ? s_ecsipv4limit : s_ecsipv6limit));
     ComboAddress trunc = incomingECS->source.getNetwork();
     trunc.truncate(bits);
     d_outgoingECSNetwork = boost::optional<Netmask>(Netmask(trunc, bits));

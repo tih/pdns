@@ -71,7 +71,7 @@ private:
 
   struct HashTag{};
   struct NameTag{};
-  struct SequenceTag{};
+  struct SequencedTag{};
   typedef multi_index_container<
     CacheEntry,
     indexed_by <
@@ -80,14 +80,23 @@ private:
                                                          member<CacheEntry,uint16_t,&CacheEntry::qtype>,
                                                          member<CacheEntry,int, &CacheEntry::zoneID> > > ,
       ordered_non_unique<tag<NameTag>, member<CacheEntry,DNSName,&CacheEntry::qname>, CanonDNSNameCompare >,
-      sequenced<tag<SequenceTag>>
+      sequenced<tag<SequencedTag>>
                            >
   > cmap_t;
 
 
   struct MapCombo
   {
-    pthread_rwlock_t d_mut;    
+    MapCombo() {
+      pthread_rwlock_init(&d_mut, nullptr);
+    }
+    ~MapCombo() {
+      pthread_rwlock_destroy(&d_mut);
+    }
+    MapCombo(const MapCombo &) = delete; 
+    MapCombo & operator=(const MapCombo &) = delete;
+
+    pthread_rwlock_t d_mut;
     cmap_t d_map;
   };
 

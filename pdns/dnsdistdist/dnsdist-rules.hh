@@ -103,7 +103,7 @@ public:
         iter = d_limits.insert(e).first;
       }
 
-      moveCacheItemToBack(d_limits, iter);
+      moveCacheItemToBack<SequencedTag>(d_limits, iter);
       return !iter->d_limiter.check(d_qps, d_burst);
     }
   }
@@ -234,6 +234,11 @@ public:
   {
     pthread_rwlock_init(&d_lock4, 0);
     pthread_rwlock_init(&d_lock6, 0);
+  }
+  ~TimedIPSetRule()
+  {
+    pthread_rwlock_destroy(&d_lock4);
+    pthread_rwlock_destroy(&d_lock6);
   }
   bool matches(const DNSQuestion* dq) const override
   {

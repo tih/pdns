@@ -282,7 +282,7 @@ public:
     }
 
     if (updated && blocks) {
-      g_dynblockNMG.setState(*blocks);
+      g_dynblockNMG.setState(std::move(*blocks));
     }
 
     if (!statNodeRoot.empty()) {
@@ -312,7 +312,7 @@ public:
           addOrRefreshBlockSMT(smtBlocks, now, name, d_suffixMatchRule, updated);
         }
         if (updated) {
-          g_dynblockSMT.setState(smtBlocks);
+          g_dynblockSMT.setState(std::move(smtBlocks));
         }
       }
     }
@@ -577,7 +577,7 @@ private:
         }
 
         if (suffixMatchRuleMatches) {
-          root.submit(c.name, ((c.dh.rcode == 0 && c.usec == std::numeric_limits<unsigned int>::max()) ? -1 : c.dh.rcode), boost::none);
+          root.submit(c.name, ((c.dh.rcode == 0 && c.usec == std::numeric_limits<unsigned int>::max()) ? -1 : c.dh.rcode), c.size, boost::none);
         }
       }
     }

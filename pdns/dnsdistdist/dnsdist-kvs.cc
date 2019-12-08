@@ -128,6 +128,10 @@ CDBKVStore::CDBKVStore(const std::string& fname, time_t refreshDelay): d_fname(f
   refreshDBIfNeeded(now);
 }
 
+CDBKVStore::~CDBKVStore() {
+  pthread_rwlock_destroy(&d_lock);
+}
+
 bool CDBKVStore::reload(const struct stat& st)
 {
   auto newCDB = std::unique_ptr<CDB>(new CDB(d_fname));
@@ -194,7 +198,7 @@ bool CDBKVStore::getValue(const std::string& key, std::string& value)
     }
   }
   catch(const std::exception& e) {
-    warnlog("Error while looking up key '%s' from CDB file '%s': %s", key, d_fname);
+    warnlog("Error while looking up key '%s' from CDB file '%s': %s", key, d_fname, e.what());
   }
   return false;
 }
@@ -218,7 +222,7 @@ bool CDBKVStore::keyExists(const std::string& key)
     }
   }
   catch(const std::exception& e) {
-    warnlog("Error while looking up key '%s' from CDB file '%s': %s", key, d_fname);
+    warnlog("Error while looking up key '%s' from CDB file '%s': %s", key, d_fname, e.what());
   }
   return false;
 }

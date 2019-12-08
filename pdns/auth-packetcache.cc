@@ -30,13 +30,8 @@ extern StatBag S;
 
 const unsigned int AuthPacketCache::s_mincleaninterval, AuthPacketCache::s_maxcleaninterval;
 
-AuthPacketCache::AuthPacketCache(size_t mapsCount): d_lastclean(time(nullptr))
+AuthPacketCache::AuthPacketCache(size_t mapsCount): d_lastclean(time(nullptr)), d_maps(mapsCount)
 {
-  d_maps.resize(mapsCount);
-  for(auto& mc : d_maps) {
-    pthread_rwlock_init(&mc.d_mut, 0);
-  }
-
   S.declare("packetcache-hit", "Number of hits on the packet cache");
   S.declare("packetcache-miss", "Number of misses on the packet cache");
   S.declare("packetcache-size", "Number of entries in the packet cache");
@@ -207,7 +202,7 @@ uint64_t AuthPacketCache::purge()
 uint64_t AuthPacketCache::purgeExact(const DNSName& qname)
 {
   auto& mc = getMap(qname);
-  uint64_t delcount = purgeExactLockedCollection(mc, qname);
+  uint64_t delcount = purgeExactLockedCollection<NameTag>(mc, qname);
 
   *d_statnumentries -= delcount;
 
@@ -224,7 +219,7 @@ uint64_t AuthPacketCache::purge(const string &match)
   uint64_t delcount = 0;
 
   if(ends_with(match, "$")) {
-    delcount = purgeLockedCollectionsVector(d_maps, match);
+    delcount = purgeLockedCollectionsVector<NameTag>(d_maps, match);
     *d_statnumentries -= delcount;
   }
   else {
@@ -240,7 +235,7 @@ void AuthPacketCache::cleanup()
   uint64_t cacheSize = *d_statnumentries;
   uint64_t totErased = 0;
 
-  totErased = pruneLockedCollectionsVector(d_maps, maxCached, cacheSize);
+  totErased = pruneLockedCollectionsVector<SequencedTag>(d_maps, maxCached, cacheSize);
   *d_statnumentries -= totErased;
 
   DLOG(g_log<<"Done with cache clean, cacheSize: "<<(*d_statnumentries)<<", totErased"<<totErased<<endl);

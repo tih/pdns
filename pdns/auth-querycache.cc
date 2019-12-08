@@ -31,13 +31,8 @@ extern StatBag S;
 
 const unsigned int AuthQueryCache::s_mincleaninterval, AuthQueryCache::s_maxcleaninterval;
 
-AuthQueryCache::AuthQueryCache(size_t mapsCount): d_lastclean(time(nullptr))
+AuthQueryCache::AuthQueryCache(size_t mapsCount): d_maps(mapsCount), d_lastclean(time(nullptr))
 {
-  d_maps.resize(mapsCount);
-  for(auto& mc : d_maps) {
-    pthread_rwlock_init(&mc.d_mut, 0);
-  }
-
   S.declare("query-cache-hit","Number of hits on the query cache");
   S.declare("query-cache-miss","Number of misses on the query cache");
   S.declare("query-cache-size", "Number of entries in the query cache");
@@ -173,7 +168,7 @@ uint64_t AuthQueryCache::purge()
 uint64_t AuthQueryCache::purgeExact(const DNSName& qname)
 {
   auto& mc = getMap(qname);
-  uint64_t delcount = purgeExactLockedCollection(mc, qname);
+  uint64_t delcount = purgeExactLockedCollection<NameTag>(mc, qname);
 
   *d_statnumentries -= delcount;
 
@@ -186,7 +181,7 @@ uint64_t AuthQueryCache::purge(const string &match)
   uint64_t delcount = 0;
 
   if(ends_with(match, "$")) {
-    delcount = purgeLockedCollectionsVector(d_maps, match);
+    delcount = purgeLockedCollectionsVector<NameTag>(d_maps, match);
     *d_statnumentries -= delcount;
   }
   else {
@@ -202,7 +197,7 @@ void AuthQueryCache::cleanup()
   uint64_t cacheSize = *d_statnumentries;
   uint64_t totErased = 0;
 
-  totErased = pruneLockedCollectionsVector(d_maps, maxCached, cacheSize);
+  totErased = pruneLockedCollectionsVector<SequencedTag>(d_maps, maxCached, cacheSize);
 
   *d_statnumentries -= totErased;
   DLOG(g_log<<"Done with cache clean, cacheSize: "<<*d_statnumentries<<", totErased"<<totErased<<endl);
