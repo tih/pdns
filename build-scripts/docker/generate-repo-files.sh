@@ -8,7 +8,8 @@
 if [ "$1" = "" -o "$1" = "-?" -o "$1" = "-h" -o "$1" = "--help" ]; then
     echo "Usage: generate-repo-files.sh RELEASE"
     echo
-    echo "  • RELEASE: [ auth-40 | auth-41 | auth-42 | rec-40 | rec-41 | rec-42 ]"
+    echo "  • RELEASE: [ auth-40 | auth-41 | auth-42 | auth-43 |"
+    echo "               rec-40 | rec-41 | rec-42 | rec-43 ]"
     exit 1
 fi
 
@@ -21,7 +22,14 @@ write_centos()
     cat <<EOF > Dockerfile.$RELEASE.$OS-$VERSION
 FROM $OS:$VERSION
 
-RUN yum install -y epel-release yum-plugin-priorities
+RUN yum install -y epel-release bind-utils
+EOF
+    if [ "$VERSION" = "6" -o "$VERSION" = "7" ]; then
+        cat <<EOF >> Dockerfile.$RELEASE.$OS-$VERSION
+RUN yum install -y yum-plugin-priorities
+EOF
+    fi
+    cat <<EOF >> Dockerfile.$RELEASE.$OS-$VERSION
 RUN curl -o /etc/yum.repos.d/powerdns-$RELEASE.repo https://repo.powerdns.com/repo-files/$OS-$RELEASE.repo
 RUN yum install -y $PKG
 
@@ -48,7 +56,7 @@ EOF
 FROM $OS:$VERSION
 
 RUN apt-get update
-RUN apt-get install -y curl gnupg
+RUN apt-get install -y curl gnupg dnsutils
 
 COPY pdns.debian-and-ubuntu /etc/apt/preferences.d/pdns
 COPY pdns.list.$RELEASE.$OS-$VERSION /etc/apt/sources.list.d/pdns.list
@@ -91,12 +99,19 @@ elif [ "$RELEASE" = "auth-41" ]; then
 elif [ "$RELEASE" = "auth-42" ]; then
     write_centos 6 pdns pdns_server
     write_centos 7 pdns pdns_server
-    write_debian jessie pdns-server pdns_server
+    write_centos 8 pdns pdns_server
     write_debian stretch pdns-server pdns_server
-    write_ubuntu trusty pdns-server pdns_server
+    write_debian buster pdns-server pdns_server
     write_ubuntu xenial pdns-server pdns_server
     write_ubuntu bionic pdns-server pdns_server
-    write_ubuntu cosmic pdns-server pdns_server
+elif [ "$RELEASE" = "auth-43" ]; then
+    write_centos 6 pdns pdns_server
+    write_centos 7 pdns pdns_server
+    write_centos 8 pdns pdns_server
+    write_debian stretch pdns-server pdns_server
+    write_debian buster pdns-server pdns_server
+    write_ubuntu xenial pdns-server pdns_server
+    write_ubuntu bionic pdns-server pdns_server
 elif [ "$RELEASE" = "rec-40" ]; then
     write_centos 6 pdns-recursor pdns_recursor
     write_centos 7 pdns-recursor pdns_recursor
@@ -115,13 +130,19 @@ elif [ "$RELEASE" = "rec-41" ]; then
 elif [ "$RELEASE" = "rec-42" ]; then
     write_centos 6 pdns-recursor pdns_recursor
     write_centos 7 pdns-recursor pdns_recursor
-    write_debian jessie pdns-recursor pdns_recursor
+    write_centos 8 pdns-recursor pdns_recursor
     write_debian stretch pdns-recursor pdns_recursor
     write_debian buster pdns-recursor pdns_recursor
-    write_ubuntu trusty pdns-recursor pdns_recursor
     write_ubuntu xenial pdns-recursor pdns_recursor
     write_ubuntu bionic pdns-recursor pdns_recursor
-    write_ubuntu cosmic pdns-recursor pdns_recursor
+elif [ "$RELEASE" = "rec-43" ]; then
+    write_centos 6 pdns-recursor pdns_recursor
+    write_centos 7 pdns-recursor pdns_recursor
+    write_centos 8 pdns-recursor pdns_recursor
+    write_debian stretch pdns-recursor pdns_recursor
+    write_debian buster pdns-recursor pdns_recursor
+    write_ubuntu xenial pdns-recursor pdns_recursor
+    write_ubuntu bionic pdns-recursor pdns_recursor
 else
     echo "Invalid release: $RELEASE"
     exit 1

@@ -744,6 +744,8 @@ available in non-static distributions.
 
 ``local-address``
 -----------------
+.. versionchanged:: 4.3.0
+  now also takes your IPv6 addresses
 
 .. versionchanged:: 4.3.0
   Before 4.3.0, this setting only supported IPv4.
@@ -772,6 +774,8 @@ Fail to start if one or more of the
 
 ``local-ipv6``
 --------------
+.. versionchanged:: 4.3.0
+  removed, use :ref:`setting-local-address`
 
 .. deprecated:: 4.3.0
   This setting has been removed, use :ref:`setting-localaddress`
@@ -876,6 +880,32 @@ e.g. error = 3, warning = 4, notice = 5, info = 6
 .. versionadded:: 4.1.0
 
 Script to be used to edit incoming AXFRs, see :ref:`modes-of-operation-axfrfilter`
+
+.. _setting-lua-health-checks-expire-delay:
+
+``lua-health-checks-expire-delay``
+----------------------------------
+
+-  Integer
+-  Default: 3600
+
+.. versionadded:: 4.3.0
+
+Amount of time (in seconds) to expire (remove) a LUA monitoring check when the record
+isn't used any more (either deleted or modified).
+
+.. _setting-lua-health-checks-interval:
+
+``lua-health-checks-interval``
+------------------------------
+
+-  Integer
+-  Default: 5
+
+.. versionadded:: 4.3.0
+
+Amount of time (in seconds) between subsequent monitoring health checks. Does nothing
+if the checks take more than that time to execute.
 
 .. _setting-lua-prequery-script:
 
