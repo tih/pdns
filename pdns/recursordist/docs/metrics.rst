@@ -59,7 +59,10 @@ Should Carbon not be the preferred way of receiving metric, several other techni
 
 Using the Webserver
 ^^^^^^^^^^^^^^^^^^^
-The :doc:`API <http-api/index>` exposes a statistics endpoint at :http:get:`/api/v1/servers/:server_id/statistics`.
+The :doc:`API <http-api/index>` exposes a statistics endpoint at
+
+.. http:get:: /api/v1/servers/:server_id/statistics
+              
 This endpoint exports all statistics in a single JSON document.
 
 Using ``rec_control``
@@ -189,6 +192,18 @@ cpu-msec-thread-n
 ^^^^^^^^^^^^^^^^^
 shows the number of milliseconds spent in thread n. Available since 4.1.12.
 
+cpu-iowait
+^^^^^^^^^^
+.. versionadded:: 4.4
+
+Time spent waiting for I/O to complete by the whole system, in units of USER_HZ.
+
+cpu-steal
+^^^^^^^^^
+.. versionadded:: 4.4
+
+Stolen time, which is the time spent by the whole system in other operating systems when running in a virtualized environment, in units of USER_HZ.
+
 dlg-only-drops
 ^^^^^^^^^^^^^^
 number of records dropped because of :ref:`setting-delegation-only` setting
@@ -240,7 +255,8 @@ number of outgoing queries dropped because of   :ref:`setting-dont-query` settin
 qname-min-fallback-success
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. versionadded:: 4.3.0
-number of successful queries due to fallback mechanism within :ref:`qname-minimization` setting.
+
+number of successful queries due to fallback mechanism within :ref:`setting-qname-minimization` setting.
 
 ecs-queries
 ^^^^^^^^^^^
@@ -372,7 +388,7 @@ packets dropped because of (Lua) policy decision
 
 policy-result-noaction
 ^^^^^^^^^^^^^^^^^^^^^^
-packets that were not actioned upon by   the RPZ/filter engine
+packets that were not acted upon by   the RPZ/filter engine
 
 policy-result-drop
 ^^^^^^^^^^^^^^^^^^
@@ -393,6 +409,12 @@ packets that were forced to TCP by the   RPZ/filter engine
 policy-result-custom
 ^^^^^^^^^^^^^^^^^^^^
 packets that were sent a custom answer by   the RPZ/filter engine
+
+proxy-protocol-invalid
+^^^^^^^^^^^^^^^^^^^^^^
+.. versionadded:: 4.4
+
+Invalid proxy-protocol headers received.
 
 qa-latency
 ^^^^^^^^^^

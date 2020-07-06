@@ -9,10 +9,17 @@ To visually interact with dnsdist, try add :func:`webserver` to the configuratio
 
 Now point your browser at http://127.0.0.1:8083 and log in with any username, and that password. Enjoy!
 
+Since 1.5.0, only connections from 127.0.0.1 and ::1 are allowed by default. To allow connections from 192.0.2.0/24 but not from 192.0.2.1, instead:
+
+.. code-block:: lua
+
+  webserver("127.0.0.1:8083", "supersecretpassword", "supersecretAPIkey", {}, "192.0.2.0/24, !192.0.2.1")
+
+
 Security of the Webserver
 -------------------------
 
-The built-in webserver serves its content from inside the binary, this means it will not and connot read from disk.
+The built-in webserver serves its content from inside the binary, this means it will not and cannot read from disk.
 
 By default, our web server sends some security-related headers::
 
@@ -27,7 +34,7 @@ For example, to remove the X-Frame-Options header and add a X-Custom one:
 
 .. code-block:: lua
 
-  webserver("127.0.0.1:8080", "supersecret", "apikey", {["X-Frame-Options"]= "", ["X-Custom"]="custom"}
+  webserver("127.0.0.1:8080", "supersecret", "apikey", {["X-Frame-Options"]= "", ["X-Custom"]="custom"})
 
 Credentials can be changed over time using the :func:`setWebserverConfig` function.
 
@@ -38,7 +45,7 @@ To access the API, the `apikey` must be set in the :func:`webserver` function.
 Use the API, this key will need to be sent to dnsdist in the ``X-API-Key`` request header.
 An HTTP 401 response is returned when a wrong or no API key is received.
 A 404 response is generated is the requested endpoint does not exist.
-And a 405 response is returned when the HTTP methos is not allowed.
+And a 405 response is returned when the HTTP method is not allowed.
 
 URL Endpoints
 ~~~~~~~~~~~~~
@@ -340,6 +347,7 @@ URL Endpoints
   Allows you to update the ``allow-from`` :ref:`ACL <ACL>` with a list of netmasks.
 
   Make sure you made the API writable using :func:`setAPIWritable`.
+  Changes to the ACL are directly applied, no restart is required.
 
   **Example request**:
 

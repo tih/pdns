@@ -19,27 +19,83 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#include "dnsdist.hh"
-#include "sstuff.hh"
-#include "ext/json11/json11.hpp"
-#include "ext/incbin/incbin.h"
-#include "dolog.hh"
-#include <thread>
-#include "threadname.hh"
+
+#include <boost/format.hpp>
 #include <sstream>
-#include <yahttp/yahttp.hpp>
-#include "namespaces.hh"
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <thread>
+
 #include "ext/incbin/incbin.h"
-#include "htmlfiles.h"
+#include "ext/json11/json11.hpp"
+#include <yahttp/yahttp.hpp>
+
 #include "base64.hh"
+#include "dnsdist.hh"
+#include "dnsdist-healthchecks.hh"
+#include "dnsdist-prometheus.hh"
+#include "dnsdist-web.hh"
+#include "dolog.hh"
 #include "gettime.hh"
-#include  <boost/format.hpp>
+#include "htmlfiles.h"
+#include "threadname.hh"
+#include "sstuff.hh"
 
 bool g_apiReadWrite{false};
 WebserverConfig g_webserverConfig;
 std::string g_apiConfigDirectory;
+static const MetricDefinitionStorage s_metricDefinitions;
+
+const std::map<std::string, MetricDefinition> MetricDefinitionStorage::metrics{
+  { "responses",              MetricDefinition(PrometheusMetricType::counter, "Number of responses received from backends") },
+  { "servfail-responses",     MetricDefinition(PrometheusMetricType::counter, "Number of SERVFAIL answers received from backends") },
+  { "queries",                MetricDefinition(PrometheusMetricType::counter, "Number of received queries")},
+  { "frontend-nxdomain",      MetricDefinition(PrometheusMetricType::counter, "Number of NXDomain answers sent to clients")},
+  { "frontend-servfail",      MetricDefinition(PrometheusMetricType::counter, "Number of SERVFAIL answers sent to clients")},
+  { "frontend-noerror",       MetricDefinition(PrometheusMetricType::counter, "Number of NoError answers sent to clients")},
+  { "acl-drops",              MetricDefinition(PrometheusMetricType::counter, "Number of packets dropped because of the ACL")},
+  { "rule-drop",              MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of a rule")},
+  { "rule-nxdomain",          MetricDefinition(PrometheusMetricType::counter, "Number of NXDomain answers returned because of a rule")},
+  { "rule-refused",           MetricDefinition(PrometheusMetricType::counter, "Number of Refused answers returned because of a rule")},
+  { "rule-servfail",          MetricDefinition(PrometheusMetricType::counter, "Number of SERVFAIL answers received because of a rule")},
+  { "self-answered",          MetricDefinition(PrometheusMetricType::counter, "Number of self-answered responses")},
+  { "downstream-timeouts",    MetricDefinition(PrometheusMetricType::counter, "Number of queries not answered in time by a backend")},
+  { "downstream-send-errors", MetricDefinition(PrometheusMetricType::counter, "Number of errors when sending a query to a backend")},
+  { "trunc-failures",         MetricDefinition(PrometheusMetricType::counter, "Number of errors encountered while truncating an answer")},
+  { "no-policy",              MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because no server was available")},
+  { "latency0-1",             MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in less than 1ms")},
+  { "latency1-10",            MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in 1-10 ms")},
+  { "latency10-50",           MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in 10-50 ms")},
+  { "latency50-100",          MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in 50-100 ms")},
+  { "latency100-1000",        MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in 100-1000 ms")},
+  { "latency-slow",           MetricDefinition(PrometheusMetricType::counter, "Number of queries answered in more than 1 second")},
+  { "latency-avg100",         MetricDefinition(PrometheusMetricType::gauge,   "Average response latency in microseconds of the last 100 packets")},
+  { "latency-avg1000",        MetricDefinition(PrometheusMetricType::gauge,   "Average response latency in microseconds of the last 1000 packets")},
+  { "latency-avg10000",       MetricDefinition(PrometheusMetricType::gauge,   "Average response latency in microseconds of the last 10000 packets")},
+  { "latency-avg1000000",     MetricDefinition(PrometheusMetricType::gauge,   "Average response latency in microseconds of the last 1000000 packets")},
+  { "uptime",                 MetricDefinition(PrometheusMetricType::gauge,   "Uptime of the dnsdist process in seconds")},
+  { "real-memory-usage",      MetricDefinition(PrometheusMetricType::gauge,   "Current memory usage in bytes")},
+  { "noncompliant-queries",   MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped as non-compliant")},
+  { "noncompliant-responses", MetricDefinition(PrometheusMetricType::counter, "Number of answers from a backend dropped as non-compliant")},
+  { "rdqueries",              MetricDefinition(PrometheusMetricType::counter, "Number of received queries with the recursion desired bit set")},
+  { "empty-queries",          MetricDefinition(PrometheusMetricType::counter, "Number of empty queries received from clients")},
+  { "cache-hits",             MetricDefinition(PrometheusMetricType::counter, "Number of times an answer was retrieved from cache")},
+  { "cache-misses",           MetricDefinition(PrometheusMetricType::counter, "Number of times an answer not found in the cache")},
+  { "cpu-iowait",             MetricDefinition(PrometheusMetricType::counter, "Time waiting for I/O to complete by the whole system, in units of USER_HZ")},
+  { "cpu-user-msec",          MetricDefinition(PrometheusMetricType::counter, "Milliseconds spent by dnsdist in the user state")},
+  { "cpu-steal",              MetricDefinition(PrometheusMetricType::counter, "Stolen time, which is the time spent by the whole system in other operating systems when running in a virtualized environment, in units of USER_HZ")},
+  { "cpu-sys-msec",           MetricDefinition(PrometheusMetricType::counter, "Milliseconds spent by dnsdist in the system state")},
+  { "fd-usage",               MetricDefinition(PrometheusMetricType::gauge,   "Number of currently used file descriptors")},
+  { "dyn-blocked",            MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of a dynamic block")},
+  { "dyn-block-nmg-size",     MetricDefinition(PrometheusMetricType::gauge,   "Number of dynamic blocks entries") },
+  { "security-status",        MetricDefinition(PrometheusMetricType::gauge,   "Security status of this software. 0=unknown, 1=OK, 2=upgrade recommended, 3=upgrade mandatory") },
+  { "doh-query-pipe-full",    MetricDefinition(PrometheusMetricType::counter, "Number of DoH queries dropped because the internal pipe used to distribute queries was full") },
+  { "doh-response-pipe-full", MetricDefinition(PrometheusMetricType::counter, "Number of DoH responses dropped because the internal pipe used to distribute responses was full") },
+  { "udp-in-errors",          MetricDefinition(PrometheusMetricType::counter, "From /proc/net/snmp InErrors") },
+  { "udp-noport-errors",      MetricDefinition(PrometheusMetricType::counter, "From /proc/net/snmp NoPorts") },
+  { "udp-recvbuf-errors",     MetricDefinition(PrometheusMetricType::counter, "From /proc/net/snmp RcvbufErrors") },
+  { "udp-sndbuf-errors",      MetricDefinition(PrometheusMetricType::counter, "From /proc/net/snmp SndbufErrors") },
+};
 
 static bool apiWriteConfigFile(const string& filebasename, const string& content)
 {
@@ -166,6 +222,12 @@ static bool isMethodAllowed(const YaHTTP::Request& req)
     }
   }
   return false;
+}
+
+static bool isClientAllowedByACL(const ComboAddress& remote)
+{
+  std::lock_guard<std::mutex> lock(g_webserverConfig.lock);
+  return g_webserverConfig.acl.match(remote);
 }
 
 static void handleCORS(const YaHTTP::Request& req, YaHTTP::Response& resp)
@@ -342,15 +404,15 @@ static void connectionThread(int sock, ComboAddress remote)
         struct timespec now;
         gettime(&now);
         for(const auto& e: *nmg) {
-          if(now < e->second.until ) {
+          if(now < e.second.until ) {
             Json::object thing{
-              {"reason", e->second.reason},
-              {"seconds", (double)(e->second.until.tv_sec - now.tv_sec)},
-              {"blocks", (double)e->second.blocks},
-              {"action", DNSAction::typeToString(e->second.action != DNSAction::Action::None ? e->second.action : g_dynBlockAction) },
-              {"warning", e->second.warning }
+              {"reason", e.second.reason},
+              {"seconds", (double)(e.second.until.tv_sec - now.tv_sec)},
+              {"blocks", (double)e.second.blocks},
+              {"action", DNSAction::typeToString(e.second.action != DNSAction::Action::None ? e.second.action : g_dynBlockAction) },
+              {"warning", e.second.warning }
             };
-            obj.insert({e->first.toString(), thing});
+            obj.insert({e.first.toString(), thing});
           }
         }
 
@@ -419,12 +481,12 @@ static void connectionThread(int sock, ComboAddress remote)
           }
 
           MetricDefinition metricDetails;
-          if (!g_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
+          if (!s_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
               vinfolog("Do not have metric details for %s", metricName);
               continue;
           }
 
-          std::string prometheusTypeName = g_metricDefinitions.getPrometheusStringMetricType(metricDetails.prometheusType);
+          std::string prometheusTypeName = s_metricDefinitions.getPrometheusStringMetricType(metricDetails.prometheusType);
 
           if (prometheusTypeName == "") {
               vinfolog("Unknown Prometheus type for %s", metricName);
@@ -447,7 +509,7 @@ static void connectionThread(int sock, ComboAddress remote)
         }
 
         // Latency histogram buckets
-        output << "# HELP dnsdist_latency Histogram of responses by latency\n";
+        output << "# HELP dnsdist_latency Histogram of responses by latency (in milliseconds)\n";
         output << "# TYPE dnsdist_latency histogram\n";
         uint64_t latency_amounts = g_stats.latency0_1;
         output << "dnsdist_latency_bucket{le=\"1\"} " << latency_amounts << "\n";
@@ -467,6 +529,8 @@ static void connectionThread(int sock, ComboAddress remote)
         auto states = g_dstates.getLocal();
         const string statesbase = "dnsdist_server_";
 
+        output << "# HELP " << statesbase << "status "                 << "Whether this backend is up (1) or down (0)"                        << "\n";
+        output << "# TYPE " << statesbase << "status "                 << "gauge"                                                             << "\n";
         output << "# HELP " << statesbase << "queries "                << "Amount of queries relayed to server"                               << "\n";
         output << "# TYPE " << statesbase << "queries "                << "counter"                                                           << "\n";
         output << "# HELP " << statesbase << "responses "              << "Amount of responses received from this server"                     << "\n";
@@ -475,7 +539,7 @@ static void connectionThread(int sock, ComboAddress remote)
         output << "# TYPE " << statesbase << "drops "                  << "counter"                                                           << "\n";
         output << "# HELP " << statesbase << "latency "                << "Server's latency when answering questions in milliseconds"         << "\n";
         output << "# TYPE " << statesbase << "latency "                << "gauge"                                                             << "\n";
-        output << "# HELP " << statesbase << "senderrors "             << "Total number of OS send errors while relaying queries"              << "\n";
+        output << "# HELP " << statesbase << "senderrors "             << "Total number of OS send errors while relaying queries"             << "\n";
         output << "# TYPE " << statesbase << "senderrors "             << "counter"                                                           << "\n";
         output << "# HELP " << statesbase << "outstanding "            << "Current number of queries that are waiting for a backend response" << "\n";
         output << "# TYPE " << statesbase << "outstanding "            << "gauge"                                                             << "\n";
@@ -503,7 +567,7 @@ static void connectionThread(int sock, ComboAddress remote)
         for (const auto& state : *states) {
           string serverName;
 
-          if (state->name.empty())
+          if (state->getName().empty())
               serverName = state->remote.toStringWithPort();
           else
               serverName = state->getName();
@@ -513,6 +577,7 @@ static void connectionThread(int sock, ComboAddress remote)
           const std::string label = boost::str(boost::format("{server=\"%1%\",address=\"%2%\"}")
             % serverName % state->remote.toStringWithPort());
 
+          output << statesbase << "status"                 << label << " " << (state->isUp() ? "1" : "0")       << "\n";
           output << statesbase << "queries"                << label << " " << state->queries.load()             << "\n";
           output << statesbase << "responses"              << label << " " << state->responses.load()           << "\n";
           output << statesbase << "drops"                  << label << " " << state->reuseds.load()             << "\n";
@@ -739,6 +804,10 @@ static void connectionThread(int sock, ComboAddress remote)
           }
         }
 
+        output << "# HELP dnsdist_info " << "Info from dnsdist, value is always 1" << "\n";
+        output << "# TYPE dnsdist_info " << "gauge" << "\n";
+        output << "dnsdist_info{version=\"" << VERSION << "\"} " << "1" << "\n";
+
         resp.body = output.str();
         resp.headers["Content-Type"] = "text/plain";
     }
@@ -765,7 +834,7 @@ static void connectionThread(int sock, ComboAddress remote)
 
 	Json::object server{
 	  {"id", num++},
-	  {"name", a->name},
+	  {"name", a->getName()},
           {"address", a->remote.toStringWithPort()},
           {"state", status},
           {"qps", (double)a->queryLoad},
@@ -1170,6 +1239,17 @@ void setWebserverPassword(const std::string& password)
   g_webserverConfig.password = password;
 }
 
+void setWebserverACL(const std::string& acl)
+{
+  NetmaskGroup newACL;
+  newACL.toMasks(acl);
+
+  {
+    std::lock_guard<std::mutex> lock(g_webserverConfig.lock);
+    g_webserverConfig.acl = std::move(newACL);
+  }
+}
+
 void setWebserverCustomHeaders(const boost::optional<std::map<std::string, std::string> > customHeaders)
 {
   std::lock_guard<std::mutex> lock(g_webserverConfig.lock);
@@ -1181,15 +1261,21 @@ void dnsdistWebserverThread(int sock, const ComboAddress& local)
 {
   setThreadName("dnsdist/webserv");
   warnlog("Webserver launched on %s", local.toStringWithPort());
+
   for(;;) {
     try {
       ComboAddress remote(local);
       int fd = SAccept(sock, remote);
-      vinfolog("Got connection from %s", remote.toStringWithPort());
+      if (!isClientAllowedByACL(remote)) {
+        vinfolog("Connection to webserver from client %s is not allowed, closing", remote.toStringWithPort());
+        close(fd);
+        continue;
+      }
+      vinfolog("Got a connection to the webserver from %s", remote.toStringWithPort());
       std::thread t(connectionThread, fd, remote);
       t.detach();
     }
-    catch(std::exception& e) {
+    catch (const std::exception& e) {
       errlog("Had an error accepting new webserver connection: %s", e.what());
     }
   }

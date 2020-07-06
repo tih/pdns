@@ -382,9 +382,9 @@ static void apiServerCacheFlush(HttpRequest* req, HttpResponse* resp) {
   DNSName canon = apiNameToDNSName(req->getvars["domain"]);
   bool subtree = (req->getvars.count("subtree") > 0 && req->getvars["subtree"].compare("true") == 0);
 
-  int count = broadcastAccFunction<uint64_t>(boost::bind(pleaseWipeCache, canon, subtree));
-  count += broadcastAccFunction<uint64_t>(boost::bind(pleaseWipePacketCache, canon, subtree));
-  count += broadcastAccFunction<uint64_t>(boost::bind(pleaseWipeAndCountNegCache, canon, subtree));
+  int count = broadcastAccFunction<uint64_t>(std::bind(pleaseWipeCache, canon, subtree, 0xffff));
+  count += broadcastAccFunction<uint64_t>(std::bind(pleaseWipePacketCache, canon, subtree, 0xffff));
+  count += broadcastAccFunction<uint64_t>(std::bind(pleaseWipeAndCountNegCache, canon, subtree));
   resp->setBody(Json::object {
     { "count", count },
     { "result", "Flushed cache." }
@@ -404,8 +404,8 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp) {
     auto zone = luaconf->dfe.getZone(i);
     if (zone == nullptr)
       continue;
-    auto name = zone->getName();
-    auto stats = getRPZZoneStats(*name);
+    const auto& name = zone->getName();
+    auto stats = getRPZZoneStats(name);
     if (stats == nullptr)
       continue;
     Json::object zoneInfo = {
@@ -416,7 +416,7 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp) {
       {"last_update", (double)stats->d_lastUpdate},
       {"serial", (double)stats->d_serial},
     };
-    ret[*name] = zoneInfo;
+    ret[name] = zoneInfo;
   }
   resp->setBody(ret);
 }
@@ -457,6 +457,10 @@ static void prometheusMetrics(HttpRequest *req, HttpResponse *resp) {
         }
         output << prometheusMetricName << " " << tup.second << "\n";
     }
+
+    output << "# HELP pdns_recursor_info " << "Info from pdns_recursor, value is always 1" << "\n";
+    output << "# TYPE pdns_recursor_info " << "gauge" << "\n";
+    output << "pdns_recursor_info{version=\"" << VERSION << "\"} " << "1" << "\n";
 
     resp->body = output.str();
     resp->headers["Content-Type"] = "text/plain";
@@ -512,7 +516,7 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
   d_ws->bind();
 
   // legacy dispatch
-  d_ws->registerApiHandler("/jsonstat", boost::bind(&RecursorWebServer::jsonstat, this, _1, _2), true);
+  d_ws->registerApiHandler("/jsonstat", std::bind(&RecursorWebServer::jsonstat, this, std::placeholders::_1, std::placeholders::_2), true);
   d_ws->registerApiHandler("/api/v1/servers/localhost/cache/flush", &apiServerCacheFlush);
   d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-from", &apiServerConfigAllowFrom);
   d_ws->registerApiHandler("/api/v1/servers/localhost/config", &apiServerConfig);
@@ -664,7 +668,7 @@ void AsyncServerNewConnectionMT(void *p) {
 void AsyncServer::asyncWaitForConnections(FDMultiplexer* fdm, const newconnectioncb_t& callback)
 {
   d_asyncNewConnectionCallback = callback;
-  fdm->addReadFD(d_server_socket.getHandle(), boost::bind(&AsyncServer::newConnection, this));
+  fdm->addReadFD(d_server_socket.getHandle(), std::bind(&AsyncServer::newConnection, this));
 }
 
 void AsyncServer::newConnection()
@@ -674,6 +678,10 @@ void AsyncServer::newConnection()
 
 // This is an entry point from FDM, so it needs to catch everything.
 void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const {
+  if (!client->acl(d_acl)) {
+    return;
+  }
+
   const string logprefix = d_logprefix + to_string(getUniqueID()) + " ";
 
   HttpRequest req(logprefix);
@@ -743,5 +751,5 @@ void AsyncWebServer::go() {
   auto server = std::dynamic_pointer_cast<AsyncServer>(d_server);
   if (!server)
     return;
-  server->asyncWaitForConnections(d_fdm, boost::bind(&AsyncWebServer::serveConnection, this, _1));
+  server->asyncWaitForConnections(d_fdm, std::bind(&AsyncWebServer::serveConnection, this, std::placeholders::_1));
 }

@@ -17,12 +17,14 @@ As an example:
 ``allow-from``
 --------------
 -  IP ranges, separated by commas
--  Default: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+-  Default: 127.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 192.168.0.0/16, 172.16.0.0/12, ::1/128, fc00::/7, fe80::/10
 
 Netmasks (both IPv4 and IPv6) that are allowed to use the server.
 The default allows access only from :rfc:`1918` private IP addresses.
 Due to the aggressive nature of the internet these days, it is highly recommended to not open up the recursor for the entire internet.
 Questions from IP addresses not listed here are ignored and do not get an answer.
+
+When the Proxy Protocol is enabled (see `proxy-protocol-from`_), the recursor will check the address of the client IP advertised in the Proxy Protocol header instead of the one of the proxy.
 
 .. _setting-allow-from-file:
 
@@ -119,7 +121,7 @@ Not recommended unless you have to tick an 'RFC 2181 compliant' box.
 --------------
 -  Comma separated list of 'zonename=filename' pairs
 
-Zones read from these files (in BIND format) are served authoritatively.
+Zones read from these files (in BIND format) are served authoritatively (but without the AA bit set in responses).
 DNSSEC is not supported. Example:
 
 .. code-block:: none
@@ -370,6 +372,20 @@ If `pdns-distributes-queries`_ is set, spawn this number of distributor threads 
 handle incoming queries and distribute them to other threads based on a hash of the query, to maximize the cache hit
 ratio.
 
+.. _setting-dns64-prefix:
+
+``dns64-prefix``
+----------------
+.. versionadded:: 4.4.0
+
+-  Netmask, as a string
+-  Default: None
+
+Enable DNS64 (:rfc:`6147`) support using the supplied /96 IPv6 prefix. This will generate 'fake' AAAA records for names
+with only `A` records, as well as 'fake' PTR records to make sure that reverse lookup of DNS64-generated IPv6 addresses
+generate the right name.
+See :doc:`dns64` for more flexible but slower alternatives using Lua.
+
 .. _setting-dnssec:
 
 ``dnssec``
@@ -436,7 +452,7 @@ Queries to addresses for zones as configured in any of the settings `forward-zon
 .. versionadded:: 4.2.0
 
 -  Comma separated list of netmasks
--  Default: 0.0.0.0/0, ::, !127.0.0.0/8, !10.0.0.0/8, !100.64.0.0/10, !169.254.0.0/16, !192.168.0.0/16, !172.16.0.0/12, !::1/128, !fc00::/7, !fe80::/10
+-  Default: 0.0.0.0/0, ::/0, !127.0.0.0/8, !10.0.0.0/8, !100.64.0.0/10, !169.254.0.0/16, !192.168.0.0/16, !172.16.0.0/12, !::1/128, !fc00::/7, !fe80::/10
 
 List of requestor netmasks for which the requestor IP Address should be used as the :rfc:`EDNS Client Subnet <7871>` for outgoing queries. Outgoing queries for requestors that do not match this list will use the `ecs-scope-zero-address`_ instead.
 Valid incoming ECS values from `use-incoming-edns-subnet`_ are not replaced.
@@ -527,7 +543,7 @@ The IP address sent via EDNS Client Subnet to authoritative servers listed in
 `edns-subnet-whitelist`_ when `use-incoming-edns-subnet`_ is set and the query has
 an ECS source prefix-length set to 0.
 The default is to look for the first usable (not an ``any`` one) address in
-`query-local-address`_ then `query-local-address6`_. If no suitable address is
+`query-local-address`_ (starting with IPv4). If no suitable address is
 found, the recursor fallbacks to sending 127.0.0.1.
 
 .. _setting-edns-outgoing-bufsize:
@@ -699,14 +715,22 @@ Indication of how many queries will be averaged to get the average latency repor
 
 ``local-address``
 -----------------
--  IP addresses, comma separated
--  Default: 127.0.0.1
+-  IPv4/IPv6 Addresses, with optional port numbers, separated by commas or whitespace
+-  Default: ``0.0.0.0, ::``
 
-Local IPv4 or IPv6 addresses to bind to.
-Addresses can also contain port numbers, for IPv4 specify like this: ``192.0.2.4:5300``, for IPv6: ``[::1]:5300``.
+Local IP addresses to which we bind. Each address specified can
+include a port number; if no port is included then the
+:ref:`setting-local-port` port will be used for that address. If a
+port number is specified, it must be separated from the address with a
+':'; for an IPv6 address the address must be enclosed in square
+brackets.
 
-**Warning**: When binding to wildcard addresses, UNIX semantics mean that answers may not be sent from the address a query was received on.
-It is highly recommended to bind to explicit addresses.
+Examples::
+
+  local-address=127.0.0.1 ::1
+  local-address=0.0.0.0:5353
+  local-address=[::]:8053
+  local-address=127.0.0.1:53, [::1]:5353
 
 .. _setting-local-port:
 
@@ -861,7 +885,7 @@ Maximum number of seconds to cache an item in the DNS cache, no matter what the 
 
     The minimum value of this setting is 15. i.e. setting this to lower than 15 will make this value 15.
 
-.. _setting max-concurrent-requests-per-tcp-connection:
+.. _setting-max-concurrent-requests-per-tcp-connection:
 
 ``max-concurrent-requests-per-tcp-connection``
 ----------------------------------------------
@@ -914,10 +938,32 @@ Maximum number of Packet Cache entries.
 ``max-qperq``
 -------------
 -  Integer
--  Default: 50
+-  Default: 60
 
 The maximum number of outgoing queries that will be sent out during the resolution of a single client query.
 This is used to limit endlessly chasing CNAME redirections.
+If qname-minimization is enabled, the number will be forced to be 100
+at a minimum to allow for the extra queries qname-minimization generates when the cache is empty.
+
+.. _setting-max-ns-address-qperq:
+
+``max-ns-address-qperq``
+------------------------
+.. versionadded:: 4.1.16
+.. versionadded:: 4.2.2
+.. versionadded:: 4.3.1
+
+-  Integer
+-  Default: 10
+
+The maximum number of outgoing queries with empty replies for
+resolving nameserver names to addresses we allow during the resolution
+of a single client query. If IPv6 is enabled, an A and a AAAA query
+for a name counts as 1. If a zone publishes more than this number of
+NS records, the limit is further reduced for that zone by lowering
+it by the number of NS records found above the
+`max-ns-address-qperq`_ value. The limit wil not be reduced to a
+number lower than 5.
 
 .. _setting-max-negative-ttl:
 
@@ -1019,7 +1065,7 @@ Can be set at runtime using ``rec_control set-minimum-ttl 3600``.
 - Default: no (disabled)
 
 Whether to track newly observed domains, i.e. never seen before. This
-is a probablistic algorithm, using a stable bloom filter to store
+is a probabilistic algorithm, using a stable bloom filter to store
 records of previously seen domains. When enabled for the first time,
 all domains will appear to be newly observed, so the feature is best
 left enabled for e.g. a week or longer before using the results. Note
@@ -1208,10 +1254,10 @@ Maximum number of seconds to cache a 'server failure' answer in the packet cache
 -  Boolean
 -  Default: yes
 
-If set, PowerDNS will have only 1 thread listening on client sockets, and distribute work by itself over threads by using a hash of the query,
-maximizing the cache hit ratio. Starting with version 4.2.0, more than one distributing thread can be started using the `distributor-threads`_
-setting.
-Improves performance on Linux.
+If set, PowerDNS will use distinct threads to listen to client sockets and distribute that work to worker-threads using a hash of the query.
+This feature should maximize the cache hit ratio.
+To use more than one thread set `distributor-threads` in version 4.2.0 or newer.
+Enabling should improve performance for medium sized resolvers.
 
 .. _setting-protobuf-use-kernel-timestamp:
 
@@ -1223,6 +1269,31 @@ Improves performance on Linux.
 - Default: false
 
 Whether to compute the latency of responses in protobuf messages using the timestamp set by the kernel when the query packet was received (when available), instead of computing it based on the moment we start processing the query.
+
+.. _setting-proxy-protocol-from:
+
+``proxy-protocol-from``
+-----------------------
+.. versionadded:: 4.4.0
+
+-  IP ranges, separated by commas
+-  Default: empty
+
+Ranges that are required to send a Proxy Protocol version 2 header in front of UDP and TCP queries, to pass the original source and destination addresses and ports to the recursor, as well as custom values.
+Queries that are not prefixed with such a header will not be accepted from clients in these ranges. Queries prefixed by headers from clients that are not listed in these ranges will be dropped.
+
+Note that once a Proxy Protocol header has been received, the source address from the proxy header instead of the address of the proxy will be checked against the `allow-from`_ ACL, 
+
+.. _setting-proxy-protocol-maximum-size:
+
+``proxy-protocol-maximum-size``
+-------------------------------
+.. versionadded:: 4.4.0
+
+-  Integer
+-  Default: 512
+
+The maximum size, in bytes, of a Proxy Protocol payload (header, addresses and ports, and TLV values). Queries with a larger payload will be dropped.
 
 .. _setting-public-suffix-list-file:
 
@@ -1251,15 +1322,24 @@ described in :rfc:`7816`.
 
 ``query-local-address``
 -----------------------
--  IPv4 Address, comma separated
+.. versionchanged:: 4.4.0
+  IPv6 addresses can be set with this option as well.
+
+-  IP addresses, comma separated
 -  Default: 0.0.0.0
 
-Send out local queries from this address, or addresses, by adding multiple addresses, increased spoofing resilience is achieved.
+Send out local queries from this address, or addresses. By adding multiple
+addresses, increased spoofing resilience is achieved. When no address of a certain
+address family is configured, there are *no* queries sent with that address family.
+In the default configuration this means that IPv6 is not used for outgoing queries.
 
 .. _setting-query-local-address6:
 
 ``query-local-address6``
 ------------------------
+.. deprecated:: 4.4.0
+  Use :ref:`setting-query-local-address` for IPv4 and IPv6.
+
 -  IPv6 addresses, comma separated
 -  Default: unset
 
@@ -1282,9 +1362,9 @@ Don't log queries.
 -  Boolean
 -  Default: no
 
-If ``SO_REUSEPORT`` support is available, allows multiple processes to open a listening socket on the same port.
+If ``SO_REUSEPORT`` support is available, allows multiple threads and processes to open listening sockets for the same port.
 
-Since 4.1.0, when ``pdns-distributes-queries`` is set to false and ``reuseport`` is enabled, every thread will open a separate listening socket to let the kernel distribute the incoming queries, avoiding any thundering herd issue as well as the distributor thread being a bottleneck, thus leading to much higher performance on multi-core boxes.
+Since 4.1.0, when ``pdns-distributes-queries`` is set to false and ``reuseport`` is enabled, every worker-thread will open a separate listening socket to let the kernel distribute the incoming queries instead of running a distributor thread (which could otherwise be a bottleneck) and avoiding thundering herd issues, thus leading to much higher performance on multi-core boxes.
 
 .. _setting-rng:
 
@@ -1294,7 +1374,7 @@ Since 4.1.0, when ``pdns-distributes-queries`` is set to false and ``reuseport``
 - String
 - Default: auto
 
-Specify which random number generator to use. Permissible choises are
+Specify which random number generator to use. Permissible choices are
  - auto - choose automatically
  - sodium - Use libsodium ``randombytes_uniform``
  - openssl - Use libcrypto ``RAND_bytes``
@@ -1304,7 +1384,7 @@ Specify which random number generator to use. Permissible choises are
  - kiss - Use simple settable deterministic RNG. **FOR TESTING PURPOSES ONLY!**
 
 .. note::
-  Not all choises are available on all systems.
+  Not all choices are available on all systems.
 
 .. _setting-root-nx-trust:
 
@@ -1806,7 +1886,7 @@ When set to "detailed", all information about the request and response are logge
 The value between the hooks is a UUID that is generated for each request. This can be used to find all lines related to a single request.
 
 .. note::
-  The webserver logs these line on the NOTICE level. The :ref:`settings-loglevel` seting must be 5 or higher for these lines to end up in the log.
+  The webserver logs these line on the NOTICE level. The :ref:`setting-loglevel` seting must be 5 or higher for these lines to end up in the log.
 
 .. _setting-webserver-password:
 

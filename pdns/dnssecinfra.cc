@@ -134,10 +134,10 @@ shared_ptr<DNSCryptoKeyEngine> DNSCryptoKeyEngine::makeFromISCString(DNSKEYRecor
 
 std::string DNSCryptoKeyEngine::convertToISC() const
 {
-  storvector_t stormap = this->convertToISCVector();
+  storvector_t storvector = this->convertToISCVector();
   ostringstream ret;
   ret<<"Private-key-format: v1.2\n";
-  for(const stormap_t::value_type& value :  stormap) {
+  for(const storvector_t::value_type& value :  storvector) {
     if(value.first != "Algorithm" && value.first != "PIN" && 
        value.first != "Slot" && value.first != "Engine" &&
        value.first != "Label" && value.first != "PubLabel")
@@ -541,55 +541,6 @@ DNSKEYRecordContent DNSSECPrivateKey::getDNSKEY() const
   return makeDNSKEYFromDNSCryptoKeyEngine(getKey(), d_algorithm, d_flags);
 }
 
-class DEREater
-{
-public:
-  DEREater(const std::string& str) : d_str(str), d_pos(0)
-  {}
-  
-  struct eof{};
-  
-  uint8_t getByte()
-  {
-    if(d_pos >= d_str.length()) {
-      throw eof();
-    }
-    return (uint8_t) d_str[d_pos++];
-  }
-  
-  uint32_t getLength()
-  {
-    uint8_t first = getByte();
-    if(first < 0x80) {
-      return first;
-    }
-    first &= ~0x80;
-    
-    uint32_t len=0;
-    for(int n=0; n < first; ++n) {
-      len *= 0x100;
-      len += getByte();
-    }
-    return len;
-  }
-  
-  std::string getBytes(unsigned int len)
-  {
-    std::string ret;
-    for(unsigned int n=0; n < len; ++n)
-      ret.append(1, (char)getByte());
-    return ret;
-  }
-  
-  std::string::size_type getOffset() 
-  {
-    return d_pos;
-  }
-private:
-  const std::string& d_str;
-  std::string::size_type d_pos;
-};
-
 static string calculateHMAC(const std::string& key, const std::string& text, TSIGHashEnum hasher) {
 
   const EVP_MD* md_type;
@@ -632,7 +583,7 @@ static bool constantTimeStringEquals(const std::string& a, const std::string& b)
     return false;
   }
   const size_t size = a.size();
-#if OPENSSL_VERSION_NUMBER >= 0x0090819fL
+#ifdef HAVE_CRYPTO_MEMCMP
   return CRYPTO_memcmp(a.c_str(), b.c_str(), size) == 0;
 #else
   const volatile unsigned char *_a = (const volatile unsigned char *) a.c_str();

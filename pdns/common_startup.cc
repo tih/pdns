@@ -31,6 +31,7 @@
 #include "dnsseckeeper.hh"
 #include "threadname.hh"
 #include "misc.hh"
+#include "query-local-address.hh"
 
 #include <thread>
 
@@ -70,7 +71,16 @@ void declareArguments()
 {
   ::arg().set("config-dir","Location of configuration directory (pdns.conf)")=SYSCONFDIR;
   ::arg().set("config-name","Name of this virtual configuration - will rename the binary image")="";
-  ::arg().set("socket-dir",string("Where the controlsocket will live, ")+LOCALSTATEDIR+"/pdns when unset and not chrooted" )="";
+  ::arg().set("socket-dir",string("Where the controlsocket will live, ")+LOCALSTATEDIR+"/pdns when unset and not chrooted"
+#ifdef HAVE_SYSTEMD
+      + ". Set to the RUNTIME_DIRECTORY environment variable when that variable has a value (e.g. under systemd).")="";
+   auto runtimeDir = getenv("RUNTIME_DIRECTORY");
+   if (runtimeDir != nullptr) {
+     ::arg().set("socket-dir") = runtimeDir;
+   }
+#else
+      )="";
+#endif
   ::arg().set("module-dir","Default directory for modules")=PKGLIBDIR;
   ::arg().set("chroot","If set, chroot to this directory for more security")="";
   ::arg().set("logging-facility","Log under a specific facility")="";
@@ -87,11 +97,12 @@ void declareArguments()
   ::arg().setSwitch("log-dns-details","If PDNS should log DNS non-erroneous details")="no";
   ::arg().setSwitch("log-dns-queries","If PDNS should log all incoming DNS queries")="no";
   ::arg().set("local-address","Local IP addresses to which we bind")="0.0.0.0, ::";
+  ::arg().set("local-ipv6","DEPRECATED, will be removed, move your IPs to local-address")="";
   ::arg().setSwitch("local-address-nonexist-fail","Fail to start if one or more of the local-address's do not exist on this server")="yes";
   ::arg().setSwitch("non-local-bind", "Enable binding to non-local addresses by using FREEBIND / BINDANY socket options")="no";
   ::arg().setSwitch("reuseport","Enable higher performance on compliant kernels by using SO_REUSEPORT allowing each receiver thread to open its own socket")="no";
-  ::arg().set("query-local-address","Source IP address for sending queries")="0.0.0.0";
-  ::arg().set("query-local-address6","Source IPv6 address for sending queries")="::";
+  ::arg().set("query-local-address","Source IP addresses for sending queries")="0.0.0.0 ::";
+  ::arg().set("query-local-address6","DEPRECATED: Use query-local-address. Source IPv6 address for sending queries")="";
   ::arg().set("overload-queue-length","Maximum queuelength moving to packetcache only")="0";
   ::arg().set("max-queue-length","Maximum queuelength before considering situation lost")="5000";
 
@@ -209,6 +220,8 @@ void declareArguments()
   ::arg().set("default-zsk-algorithm","Default ZSK algorithm")="";
   ::arg().set("default-zsk-size","Default ZSK size (0 means default)")="0";
   ::arg().set("max-nsec3-iterations","Limit the number of NSEC3 hash iterations")="500"; // RFC5155 10.3
+  ::arg().set("default-publish-cdnskey","Default value for PUBLISH-CDNSKEY")="";
+  ::arg().set("default-publish-cds","Default value for PUBLISH-CDS")="";
 
   ::arg().set("include-dir","Include *.conf files from this directory");
   ::arg().set("security-poll-suffix","Domain name from which to query security update notifications")="secpoll.powerdns.com.";
@@ -233,6 +246,7 @@ void declareArguments()
   ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
 
   ::arg().set("rng", "Specify the random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
+  ::arg().setDefaults();
 }
 
 static time_t s_start=time(0);
@@ -319,9 +333,9 @@ void declareStats(void)
   S.declare("tcp6-queries","Number of IPv6 TCP queries received");
   S.declare("tcp6-answers","Number of IPv6 answers sent out over TCP");
 
-  S.declare("open-tcp-connections","Number of currently open TCP connections", getTCPConnectionCount);;
+  S.declare("open-tcp-connections","Number of currently open TCP connections", getTCPConnectionCount, StatType::gauge);
 
-  S.declare("qsize-q","Number of questions waiting for database attention", getQCount);
+  S.declare("qsize-q","Number of questions waiting for database attention", getQCount, StatType::gauge);
 
   S.declare("dnsupdate-queries", "DNS update packets received.");
   S.declare("dnsupdate-answers", "DNS update packets successfully answered.");
@@ -330,27 +344,33 @@ void declareStats(void)
 
   S.declare("incoming-notifications", "NOTIFY packets received.");
 
-  S.declare("uptime", "Uptime of process in seconds", uptimeOfProcess);
-  S.declare("real-memory-usage", "Actual unique use of memory in bytes (approx)", getRealMemoryUsage);
-  S.declare("special-memory-usage", "Actual unique use of memory in bytes (approx)", getSpecialMemoryUsage);
-  S.declare("fd-usage", "Number of open filedescriptors", getOpenFileDescriptors);
+  S.declare("uptime", "Uptime of process in seconds", uptimeOfProcess, StatType::counter);
+  S.declare("real-memory-usage", "Actual unique use of memory in bytes (approx)", getRealMemoryUsage, StatType::gauge);
+  S.declare("special-memory-usage", "Actual unique use of memory in bytes (approx)", getSpecialMemoryUsage, StatType::gauge);
+  S.declare("fd-usage", "Number of open filedescriptors", getOpenFileDescriptors, StatType::gauge);
 #ifdef __linux__
-  S.declare("udp-recvbuf-errors", "UDP 'recvbuf' errors", udpErrorStats);
-  S.declare("udp-sndbuf-errors", "UDP 'sndbuf' errors", udpErrorStats);
-  S.declare("udp-noport-errors", "UDP 'noport' errors", udpErrorStats);
-  S.declare("udp-in-errors", "UDP 'in' errors", udpErrorStats);
+  S.declare("udp-recvbuf-errors", "UDP 'recvbuf' errors", udpErrorStats, StatType::counter);
+  S.declare("udp-sndbuf-errors", "UDP 'sndbuf' errors", udpErrorStats, StatType::counter);
+  S.declare("udp-noport-errors", "UDP 'noport' errors", udpErrorStats, StatType::counter);
+  S.declare("udp-in-errors", "UDP 'in' errors", udpErrorStats, StatType::counter);
 #endif
 
-  S.declare("sys-msec", "Number of msec spent in system time", getSysUserTimeMsec);
-  S.declare("user-msec", "Number of msec spent in user time", getSysUserTimeMsec);
-  S.declare("meta-cache-size", "Number of entries in the metadata cache", DNSSECKeeper::dbdnssecCacheSizes);
-  S.declare("key-cache-size", "Number of entries in the key cache", DNSSECKeeper::dbdnssecCacheSizes);
-  S.declare("signature-cache-size", "Number of entries in the signature cache", signatureCacheSize);
+  S.declare("sys-msec", "Number of msec spent in system time", getSysUserTimeMsec, StatType::counter);
+  S.declare("user-msec", "Number of msec spent in user time", getSysUserTimeMsec, StatType::counter);
+
+#ifdef __linux__
+  S.declare("cpu-iowait", "Time spent waiting for I/O to complete by the whole system, in units of USER_HZ", getCPUIOWait, StatType::counter);
+  S.declare("cpu-steal", "Stolen time, which is the time spent by the whole system in other operating systems when running in a virtualized environment, in units of USER_HZ", getCPUSteal, StatType::counter);
+#endif
+
+  S.declare("meta-cache-size", "Number of entries in the metadata cache", DNSSECKeeper::dbdnssecCacheSizes, StatType::gauge);
+  S.declare("key-cache-size", "Number of entries in the key cache", DNSSECKeeper::dbdnssecCacheSizes, StatType::gauge);
+  S.declare("signature-cache-size", "Number of entries in the signature cache", signatureCacheSize, StatType::gauge);
 
   S.declare("servfail-packets","Number of times a server-failed packet was sent out");
-  S.declare("latency","Average number of microseconds needed to answer a question", getLatency);
+  S.declare("latency","Average number of microseconds needed to answer a question", getLatency, StatType::gauge);
   S.declare("timedout-packets","Number of packets which weren't answered within timeout set");
-  S.declare("security-status", "Security status based on regular polling");
+  S.declare("security-status", "Security status based on regular polling", StatType::gauge);
   S.declareDNSNameQTypeRing("queries","UDP Queries Received");
   S.declareDNSNameQTypeRing("nxdomain-queries","Queries for non-existent records within existent domains");
   S.declareDNSNameQTypeRing("noerror-queries","Queries for existing records, but for type we don't have");
@@ -446,14 +466,13 @@ try
         "', do = " <<question.d_dnssecOk <<", bufsize = "<< question.getMaxReplyLen();
       if(question.d_ednsRawPacketSizeLimit > 0 && question.getMaxReplyLen() != (unsigned int)question.d_ednsRawPacketSizeLimit)
         g_log<<" ("<<question.d_ednsRawPacketSizeLimit<<")";
-      g_log<<": ";
     }
 
     if(PC.enabled() && (question.d.opcode != Opcode::Notify && question.d.opcode != Opcode::Update) && question.couldBeCached()) {
       bool haveSomething=PC.get(question, cached); // does the PacketCache recognize this question?
       if (haveSomething) {
         if(logDNSQueries)
-          g_log<<"packetcache HIT"<<endl;
+          g_log<<": packetcache HIT"<<endl;
         cached.setRemote(&question.d_remote);  // inlined
         cached.setSocket(question.getSocket());                               // inlined
         cached.d_anyLocal = question.d_anyLocal;
@@ -469,14 +488,19 @@ try
     }
 
     if(distributor->isOverloaded()) {
-      if(logDNSQueries) 
-        g_log<<"Dropped query, backends are overloaded"<<endl;
+      if(logDNSQueries)
+        g_log<<": Dropped query, backends are overloaded"<<endl;
       overloadDrops++;
       continue;
     }
-        
-    if(PC.enabled() && logDNSQueries)
-      g_log<<"packetcache MISS"<<endl;
+
+    if (logDNSQueries) {
+      if (PC.enabled()) {
+        g_log<<": packetcache MISS"<<endl;
+      } else {
+        g_log<<endl;
+      }
+    }
 
     try {
       distributor->question(question, &sendout); // otherwise, give to the distributor
@@ -492,18 +516,14 @@ catch(PDNSException& pe)
   _exit(1);
 }
 
-static void* dummyThread(void *)
+static void dummyThread()
 {
-  void* ignore=0;
-  pthread_exit(ignore);
 }
 
 static void triggerLoadOfLibraries()
 {
-  pthread_t tid;
-  pthread_create(&tid, 0, dummyThread, 0);
-  void* res;
-  pthread_join(tid, &res);
+  std::thread dummy(dummyThread);
+  dummy.join();
 }
 
 void mainthread()
@@ -533,6 +553,11 @@ void mainthread()
    PC.setTTL(::arg().asNum("cache-ttl"));
    PC.setMaxEntries(::arg().asNum("max-packet-cache-entries"));
    QC.setMaxEntries(::arg().asNum("max-cache-entries"));
+   DNSSECKeeper::setMaxEntries(::arg().asNum("max-cache-entries"));
+
+   if (!PC.enabled() && ::arg().mustDo("log-dns-queries")) {
+     g_log<<Logger::Warning<<"Packet cache disabled, logging queries without HIT/MISS"<<endl;
+   }
 
    stubParseResolveConf();
 
@@ -607,6 +632,12 @@ void mainthread()
       g_log<<Logger::Error<<"Error: default-zsk-algorithm ("<<::arg()["default-zsk-algorithm"]<<"), when set, can not be different from default-ksk-algorithm ("<<::arg()["default-ksk-algorithm"]<<")."<<endl;
       exit(1);
     }
+  }
+
+  pdns::parseQueryLocalAddress(::arg()["query-local-address"]);
+  if (!::arg()["query-local-address6"].empty()) {
+    g_log<<Logger::Warning<<"query-local-address6 is deprecated and will be removed in a future version. Please use query-local-address for IPv6 addresses as well"<<endl;
+    pdns::parseQueryLocalAddress(::arg()["query-local-address6"]);
   }
 
   // NOW SAFE TO CREATE THREADS!

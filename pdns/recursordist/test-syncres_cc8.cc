@@ -477,6 +477,11 @@ BOOST_AUTO_TEST_CASE(test_nsec_ent_denial)
 
   denialState = getDenial(denialMap, DNSName("b.powerdns.com."), QType::A, true, false);
   BOOST_CHECK_EQUAL(denialState, NXDOMAIN);
+
+  /* this NSEC is NOT valid to prove a NXDOMAIN at c.powerdns.com because it proves that
+     it exists and is an ENT */
+  denialState = getDenial(denialMap, DNSName("c.powerdns.com."), QType::AAAA, true, false);
+  BOOST_CHECK_EQUAL(denialState, NODATA);
 }
 
 BOOST_AUTO_TEST_CASE(test_nsec3_ancestor_nxqtype_denial)
@@ -676,15 +681,15 @@ BOOST_AUTO_TEST_CASE(test_dnssec_rrsig_negcache_validity)
   BOOST_CHECK_EQUAL(queriesCount, 4U);
 
   /* check that the entry has not been negatively cached for longer than the RRSIG validity */
-  const NegCache::NegCacheEntry* ne = nullptr;
+  NegCache::NegCacheEntry ne;
   BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), &ne), true);
-  BOOST_CHECK_EQUAL(ne->d_ttd, fixedNow + 1);
-  BOOST_CHECK_EQUAL(ne->d_validationState, Secure);
-  BOOST_CHECK_EQUAL(ne->authoritySOA.records.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->authoritySOA.signatures.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->DNSSECRecords.records.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->DNSSECRecords.signatures.size(), 1U);
+  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_ttd, fixedNow + 1);
+  BOOST_CHECK_EQUAL(ne.d_validationState, Secure);
+  BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.DNSSECRecords.signatures.size(), 1U);
 
   /* again, to test the cache */
   ret.clear();
@@ -747,15 +752,15 @@ BOOST_AUTO_TEST_CASE(test_dnssec_rrsig_negcache_bogus_validity)
   BOOST_CHECK_EQUAL(queriesCount, 4U);
 
   /* check that the entry has been negatively cached but not longer than s_maxbogusttl */
-  const NegCache::NegCacheEntry* ne = nullptr;
+  NegCache::NegCacheEntry ne;
   BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), &ne), true);
-  BOOST_CHECK_EQUAL(ne->d_ttd, fixedNow + SyncRes::s_maxbogusttl);
-  BOOST_CHECK_EQUAL(ne->d_validationState, Bogus);
-  BOOST_CHECK_EQUAL(ne->authoritySOA.records.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->authoritySOA.signatures.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->DNSSECRecords.records.size(), 1U);
-  BOOST_CHECK_EQUAL(ne->DNSSECRecords.signatures.size(), 0U);
+  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_ttd, fixedNow + SyncRes::s_maxbogusttl);
+  BOOST_CHECK_EQUAL(ne.d_validationState, Bogus);
+  BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 1U);
+  BOOST_CHECK_EQUAL(ne.DNSSECRecords.signatures.size(), 0U);
 
   /* again, to test the cache */
   ret.clear();
@@ -817,7 +822,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_rrsig_cache_validity)
   const ComboAddress who;
   vector<DNSRecord> cached;
   vector<std::shared_ptr<RRSIGRecordContent>> signatures;
-  BOOST_REQUIRE_EQUAL(t_RC->get(tnow, target, QType(QType::A), true, &cached, who, &signatures), 1);
+  BOOST_REQUIRE_EQUAL(s_RC->get(tnow, target, QType(QType::A), true, &cached, who, boost::none, &signatures), 1);
   BOOST_REQUIRE_EQUAL(cached.size(), 1U);
   BOOST_REQUIRE_EQUAL(signatures.size(), 1U);
   BOOST_CHECK_EQUAL((cached[0].d_ttl - tnow), 1);

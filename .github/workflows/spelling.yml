@@ -1,0 +1,33 @@
+name: Spell checking
+on:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+    paths:
+      - "docs/**"
+      - "**/docs/**"
+  pull_request:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+    paths:
+      - "docs/**"
+      - "**/docs/**"
+    types: ['opened', 'reopened', 'synchronize']
+
+jobs:
+  build:
+    name: Spell checking
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2.0.0
+      with:
+        fetch-depth: 5
+    - uses: check-spelling/check-spelling@0.0.16-alpha
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        bucket: .github/actions
+        project: spell-check

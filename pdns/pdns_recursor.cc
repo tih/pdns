@@ -88,10 +88,13 @@
 #include "rec-lua-conf.hh"
 #include "ednsoptions.hh"
 #include "gettime.hh"
+#include "proxy-protocol.hh"
 #include "pubsuffix.hh"
+#include "shuffle.hh"
 #ifdef NOD_ENABLED
 #include "nod.hh"
 #endif /* NOD_ENABLED */
+#include "query-local-address.hh"
 
 #include "rec-protobuf.hh"
 #include "rec-snmp.hh"
@@ -127,7 +130,9 @@ static thread_local uint64_t t_frameStreamServersGeneration;
 #endif /* HAVE_FSTRM */
 
 thread_local std::unique_ptr<MT_t> MT; // the big MTasker
-thread_local std::unique_ptr<MemRecursorCache> t_RC;
+std::unique_ptr<MemRecursorCache> s_RC;
+
+
 thread_local std::unique_ptr<RecursorPacketCache> t_packetCache;
 thread_local FDMultiplexer* t_fdm{nullptr};
 thread_local std::unique_ptr<addrringbuf_t> t_remotes, t_servfailremotes, t_largeanswerremotes, t_bogusremotes;
@@ -187,14 +192,16 @@ static deferredAdd_t g_deferredAdds;
 typedef vector<int> tcpListenSockets_t;
 typedef map<int, ComboAddress> listenSocketsAddresses_t; // is shared across all threads right now
 
-static const ComboAddress g_local4("0.0.0.0"), g_local6("::");
 static listenSocketsAddresses_t g_listenSocketsAddresses; // is shared across all threads right now
 static set<int> g_fromtosockets; // listen sockets that use 'sendfromto()' mechanism
-static vector<ComboAddress> g_localQueryAddresses4, g_localQueryAddresses6;
 static AtomicCounter counter;
 static std::shared_ptr<SyncRes::domainmap_t> g_initialDomainMap; // new threads needs this to be setup
 static std::shared_ptr<NetmaskGroup> g_initialAllowFrom; // new thread needs to be setup with this
 static NetmaskGroup g_XPFAcl;
+static NetmaskGroup g_proxyProtocolACL;
+static boost::optional<ComboAddress> g_dns64Prefix{boost::none};
+static DNSName g_dns64PrefixReverse;
+static size_t g_proxyProtocolMaximumSize;
 static size_t g_tcpMaxQueriesPerConn;
 static size_t s_maxUDPQueriesPerRound;
 static uint64_t g_latencyStatSize;
@@ -266,7 +273,7 @@ struct DNSComboWriter {
   {
   }
 
-  DNSComboWriter(const std::string& query, const struct timeval& now, std::vector<std::string>&& policyTags, LuaContext::LuaObject&& data, std::vector<DNSRecord>&& records): d_mdp(true, query), d_now(now), d_query(query), d_policyTags(std::move(policyTags)), d_records(std::move(records)), d_data(std::move(data))
+  DNSComboWriter(const std::string& query, const struct timeval& now, std::unordered_set<std::string>&& policyTags, LuaContext::LuaObject&& data, std::vector<DNSRecord>&& records): d_mdp(true, query), d_now(now), d_query(query), d_policyTags(std::move(policyTags)), d_records(std::move(records)), d_data(std::move(data))
   {
   }
 
@@ -303,6 +310,7 @@ struct DNSComboWriter {
     return d_source.toStringWithPort() + " (proxied by " + d_remote.toStringWithPort() + ")";
   }
 
+  std::vector<ProxyProtocolValue> d_proxyProtocolValues;
   MOADNSParser d_mdp;
   struct timeval d_now;
   /* Remote client, might differ from d_source
@@ -325,7 +333,8 @@ struct DNSComboWriter {
   struct timeval d_kernelTimestamp{0,0};
 #endif
   std::string d_query;
-  std::vector<std::string> d_policyTags;
+  std::unordered_set<std::string> d_policyTags;
+  std::string d_routingTag;
   std::vector<DNSRecord> d_records;
   LuaContext::LuaObject d_data;
   EDNSSubnetOpts d_ednssubnet;
@@ -359,11 +368,6 @@ ArgvMap &arg()
 unsigned int getRecursorThreadId()
 {
   return t_id;
-}
-
-int getMTaskerTID()
-{
-  return MT->getTid();
 }
 
 static bool isDistributorThread()
@@ -458,7 +462,7 @@ string GenUDPQueryResponse(const ComboAddress& dest, const string& query)
 {
   Socket s(dest.sin4.sin_family, SOCK_DGRAM);
   s.setNonBlocking();
-  ComboAddress local = getQueryLocalAddress(dest.sin4.sin_family, 0);
+  ComboAddress local = pdns::getQueryLocalAddress(dest.sin4.sin_family, 0);
   
   s.bind(local);
   s.connect(dest);
@@ -482,28 +486,6 @@ string GenUDPQueryResponse(const ComboAddress& dest, const string& query)
     return data;
   }
   return data;
-}
-
-//! pick a random query local address
-ComboAddress getQueryLocalAddress(int family, uint16_t port)
-{
-  ComboAddress ret;
-  if(family==AF_INET) {
-    if(g_localQueryAddresses4.empty())
-      ret = g_local4;
-    else
-      ret = g_localQueryAddresses4[dns_random(g_localQueryAddresses4.size())];
-    ret.sin4.sin_port = htons(port);
-  }
-  else {
-    if(g_localQueryAddresses6.empty())
-      ret = g_local6;
-    else
-      ret = g_localQueryAddresses6[dns_random(g_localQueryAddresses6.size())];
-
-    ret.sin6.sin6_port = htons(port);
-  }
-  return ret;
 }
 
 static void handleUDPServerResponse(int fd, FDMultiplexer::funcparam_t&);
@@ -621,7 +603,7 @@ private:
         while (s_avoidUdpSourcePorts.count(port));
       }
 
-      sin=getQueryLocalAddress(family, port); // does htons for us
+      sin=pdns::getQueryLocalAddress(family, port); // does htons for us
 
       if (::bind(ret, (struct sockaddr *)&sin, sin.getSocklen()) >= 0)
         break;
@@ -807,14 +789,15 @@ catch(...)
 }
 
 #ifdef HAVE_PROTOBUF
-static void protobufLogQuery(uint8_t maskV4, uint8_t maskV6, const boost::uuids::uuid& uniqueId, const ComboAddress& remote, const ComboAddress& local, const Netmask& ednssubnet, bool tcp, uint16_t id, size_t len, const DNSName& qname, uint16_t qtype, uint16_t qclass, const std::vector<std::string>& policyTags, const std::string& requestorId, const std::string& deviceId, const std::string& deviceName)
+static void protobufLogQuery(uint8_t maskV4, uint8_t maskV6, const boost::uuids::uuid& uniqueId, const ComboAddress& remote, const ComboAddress& local, const Netmask& ednssubnet, bool tcp, uint16_t id, size_t len, const DNSName& qname, uint16_t qtype, uint16_t qclass, const std::unordered_set<std::string>& policyTags, const std::string& requestorId, const std::string& deviceId, const std::string& deviceName)
 {
   if (!t_protobufServers) {
     return;
   }
 
   Netmask requestorNM(remote, remote.sin4.sin_family == AF_INET ? maskV4 : maskV6);
-  const ComboAddress& requestor = requestorNM.getMaskedNetwork();
+  ComboAddress requestor = requestorNM.getMaskedNetwork();
+  requestor.setPort(remote.getPort());
   RecProtoBufMessage message(DNSProtoBufMessage::Query, uniqueId, &requestor, &local, qname, qtype, qclass, id, tcp, len);
   message.setServerIdentity(SyncRes::s_serverID);
   message.setEDNSSubnet(ednssubnet, ednssubnet.isIPv4() ? maskV4 : maskV6);
@@ -1055,28 +1038,31 @@ static bool checkFrameStreamExport(LocalStateHolder<LuaConfigItems>& luaconfsLoc
 #ifdef NOD_ENABLED
 static bool nodCheckNewDomain(const DNSName& dname)
 {
-  static const QType qt(QType::A);
-  static const uint16_t qc(QClass::IN);
   bool ret = false;
   // First check the (sub)domain isn't whitelisted for NOD purposes
   if (!g_nodDomainWL.check(dname)) {
-    // Now check the NODDB (note this is probablistic so can have FNs/FPs)
+    // Now check the NODDB (note this is probabilistic so can have FNs/FPs)
     if (t_nodDBp && t_nodDBp->isNewDomain(dname)) {
       if (g_nodLog) {
         // This should probably log to a dedicated log file
         g_log<<Logger::Notice<<"Newly observed domain nod="<<dname.toLogString()<<endl;
       }
-      if (!(g_nodLookupDomain.isRoot())) {
-        // Send a DNS A query to <domain>.g_nodLookupDomain
-        DNSName qname = dname;
-        vector<DNSRecord> dummy;
-        qname += g_nodLookupDomain;
-        directResolve(qname, qt, qc, dummy);
-      }
       ret = true;
     }
   }
   return ret;
+}
+
+static void sendNODLookup(const DNSName& dname)
+{
+  if (!(g_nodLookupDomain.isRoot())) {
+    // Send a DNS A query to <domain>.g_nodLookupDomain
+    static const QType qt(QType::A);
+    static const uint16_t qc(QClass::IN);
+    DNSName qname = dname + g_nodLookupDomain;
+    vector<DNSRecord> dummy;
+    directResolve(qname, qt, qc, dummy);
+  }
 }
 
 static bool udrCheckUniqueDNSRecord(const DNSName& dname, uint16_t qtype, const DNSRecord& record)
@@ -1123,6 +1109,157 @@ int followCNAMERecords(vector<DNSRecord>& ret, const QType& qtype)
     ret.push_back(std::move(rr));
   }
   return rcode;
+}
+
+int getFakeAAAARecords(const DNSName& qname, ComboAddress prefix, vector<DNSRecord>& ret)
+{
+  int rcode = directResolve(qname, QType(QType::A), QClass::IN, ret);
+
+  // Remove double CNAME records
+  std::set<DNSName> seenCNAMEs;
+  ret.erase(std::remove_if(
+        ret.begin(),
+        ret.end(),
+        [&seenCNAMEs](DNSRecord& rr) {
+          if (rr.d_type == QType::CNAME) {
+            auto target = getRR<CNAMERecordContent>(rr);
+            if (target == nullptr) {
+              return false;
+            }
+            if (seenCNAMEs.count(target->getTarget()) > 0) {
+              // We've had this CNAME before, remove it
+              return true;
+            }
+            seenCNAMEs.insert(target->getTarget());
+          }
+          return false;
+        }),
+      ret.end());
+
+  bool seenA = false;
+  for (DNSRecord& rr : ret) {
+    if (rr.d_type == QType::A && rr.d_place == DNSResourceRecord::ANSWER) {
+      if (auto rec = getRR<ARecordContent>(rr)) {
+        ComboAddress ipv4(rec->getCA());
+        memcpy(&prefix.sin6.sin6_addr.s6_addr[12], &ipv4.sin4.sin_addr.s_addr, sizeof(ipv4.sin4.sin_addr.s_addr));
+        rr.d_content = std::make_shared<AAAARecordContent>(prefix);
+        rr.d_type = QType::AAAA;
+      }
+      seenA = true;
+    }
+  }
+
+  if (seenA) {
+    // We've seen an A in the ANSWER section, so there is no need to keep any
+    // SOA in the AUTHORITY section as this is not a NODATA response.
+    ret.erase(std::remove_if(
+          ret.begin(),
+          ret.end(),
+          [](DNSRecord& rr) {
+            return (rr.d_type == QType::SOA && rr.d_place == DNSResourceRecord::AUTHORITY);
+          }),
+        ret.end());
+  }
+  return rcode;
+}
+
+int getFakePTRRecords(const DNSName& qname, vector<DNSRecord>& ret)
+{
+  /* qname has a reverse ordered IPv6 address, need to extract the underlying IPv4 address from it
+     and turn it into an IPv4 in-addr.arpa query */
+  ret.clear();
+  vector<string> parts = qname.getRawLabels();
+
+  if (parts.size() < 8) {
+    return -1;
+  }
+
+  string newquery;
+  for (int n = 0; n < 4; ++n) {
+    newquery +=
+      std::to_string(stoll(parts[n*2], 0, 16) + 16*stoll(parts[n*2+1], 0, 16));
+    newquery.append(1, '.');
+  }
+  newquery += "in-addr.arpa.";
+
+  DNSRecord rr;
+  rr.d_name = qname;
+  rr.d_type = QType::CNAME;
+  rr.d_content = std::make_shared<CNAMERecordContent>(newquery);
+  ret.push_back(rr);
+
+  int rcode = directResolve(DNSName(newquery), QType(QType::PTR), QClass::IN, ret);
+
+  return rcode;
+}
+
+enum class PolicyResult : uint8_t { NoAction, HaveAnswer, Drop };
+
+static PolicyResult handlePolicyHit(const DNSFilterEngine::Policy& appliedPolicy, const std::unique_ptr<DNSComboWriter>& dc, SyncRes& sr, int& res, vector<DNSRecord>& ret, DNSPacketWriter& pw)
+{
+  /* don't account truncate actions for TCP queries, since they are not applied */
+  if (appliedPolicy.d_kind != DNSFilterEngine::PolicyKind::Truncate || !dc->d_tcp) {
+    ++g_stats.policyResults[appliedPolicy.d_kind];
+  }
+
+  switch (appliedPolicy.d_kind) {
+
+  case DNSFilterEngine::PolicyKind::NoAction:
+      return PolicyResult::NoAction;
+
+  case DNSFilterEngine::PolicyKind::Drop:
+    ++g_stats.policyDrops;
+    return PolicyResult::Drop;
+
+  case DNSFilterEngine::PolicyKind::NXDOMAIN:
+    ret.clear();
+    res = RCode::NXDomain;
+    return PolicyResult::HaveAnswer;
+
+  case DNSFilterEngine::PolicyKind::NODATA:
+    ret.clear();
+    res = RCode::NoError;
+    return PolicyResult::HaveAnswer;
+
+  case DNSFilterEngine::PolicyKind::Truncate:
+    if (!dc->d_tcp) {
+      ret.clear();
+      res = RCode::NoError;
+      pw.getHeader()->tc = 1;
+      return PolicyResult::HaveAnswer;
+    }
+    return PolicyResult::NoAction;
+
+  case DNSFilterEngine::PolicyKind::Custom:
+    ret.clear();
+    res = RCode::NoError;
+    {
+      auto spoofed = appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
+      for (auto& dr : spoofed) {
+        ret.push_back(dr);
+        try {
+          handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
+        }
+        catch (const ImmediateServFailException& e) {
+          if (g_logCommonErrors) {
+            g_log << Logger::Notice << "Sending SERVFAIL to " << dc->getRemote() << " during resolve of the custom filter policy '" << appliedPolicy.getName() << "' while resolving '"<<dc->d_mdp.d_qname<<"' because: "<<e.reason<<endl;
+          }
+          res = RCode::ServFail;
+          break;
+        }
+        catch (const PolicyHitException& e) {
+          if (g_logCommonErrors) {
+            g_log << Logger::Notice << "Sending SERVFAIL to " << dc->getRemote() << " during resolve of the custom filter policy '" << appliedPolicy.getName() << "' while resolving '"<<dc->d_mdp.d_qname<<"' because another RPZ policy was hit"<<endl;
+          }
+          res = RCode::ServFail;
+          break;
+        }
+      }
+    }
+    return PolicyResult::HaveAnswer;
+  }
+
+  return PolicyResult::NoAction;
 }
 
 static void startDoResolve(void *p)
@@ -1184,7 +1321,8 @@ static void startDoResolve(void *p)
 #ifdef HAVE_PROTOBUF
     if (checkProtobufExport(luaconfsLocal)) {
       Netmask requestorNM(dc->d_source, dc->d_source.sin4.sin_family == AF_INET ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
-      const ComboAddress& requestor = requestorNM.getMaskedNetwork();
+      ComboAddress requestor = requestorNM.getMaskedNetwork();
+      requestor.setPort(dc->d_source.getPort());
       pbMessage = RecProtoBufMessage(RecProtoBufMessage::Response, dc->d_uuid, &requestor, &dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_mdp.d_qclass, dc->d_mdp.d_header.id, dc->d_tcp, 0);
       pbMessage->setServerIdentity(SyncRes::s_serverID);
       pbMessage->setEDNSSubnet(dc->d_ednssubnet.source, dc->d_ednssubnet.source.isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
@@ -1263,7 +1401,6 @@ static void startDoResolve(void *p)
     int res = RCode::NoError;
 
     DNSFilterEngine::Policy appliedPolicy;
-    std::vector<DNSRecord> spoofed;
     RecursorLua4::DNSQuestion dq(dc->d_source, dc->d_destination, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_tcp, variableAnswer, wantsRPZ, dc->d_logResponse);
     dq.ednsFlags = &edo.d_extFlags;
     dq.ednsOptions = &ednsOpts;
@@ -1279,6 +1416,7 @@ static void startDoResolve(void *p)
     dq.deviceId = dc->d_deviceId;
     dq.deviceName = dc->d_deviceName;
 #endif
+    dq.proxyProtocolValues = &dc->d_proxyProtocolValues;
 
     if(ednsExtRCode != 0) {
       goto sendit;
@@ -1309,176 +1447,134 @@ static void startDoResolve(void *p)
       sr.setCacheOnly();
     }
 
-    if (dc->d_rcode != boost::none) {
-      /* we have a response ready to go, most likely from gettag_ffi */
-      ret = std::move(dc->d_records);
-      res = *dc->d_rcode;
-      if (res == RCode::NoError && dc->d_followCNAMERecords) {
-        res = followCNAMERecords(ret, QType(dc->d_mdp.d_qtype));
-      }
-      goto haveAnswer;
-    }
-
     if (t_pdl) {
       t_pdl->prerpz(dq, res);
     }
 
     // Check if the query has a policy attached to it
-    if (wantsRPZ) {
-      appliedPolicy = luaconfsLocal->dfe.getQueryPolicy(dc->d_mdp.d_qname, dc->d_source, sr.d_discardedPolicies);
+    if (wantsRPZ && (appliedPolicy.d_type == DNSFilterEngine::PolicyType::None || appliedPolicy.d_kind == DNSFilterEngine::PolicyKind::NoAction)) {
+      if (luaconfsLocal->dfe.getQueryPolicy(dc->d_mdp.d_qname, dc->d_source, sr.d_discardedPolicies, appliedPolicy)) {
+        mergePolicyTags(dc->d_policyTags, appliedPolicy.getTags());
+      }
+    }
+
+    // If we are doing RPZ and a policy was matched, it normally takes precedence over an answer from gettag.
+    // So process the gettag_ffi answer only if no RPZ action was matched or the policy indicates gettag should
+    // have precedence.
+    if (!wantsRPZ || !appliedPolicy.policyOverridesGettag() || appliedPolicy.d_type == DNSFilterEngine::PolicyType::None) {
+      if (dc->d_rcode != boost::none) {
+        /* we have a response ready to go, most likely from gettag_ffi */
+        ret = std::move(dc->d_records);
+        res = *dc->d_rcode;
+        if (res == RCode::NoError && dc->d_followCNAMERecords) {
+          res = followCNAMERecords(ret, QType(dc->d_mdp.d_qtype));
+        }
+        goto haveAnswer;
+      }
     }
 
     // if there is a RecursorLua active, and it 'took' the query in preResolve, we don't launch beginResolve
-    if(!t_pdl || !t_pdl->preresolve(dq, res)) {
+    if (!t_pdl || !t_pdl->preresolve(dq, res)) {
+
+      if (!g_dns64PrefixReverse.empty() && dq.qtype == QType::PTR && dq.qname.isPartOf(g_dns64PrefixReverse)) {
+        res = getFakePTRRecords(dq.qname, ret);
+        goto haveAnswer;
+      }
 
       sr.setWantsRPZ(wantsRPZ);
-      if(wantsRPZ) {
-        switch(appliedPolicy.d_kind) {
-          case DNSFilterEngine::PolicyKind::NoAction:
-            break;
-          case DNSFilterEngine::PolicyKind::Drop:
-            g_stats.policyDrops++;
-            g_stats.policyResults[appliedPolicy.d_kind]++;
-            return; 
-          case DNSFilterEngine::PolicyKind::NXDOMAIN:
-            g_stats.policyResults[appliedPolicy.d_kind]++;
-            res=RCode::NXDomain;
-            goto haveAnswer;
-          case DNSFilterEngine::PolicyKind::NODATA:
-            g_stats.policyResults[appliedPolicy.d_kind]++;
-            res=RCode::NoError;
-            goto haveAnswer;
-          case DNSFilterEngine::PolicyKind::Custom:
-            g_stats.policyResults[appliedPolicy.d_kind]++;
-            res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
-            for (const auto& dr : spoofed) {
-              ret.push_back(dr);
-              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
-            }
-            goto haveAnswer;
-          case DNSFilterEngine::PolicyKind::Truncate:
-            if(!dc->d_tcp) {
-              g_stats.policyResults[appliedPolicy.d_kind]++;
-              res=RCode::NoError;	
-              pw.getHeader()->tc=1;
-              goto haveAnswer;
-            }
-            break;
+      if (wantsRPZ && appliedPolicy.d_kind != DNSFilterEngine::PolicyKind::NoAction) {
+        auto policyResult = handlePolicyHit(appliedPolicy, dc, sr, res, ret, pw);
+        if (policyResult == PolicyResult::HaveAnswer) {
+          goto haveAnswer;
+        }
+        else if (policyResult == PolicyResult::Drop) {
+          return;
         }
       }
 
       // Query got not handled for QNAME Policy reasons, now actually go out to find an answer
       try {
+        sr.d_appliedPolicy = appliedPolicy;
+        sr.d_policyTags = std::move(dc->d_policyTags);
+
+        if (!dc->d_routingTag.empty()) {
+          sr.d_routingTag = dc->d_routingTag;
+        }
+
         res = sr.beginResolve(dc->d_mdp.d_qname, QType(dc->d_mdp.d_qtype), dc->d_mdp.d_qclass, ret);
         shouldNotValidate = sr.wasOutOfBand();
       }
-      catch(ImmediateServFailException &e) {
-        if(g_logCommonErrors)
+      catch(const ImmediateServFailException &e) {
+        if(g_logCommonErrors) {
           g_log<<Logger::Notice<<"Sending SERVFAIL to "<<dc->getRemote()<<" during resolve of '"<<dc->d_mdp.d_qname<<"' because: "<<e.reason<<endl;
+        }
         res = RCode::ServFail;
       }
-
+      catch(const PolicyHitException& e) {
+        res = -2;
+      }
       dq.validationState = sr.getValidationState();
+      appliedPolicy = sr.d_appliedPolicy;
+      dc->d_policyTags = std::move(sr.d_policyTags);
 
       // During lookup, an NSDNAME or NSIP trigger was hit in RPZ
       if (res == -2) { // XXX This block should be macro'd, it is repeated post-resolve.
-        appliedPolicy = sr.d_appliedPolicy;
-        g_stats.policyResults[appliedPolicy.d_kind]++;
-        switch(appliedPolicy.d_kind) {
-          case DNSFilterEngine::PolicyKind::NoAction: // This can never happen
-            throw PDNSException("NoAction policy returned while a NSDNAME or NSIP trigger was hit");
-          case DNSFilterEngine::PolicyKind::Drop:
-            g_stats.policyDrops++;
-            return;
-          case DNSFilterEngine::PolicyKind::NXDOMAIN:
-            ret.clear();
-            res=RCode::NXDomain;
-            goto haveAnswer;
-
-          case DNSFilterEngine::PolicyKind::NODATA:
-            ret.clear();
-            res=RCode::NoError;
-            goto haveAnswer;
-
-          case DNSFilterEngine::PolicyKind::Truncate:
-            if(!dc->d_tcp) {
-              ret.clear();
-              res=RCode::NoError;
-              pw.getHeader()->tc=1;
-              goto haveAnswer;
-            }
-            break;
-
-          case DNSFilterEngine::PolicyKind::Custom:
-            ret.clear();
-            res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
-            for (const auto& dr : spoofed) {
-              ret.push_back(dr);
-              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
-            }
-            goto haveAnswer;
+        if (appliedPolicy.d_kind == DNSFilterEngine::PolicyKind::NoAction) {
+          throw PDNSException("NoAction policy returned while a NSDNAME or NSIP trigger was hit");
+        }
+        auto policyResult = handlePolicyHit(appliedPolicy, dc, sr, res, ret, pw);
+        if (policyResult == PolicyResult::HaveAnswer) {
+          goto haveAnswer;
+        }
+        else if (policyResult == PolicyResult::Drop) {
+          return;
         }
       }
 
-      if (wantsRPZ) {
-        appliedPolicy = luaconfsLocal->dfe.getPostPolicy(ret, sr.d_discardedPolicies);
+      if (wantsRPZ && (appliedPolicy.d_type == DNSFilterEngine::PolicyType::None || appliedPolicy.d_kind == DNSFilterEngine::PolicyKind::NoAction)) {
+        if (luaconfsLocal->dfe.getPostPolicy(ret, sr.d_discardedPolicies, appliedPolicy)) {
+          mergePolicyTags(dc->d_policyTags, appliedPolicy.getTags());
+        }
       }
 
-      if(t_pdl) {
-        if(res == RCode::NoError) {
-	        auto i=ret.cbegin();
-                for(; i!= ret.cend(); ++i)
-                  if(i->d_type == dc->d_mdp.d_qtype && i->d_place == DNSResourceRecord::ANSWER)
-                          break;
-                if(i == ret.cend() && t_pdl->nodata(dq, res))
-                  shouldNotValidate = true;
+      if (t_pdl || (g_dns64Prefix && dq.qtype == QType::AAAA && dq.validationState != Bogus)) {
+        if (res == RCode::NoError) {
+          auto i = ret.cbegin();
+          for(; i!= ret.cend(); ++i) {
+            if (i->d_type == dc->d_mdp.d_qtype && i->d_place == DNSResourceRecord::ANSWER) {
+              break;
+            }
+          }
+
+          if (i == ret.cend()) {
+            /* no record in the answer section, NODATA */
+            if (t_pdl && t_pdl->nodata(dq, res)) {
+              shouldNotValidate = true;
+            }
+            else if (g_dns64Prefix && dq.qtype == QType::AAAA && dq.validationState != Bogus) {
+              res = getFakeAAAARecords(dq.qname, *g_dns64Prefix, ret);
+              shouldNotValidate = true;
+            }
+          }
 
 	}
-	else if(res == RCode::NXDomain && t_pdl->nxdomain(dq, res))
+	else if(res == RCode::NXDomain && t_pdl && t_pdl->nxdomain(dq, res)) {
           shouldNotValidate = true;
+        }
 
-	if(t_pdl->postresolve(dq, res))
+	if (t_pdl && t_pdl->postresolve(dq, res)) {
           shouldNotValidate = true;
+        }
       }
 
       if (wantsRPZ) { //XXX This block is repeated, see above
-        g_stats.policyResults[appliedPolicy.d_kind]++;
-        switch(appliedPolicy.d_kind) {
-          case DNSFilterEngine::PolicyKind::NoAction:
-            break;
-          case DNSFilterEngine::PolicyKind::Drop:
-            g_stats.policyDrops++;
-            return; 
-          case DNSFilterEngine::PolicyKind::NXDOMAIN:
-            ret.clear();
-            res=RCode::NXDomain;
-            goto haveAnswer;
 
-          case DNSFilterEngine::PolicyKind::NODATA:
-            ret.clear();
-            res=RCode::NoError;
-            goto haveAnswer;
-
-          case DNSFilterEngine::PolicyKind::Truncate:
-            if(!dc->d_tcp) {
-              ret.clear();
-              res=RCode::NoError;
-              pw.getHeader()->tc=1;
-              goto haveAnswer;
-            }
-            break;
-
-          case DNSFilterEngine::PolicyKind::Custom:
-            ret.clear();
-            res=RCode::NoError;
-            spoofed=appliedPolicy.getCustomRecords(dc->d_mdp.d_qname, dc->d_mdp.d_qtype);
-            for (const auto& dr : spoofed) {
-              ret.push_back(dr);
-              handleRPZCustom(dr, QType(dc->d_mdp.d_qtype), sr, res, ret);
-            }
-            goto haveAnswer;
+        auto policyResult = handlePolicyHit(appliedPolicy, dc, sr, res, ret, pw);
+        if (policyResult == PolicyResult::HaveAnswer) {
+          goto haveAnswer;
+        }
+        else if (policyResult == PolicyResult::Drop) {
+          return;
         }
       }
     }
@@ -1557,7 +1653,7 @@ static void startDoResolve(void *p)
             }
           }
         }
-        catch(ImmediateServFailException &e) {
+        catch(const ImmediateServFailException &e) {
           if(g_logCommonErrors)
             g_log<<Logger::Notice<<"Sending SERVFAIL to "<<dc->getRemote()<<" during validation of '"<<dc->d_mdp.d_qname<<"|"<<QType(dc->d_mdp.d_qtype).getName()<<"' because: "<<e.reason<<endl;
           pw.getHeader()->rcode=RCode::ServFail;
@@ -1566,7 +1662,7 @@ static void startDoResolve(void *p)
       }
 
       if(ret.size()) {
-        orderAndShuffle(ret);
+        pdns::orderAndShuffle(ret);
 	if(auto sl = luaconfsLocal->sortlist.getOrderCmp(dc->d_source)) {
 	  stable_sort(ret.begin(), ret.end(), *sl);
 	  variableAnswer=true;
@@ -1647,16 +1743,17 @@ static void startDoResolve(void *p)
 #ifdef NOD_ENABLED
     bool nod = false;
     if (g_nodEnabled) {
-      if (nodCheckNewDomain(dc->d_mdp.d_qname))
+      if (nodCheckNewDomain(dc->d_mdp.d_qname)) {
         nod = true;
+      }
     }
 #endif /* NOD_ENABLED */
 #ifdef HAVE_PROTOBUF
-    if (t_protobufServers && !(luaconfsLocal->protobufExportConfig.taggedOnly && (!appliedPolicy.d_name || appliedPolicy.d_name->empty()) && dc->d_policyTags.empty())) {
+    if (t_protobufServers && !(luaconfsLocal->protobufExportConfig.taggedOnly && appliedPolicy.getName().empty() && dc->d_policyTags.empty())) {
       pbMessage->setBytes(packet.size());
       pbMessage->setResponseCode(pw.getHeader()->rcode);
-      if (appliedPolicy.d_name) {
-        pbMessage->setAppliedPolicy(*appliedPolicy.d_name);
+      if (!appliedPolicy.getName().empty()) {
+        pbMessage->setAppliedPolicy(appliedPolicy.getName());
         pbMessage->setAppliedPolicyType(appliedPolicy.d_type);
       }
       pbMessage->setPolicyTags(dc->d_policyTags);
@@ -1740,16 +1837,16 @@ static void startDoResolve(void *p)
       int wret=Utility::writev(dc->d_socket, iov, 2);
       bool hadError=true;
 
-      if(wret == 0)
-        g_log<<Logger::Error<<"EOF writing TCP answer to "<<dc->getRemote()<<endl;
-      else if(wret < 0 ) {
+      if (wret == 0) {
+        g_log<<Logger::Warning<<"EOF writing TCP answer to "<<dc->getRemote()<<endl;
+      } else if (wret < 0 ) {
         int err = errno;
-        g_log << Logger::Error << "Error writing TCP answer to " << dc->getRemote() << ": " << strerror(err) << endl;
-      } else if((unsigned int)wret != 2 + packet.size())
-        g_log<<Logger::Error<<"Oops, partial answer sent to "<<dc->getRemote()<<" for "<<dc->d_mdp.d_qname<<" (size="<< (2 + packet.size()) <<", sent "<<wret<<")"<<endl;
-      else
+        g_log << Logger::Warning << "Error writing TCP answer to " << dc->getRemote() << ": " << strerror(err) << endl;
+      } else if ((unsigned int)wret != 2 + packet.size()) {
+        g_log<<Logger::Warning<<"Oops, partial answer sent to "<<dc->getRemote()<<" for "<<dc->d_mdp.d_qname<<" (size="<< (2 + packet.size()) <<", sent "<<wret<<")"<<endl;
+      } else {
         hadError=false;
-
+      }
       // update tcp connection status, closing if needed and doing the fd multiplexer accounting
       if  (dc->d_tcpConnection->d_requestsInFlight > 0) {
         dc->d_tcpConnection->d_requestsInFlight--;
@@ -1798,8 +1895,9 @@ static void startDoResolve(void *p)
         }
       }
     }
+
     float spent=makeFloat(sr.getNow()-dc->d_now);
-    if(!g_quiet) {
+    if (!g_quiet) {
       g_log<<Logger::Error<<t_id<<" ["<<MT->getTid()<<"/"<<MT->numProcesses()<<"] answer to "<<(dc->d_mdp.d_header.rd?"":"non-rd ")<<"question '"<<dc->d_mdp.d_qname<<"|"<<DNSRecordContent::NumberToType(dc->d_mdp.d_qtype);
       g_log<<"': "<<ntohs(pw.getHeader()->ancount)<<" answers, "<<ntohs(pw.getHeader()->arcount)<<" additional, took "<<sr.d_outqueries<<" packets, "<<
 	sr.d_totUsec/1000.0<<" netw ms, "<< spent*1000.0<<" tot ms, "<<
@@ -1810,14 +1908,13 @@ static void startDoResolve(void *p)
       }
 	
       g_log<<endl;
-
     }
 
     if (sr.d_outqueries || sr.d_authzonequeries) {
-      t_RC->cacheMisses++;
+      s_RC->cacheMisses++;
     }
     else {
-      t_RC->cacheHits++;
+      s_RC->cacheHits++;
     }
 
     if(spent < 0.001)
@@ -1857,6 +1954,13 @@ static void startDoResolve(void *p)
       newLat=ourtime*1000; // usec
       g_stats.avgLatencyOursUsec=(1-1.0/g_latencyStatSize)*g_stats.avgLatencyOursUsec + (float)newLat/g_latencyStatSize;
     }
+
+#ifdef NOD_ENABLED
+    if (nod) {
+      sendNODLookup(dc->d_mdp.d_qname);
+    }
+#endif /* NOD_ENABLED */
+
     //    cout<<dc->d_mdp.d_qname<<"\t"<<MT->getUsec()<<"\t"<<sr.d_outqueries<<endl;
   }
   catch(PDNSException &ae) {
@@ -1986,11 +2090,93 @@ static void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uin
   }
 }
 
+static bool handleTCPReadResult(int fd, ssize_t bytes)
+{
+  if (bytes == 0) {
+    /* EOF */
+    t_fdm->removeReadFD(fd);
+    return false;
+  }
+  else if (bytes < 0) {
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      t_fdm->removeReadFD(fd);
+      return false;
+    }
+  }
+
+  return true;
+}
+
 static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
 {
   shared_ptr<TCPConnection> conn=any_cast<shared_ptr<TCPConnection> >(var);
 
-  if(conn->state==TCPConnection::BYTE0) {
+  if (conn->state == TCPConnection::PROXYPROTOCOLHEADER) {
+    ssize_t bytes = recv(conn->getFD(), &conn->data.at(conn->proxyProtocolGot), conn->proxyProtocolNeed, 0);
+    if (bytes <= 0) {
+      handleTCPReadResult(fd, bytes);
+      return;
+    }
+
+    conn->proxyProtocolGot += bytes;
+    conn->data.resize(conn->proxyProtocolGot);
+    ssize_t remaining = isProxyHeaderComplete(conn->data);
+    if (remaining == 0) {
+      if (g_logCommonErrors) {
+        g_log<<Logger::Error<<"Unable to consume proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() <<endl;
+      }
+      ++g_stats.proxyProtocolInvalidCount;
+      t_fdm->removeReadFD(fd);
+      return;
+    }
+    else if (remaining < 0) {
+      conn->proxyProtocolNeed = -remaining;
+      conn->data.resize(conn->proxyProtocolGot + conn->proxyProtocolNeed);
+      return;
+    }
+    else {
+      /* proxy header received */
+      /* we ignore the TCP field for now, but we could properly set whether
+         the connection was received over UDP or TCP if needed */
+      bool tcp;
+      bool proxy = false;
+      size_t used = parseProxyHeader(conn->data, proxy, conn->d_source, conn->d_destination, tcp, conn->proxyProtocolValues);
+      if (used <= 0) {
+        if (g_logCommonErrors) {
+          g_log<<Logger::Error<<"Unable to parse proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() <<endl;
+        }
+        ++g_stats.proxyProtocolInvalidCount;
+        t_fdm->removeReadFD(fd);
+        return;
+      }
+      else if (static_cast<size_t>(used) > g_proxyProtocolMaximumSize) {
+        if (g_logCommonErrors) {
+          g_log<<Logger::Error<<"Proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() << " is larger than proxy-protocol-maximum-size (" << used << "), dropping"<< endl;
+        }
+        ++g_stats.proxyProtocolInvalidCount;
+        t_fdm->removeReadFD(fd);
+        return;
+      }
+
+      /* Now that we have retrieved the address of the client, as advertised by the proxy
+         via the proxy protocol header, check that it is allowed by our ACL */
+      /* note that if the proxy header used a 'LOCAL' command, the original source and destination are untouched so everything should be fine */
+      if (t_allowFrom && !t_allowFrom->match(&conn->d_source)) {
+        if (!g_quiet) {
+          g_log<<Logger::Error<<"["<<MT->getTid()<<"] dropping TCP query from "<<conn->d_source.toString()<<", address not matched by allow-from"<<endl;
+        }
+
+        ++g_stats.unauthorizedTCP;
+        t_fdm->removeReadFD(fd);
+        return;
+      }
+
+      conn->data.resize(2);
+      conn->state = TCPConnection::BYTE0;
+    }
+  }
+
+  if (conn->state==TCPConnection::BYTE0) {
     ssize_t bytes=recv(conn->getFD(), &conn->data[0], 2, 0);
     if(bytes==1)
       conn->state=TCPConnection::BYTE1;
@@ -2000,12 +2186,13 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       conn->bytesread=0;
       conn->state=TCPConnection::GETQUESTION;
     }
-    if(!bytes || bytes < 0) {
-      t_fdm->removeReadFD(fd);
+    if (bytes <= 0) {
+      handleTCPReadResult(fd, bytes);
       return;
     }
   }
-  else if(conn->state==TCPConnection::BYTE1) {
+
+  if (conn->state==TCPConnection::BYTE1) {
     ssize_t bytes=recv(conn->getFD(), &conn->data[1], 1, 0);
     if(bytes==1) {
       conn->state=TCPConnection::GETQUESTION;
@@ -2013,18 +2200,29 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       conn->data.resize(conn->qlen);
       conn->bytesread=0;
     }
-    if(!bytes || bytes < 0) {
-      if(g_logCommonErrors)
-        g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" disconnected after first byte"<<endl;
-      t_fdm->removeReadFD(fd);
+    if (bytes <= 0) {
+      if (!handleTCPReadResult(fd, bytes)) {
+        if(g_logCommonErrors) {
+          g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" disconnected after first byte"<<endl;
+        }
+      }
       return;
     }
   }
-  else if(conn->state==TCPConnection::GETQUESTION) {
+
+  if(conn->state==TCPConnection::GETQUESTION) {
     ssize_t bytes=recv(conn->getFD(), &conn->data[conn->bytesread], conn->qlen - conn->bytesread, 0);
-    if(!bytes || bytes < 0 || bytes > std::numeric_limits<std::uint16_t>::max()) {
+    if (bytes <= 0) {
+      if (!handleTCPReadResult(fd, bytes)) {
+        if(g_logCommonErrors) {
+          g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" disconnected while reading question body"<<endl;
+        }
+      }
+      return;
+    }
+    else if (bytes > std::numeric_limits<std::uint16_t>::max()) {
       if(g_logCommonErrors) {
-        g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" disconnected while reading question body"<<endl;
+        g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" sent an invalid question size while reading question body"<<endl;
       }
       t_fdm->removeReadFD(fd);
       return;
@@ -2046,14 +2244,17 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       dc->setSocket(conn->getFD()); // this is the only time a copy is made of the actual fd
       dc->d_tcp=true;
       dc->setRemote(conn->d_remote);
-      dc->setSource(conn->d_remote);
+      dc->setSource(conn->d_source);
       ComboAddress dest;
       dest.reset();
       dest.sin4.sin_family = conn->d_remote.sin4.sin_family;
       socklen_t len = dest.getSocklen();
       getsockname(conn->getFD(), (sockaddr*)&dest, &len); // if this fails, we're ok with it
       dc->setLocal(dest);
-      dc->setDestination(dest);
+      dc->setDestination(conn->d_destination);
+      /* we can't move this if we want to be able to access the values in
+         all queries sent over this connection */
+      dc->d_proxyProtocolValues = conn->proxyProtocolValues;
       DNSName qname;
       uint16_t qtype=0;
       uint16_t qclass=0;
@@ -2090,10 +2291,10 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
           if(t_pdl) {
             try {
               if (t_pdl->d_gettag_ffi) {
-                dc->d_tag = t_pdl->gettag_ffi(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_records, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName, dc->d_rcode, dc->d_ttlCap, dc->d_variable, logQuery, dc->d_logResponse, dc->d_followCNAMERecords);
+                dc->d_tag = t_pdl->gettag_ffi(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_records, dc->d_data, ednsOptions, true, dc->d_proxyProtocolValues, requestorId, deviceId, deviceName, dc->d_routingTag, dc->d_rcode, dc->d_ttlCap, dc->d_variable, logQuery, dc->d_logResponse, dc->d_followCNAMERecords);
               }
               else if (t_pdl->d_gettag) {
-                dc->d_tag = t_pdl->gettag(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName);
+                dc->d_tag = t_pdl->gettag(dc->d_source, dc->d_ednssubnet.source, dc->d_destination, qname, qtype, &dc->d_policyTags, dc->d_data, ednsOptions, true, requestorId, deviceId, deviceName, dc->d_routingTag, dc->d_proxyProtocolValues);
               }
             }
             catch(const std::exception& e)  {
@@ -2180,6 +2381,11 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
   }
 }
 
+static bool expectProxyProtocol(const ComboAddress& from)
+{
+  return g_proxyProtocolACL.match(from);
+}
+
 //! Handle new incoming TCP connection
 static void handleNewTCPQuestion(int fd, FDMultiplexer::funcparam_t& )
 {
@@ -2198,11 +2404,14 @@ static void handleNewTCPQuestion(int fd, FDMultiplexer::funcparam_t& )
       return;
     }
 
-    if(t_remotes)
+    if(t_remotes) {
       t_remotes->push_back(addr);
-    if(t_allowFrom && !t_allowFrom->match(&addr)) {
+    }
+
+    bool fromProxyProtocolSource = expectProxyProtocol(addr);
+    if(t_allowFrom && !t_allowFrom->match(&addr) && !fromProxyProtocolSource) {
       if(!g_quiet)
-        g_log<<Logger::Error<<"["<<MT->getTid()<<"] dropping TCP query from "<<addr.toString()<<", address not matched by allow-from"<<endl;
+        g_log<<Logger::Error<<"["<<MT->getTid()<<"] dropping TCP query from "<<addr.toString()<<", address neither matched by allow-from nor proxy-protocol-from"<<endl;
 
       g_stats.unauthorizedTCP++;
       try {
@@ -2213,6 +2422,7 @@ static void handleNewTCPQuestion(int fd, FDMultiplexer::funcparam_t& )
       }
       return;
     }
+
     if(g_maxTCPPerClient && t_tcpClientCounts->count(addr) && (*t_tcpClientCounts)[addr] >= g_maxTCPPerClient) {
       g_stats.tcpClientOverflow++;
       try {
@@ -2226,7 +2436,20 @@ static void handleNewTCPQuestion(int fd, FDMultiplexer::funcparam_t& )
 
     setNonBlocking(newsock);
     std::shared_ptr<TCPConnection> tc = std::make_shared<TCPConnection>(newsock, addr);
-    tc->state=TCPConnection::BYTE0;
+    tc->d_source = addr;
+    tc->d_destination.reset();
+    tc->d_destination.sin4.sin_family = addr.sin4.sin_family;
+    socklen_t len = tc->d_destination.getSocklen();
+    getsockname(tc->getFD(), reinterpret_cast<sockaddr*>(&tc->d_destination), &len); // if this fails, we're ok with it
+
+    if (fromProxyProtocolSource) {
+      tc->proxyProtocolNeed = s_proxyProtocolMinimumHeaderSize;
+      tc->data.resize(tc->proxyProtocolNeed);
+      tc->state = TCPConnection::PROXYPROTOCOLHEADER;
+    }
+    else {
+      tc->state = TCPConnection::BYTE0;
+    }
 
     struct timeval ttd;
     Utility::gettimeofday(&ttd, 0);
@@ -2236,7 +2459,7 @@ static void handleNewTCPQuestion(int fd, FDMultiplexer::funcparam_t& )
   }
 }
 
-static string* doProcessUDPQuestion(const std::string& question, const ComboAddress& fromaddr, const ComboAddress& destaddr, struct timeval tv, int fd)
+static string* doProcessUDPQuestion(const std::string& question, const ComboAddress& fromaddr, const ComboAddress& destaddr, ComboAddress source, ComboAddress destination, struct timeval tv, int fd, std::vector<ProxyProtocolValue>& proxyProtocolValues)
 {
   gettimeofday(&g_now, 0);
   if (tv.tv_sec) {
@@ -2259,13 +2482,12 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   uint32_t qhash = 0;
   bool needECS = false;
   bool needXPF = g_XPFAcl.match(fromaddr);
-  std::vector<std::string> policyTags;
+  std::unordered_set<std::string> policyTags;
   LuaContext::LuaObject data;
-  ComboAddress source = fromaddr;
-  ComboAddress destination = destaddr;
   string requestorId;
   string deviceId;
   string deviceName;
+  string routingTag;
   bool logQuery = false;
   bool logResponse = false;
 #ifdef HAVE_PROTOBUF
@@ -2328,10 +2550,10 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
         if(t_pdl) {
           try {
             if (t_pdl->d_gettag_ffi) {
-              ctag = t_pdl->gettag_ffi(source, ednssubnet.source, destination, qname, qtype, &policyTags, records, data, ednsOptions, false, requestorId, deviceId, deviceName, rcode, ttlCap, variable, logQuery, logResponse, followCNAMEs);
+              ctag = t_pdl->gettag_ffi(source, ednssubnet.source, destination, qname, qtype, &policyTags, records, data, ednsOptions, false, proxyProtocolValues, requestorId, deviceId, deviceName, routingTag, rcode, ttlCap, variable, logQuery, logResponse, followCNAMEs);
             }
             else if (t_pdl->d_gettag) {
-              ctag = t_pdl->gettag(source, ednssubnet.source, destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName);
+              ctag = t_pdl->gettag(source, ednssubnet.source, destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName, routingTag, proxyProtocolValues);
             }
           }
           catch(const std::exception& e)  {
@@ -2381,7 +2603,8 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
 #ifdef HAVE_PROTOBUF
       if(t_protobufServers && logResponse && !(luaconfsLocal->protobufExportConfig.taggedOnly && pbMessage->getAppliedPolicy().empty() && pbMessage->getPolicyTags().empty())) {
         Netmask requestorNM(source, source.sin4.sin_family == AF_INET ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
-        const ComboAddress& requestor = requestorNM.getMaskedNetwork();
+        ComboAddress requestor = requestorNM.getMaskedNetwork();
+        requestor.setPort(source.getPort());
         pbMessage->update(uniqueId, &requestor, &destination, false, dh->id);
         pbMessage->setEDNSSubnet(ednssubnet.source, ednssubnet.source.isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
         if (g_useKernelTimestamp && tv.tv_sec) {
@@ -2428,7 +2651,8 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
     }
   }
   catch(std::exception& e) {
-    g_log<<Logger::Error<<"Error processing or aging answer packet: "<<e.what()<<endl;
+    if(g_logCommonErrors)
+      g_log<<Logger::Error<<"Error processing or aging answer packet: "<<e.what()<<endl;
     return 0;
   }
 
@@ -2477,6 +2701,8 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   dc->d_deviceName = deviceName;
   dc->d_kernelTimestamp = tv;
 #endif
+  dc->d_proxyProtocolValues = std::move(proxyProtocolValues);
+  dc->d_routingTag = std::move(routingTag);
 
   MT->makeThread(startDoResolve, (void*) dc.release()); // deletes dc
   return 0;
@@ -2486,15 +2712,19 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
 static void handleNewUDPQuestion(int fd, FDMultiplexer::funcparam_t& var)
 {
   ssize_t len;
-  static const size_t maxIncomingQuerySize = 512;
+  static const size_t maxIncomingQuerySize = g_proxyProtocolACL.empty() ? 512 : (512 + g_proxyProtocolMaximumSize);
   static thread_local std::string data;
   ComboAddress fromaddr;
+  ComboAddress source;
+  ComboAddress destination;
   struct msghdr msgh;
   struct iovec iov;
   cmsgbuf_aligned cbuf;
   bool firstQuery = true;
+  std::vector<ProxyProtocolValue> proxyProtocolValues;
 
   for(size_t queriesCounter = 0; queriesCounter < s_maxUDPQueriesPerRound; queriesCounter++) {
+    bool proxyProto = false;
     data.resize(maxIncomingQuerySize);
     fromaddr.sin6.sin6_family=AF_INET6; // this makes sure fromaddr is big enough
     fillMSGHdr(&msgh, &iov, &cbuf, sizeof(cbuf), &data[0], data.size(), &fromaddr);
@@ -2502,14 +2732,6 @@ static void handleNewUDPQuestion(int fd, FDMultiplexer::funcparam_t& var)
     if((len=recvmsg(fd, &msgh, 0)) >= 0) {
 
       firstQuery = false;
-
-      if (static_cast<size_t>(len) < sizeof(dnsheader)) {
-        g_stats.ignoredCount++;
-        if (!g_quiet) {
-          g_log<<Logger::Error<<"Ignoring too-short ("<<std::to_string(len)<<") query from "<<fromaddr.toString()<<endl;
-        }
-        return;
-      }
 
       if (msgh.msg_flags & MSG_TRUNC) {
         g_stats.truncatedDrops++;
@@ -2519,18 +2741,62 @@ static void handleNewUDPQuestion(int fd, FDMultiplexer::funcparam_t& var)
         return;
       }
 
+      data.resize(static_cast<size_t>(len));
+
+      if (expectProxyProtocol(fromaddr)) {
+        bool tcp;
+        ssize_t used = parseProxyHeader(data, proxyProto, source, destination, tcp, proxyProtocolValues);
+        if (used <= 0) {
+          ++g_stats.proxyProtocolInvalidCount;
+          if (!g_quiet) {
+            g_log<<Logger::Error<<"Ignoring invalid proxy protocol ("<<std::to_string(len)<<", "<<std::to_string(used)<<") query from "<<fromaddr.toStringWithPort()<<endl;
+          }
+          return;
+        }
+        else if (static_cast<size_t>(used) > g_proxyProtocolMaximumSize) {
+          if (g_quiet) {
+            g_log<<Logger::Error<<"Proxy protocol header in UDP packet from "<< fromaddr.toStringWithPort() << " is larger than proxy-protocol-maximum-size (" << used << "), dropping"<< endl;
+          }
+          ++g_stats.proxyProtocolInvalidCount;
+          return;
+        }
+
+        data.erase(0, used);
+      }
+      else if (len > 512) {
+        /* we only allow UDP packets larger than 512 for those with a proxy protocol header */
+        g_stats.truncatedDrops++;
+        if (!g_quiet) {
+          g_log<<Logger::Error<<"Ignoring truncated query from "<<fromaddr.toStringWithPort()<<endl;
+        }
+        return;
+      }
+
+      if (data.size() < sizeof(dnsheader)) {
+        g_stats.ignoredCount++;
+        if (!g_quiet) {
+          g_log<<Logger::Error<<"Ignoring too-short ("<<std::to_string(data.size())<<") query from "<<fromaddr.toString()<<endl;
+        }
+        return;
+      }
+
+      if (!proxyProto) {
+        source = fromaddr;
+      }
+
       if(t_remotes) {
         t_remotes->push_back(fromaddr);
       }
 
-      if(t_allowFrom && !t_allowFrom->match(&fromaddr)) {
+      if(t_allowFrom && !t_allowFrom->match(&source)) {
         if(!g_quiet) {
-          g_log<<Logger::Error<<"["<<MT->getTid()<<"] dropping UDP query from "<<fromaddr.toString()<<", address not matched by allow-from"<<endl;
+          g_log<<Logger::Error<<"["<<MT->getTid()<<"] dropping UDP query from "<<source.toString()<<", address not matched by allow-from"<<endl;
         }
 
         g_stats.unauthorizedUDP++;
         return;
       }
+
       BOOST_STATIC_ASSERT(offsetof(sockaddr_in, sin_port) == offsetof(sockaddr_in6, sin6_port));
       if(!fromaddr.sin4.sin_port) { // also works for IPv6
         if(!g_quiet) {
@@ -2542,7 +2808,6 @@ static void handleNewUDPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       }
 
       try {
-        data.resize(static_cast<size_t>(len));
         dnsheader* dh=(dnsheader*)&data[0];
 
         if(dh->qr) {
@@ -2585,13 +2850,16 @@ static void handleNewUDPQuestion(int fd, FDMultiplexer::funcparam_t& var)
               getsockname(fd, (sockaddr*)&dest, &slen); // if this fails, we're ok with it
             }
           }
+          if (!proxyProto) {
+            destination = dest;
+          }
 
           if(g_weDistributeQueries) {
-            distributeAsyncFunction(data, boost::bind(doProcessUDPQuestion, data, fromaddr, dest, tv, fd));
+            distributeAsyncFunction(data, boost::bind(doProcessUDPQuestion, data, fromaddr, dest, source, destination, tv, fd, proxyProtocolValues));
           }
           else {
             ++s_threadInfos[t_id].numberOfDistributedQueries;
-            doProcessUDPQuestion(data, fromaddr, dest, tv, fd);
+            doProcessUDPQuestion(data, fromaddr, dest, source, destination, tv, fd, proxyProtocolValues);
           }
         }
       }
@@ -2833,14 +3101,18 @@ static void doStats(void)
   static time_t lastOutputTime;
   static uint64_t lastQueryCount;
 
-  uint64_t cacheHits = broadcastAccFunction<uint64_t>(pleaseGetCacheHits);
-  uint64_t cacheMisses = broadcastAccFunction<uint64_t>(pleaseGetCacheMisses);
-
+  uint64_t cacheHits = s_RC->cacheHits;
+  uint64_t cacheMisses = s_RC->cacheMisses;
+  uint64_t cacheSize = s_RC->size();
+  auto rc_stats = s_RC->stats();
+  double r = rc_stats.second == 0 ? 0.0 : (100.0 * rc_stats.first / rc_stats.second);
+  
   if(g_stats.qcounter && (cacheHits + cacheMisses) && SyncRes::s_queries && SyncRes::s_outqueries) {
     g_log<<Logger::Notice<<"stats: "<<g_stats.qcounter<<" questions, "<<
-      broadcastAccFunction<uint64_t>(pleaseGetCacheSize)<< " cache entries, "<<
+      cacheSize << " cache entries, "<<
       broadcastAccFunction<uint64_t>(pleaseGetNegCacheSize)<<" negative entries, "<<
       (int)((cacheHits*100.0)/(cacheHits+cacheMisses))<<"% cache hits"<<endl;
+    g_log << Logger::Notice<< "stats: cache contended/acquired " << rc_stats.first << '/' << rc_stats.second << " = " << r << '%' << endl;
 
     g_log<<Logger::Notice<<"stats: throttle map: "
       << broadcastAccFunction<uint64_t>(pleaseGetThrottleSize) <<", ns speeds: "
@@ -2882,8 +3154,9 @@ static void doStats(void)
 
 static void houseKeeping(void *)
 {
-  static thread_local time_t last_rootupdate, last_secpoll, last_trustAnchorUpdate{0};
-  static thread_local timeval last_prune;
+  static thread_local time_t last_rootupdate, last_secpoll, last_trustAnchorUpdate{0}, last_RC_prune;
+  static thread_local struct timeval last_prune;
+
   static thread_local int cleanCounter=0;
   static thread_local bool s_running;  // houseKeeping can get suspended in secpoll, and be restarted, which makes us do duplicate work
   auto luaconfsLocal = g_luaconfs.getLocal();
@@ -2904,9 +3177,7 @@ static void houseKeeping(void *)
     past = now;
     past.tv_sec -= 5;
     if (last_prune < past) {
-      t_RC->doPrune(g_maxCacheEntries / g_numThreads); // this function is local to a thread, so fine anyhow
       t_packetCache->doPruneTo(g_maxPacketCacheEntries / g_numWorkerThreads);
-
       SyncRes::pruneNegCache(g_maxCacheEntries / (g_numWorkerThreads * 10));
 
       time_t limit;
@@ -2922,33 +3193,58 @@ static void houseKeeping(void *)
       Utility::gettimeofday(&last_prune, nullptr);
     }
 
-    if(now.tv_sec - last_rootupdate > 7200) {
-      int res = SyncRes::getRootNS(g_now, nullptr);
-      if (!res) {
-        last_rootupdate=now.tv_sec;
-        primeRootNSZones(g_dnssecmode != DNSSECMode::Off);
-      }
-    }
-
     if(isHandlerThread()) {
+      if (now.tv_sec - last_RC_prune > 5) {
+        s_RC->doPrune(g_maxCacheEntries);
+        last_RC_prune = now.tv_sec;
+      }
+      // XXX !!! global
+      if (now.tv_sec - last_rootupdate > 7200) {
+        int res = SyncRes::getRootNS(g_now, nullptr, 0);
+        if (!res) {
+          last_rootupdate=now.tv_sec;
+          try {
+            primeRootNSZones(g_dnssecmode != DNSSECMode::Off, 0);
+          }
+          catch (const std::exception& e) {
+            g_log<<Logger::Error<<"Exception while priming the root NS zones: "<<e.what()<<endl;
+          }
+          catch (const PDNSException& e) {
+            g_log<<Logger::Error<<"Exception while priming the root NS zones: "<<e.reason<<endl;
+          }
+          catch (const ImmediateServFailException& e) {
+            g_log<<Logger::Error<<"Exception while priming the root NS zones: "<<e.reason<<endl;
+          }
+          catch (const PolicyHitException& e) {
+            g_log<<Logger::Error<<"Policy hit while priming the root NS zones"<<endl;
+          }
+          catch (...)
+          {
+            g_log<<Logger::Error<<"Exception while priming the root NS zones"<<endl;
+          }
+        }
+      }
 
       if(now.tv_sec - last_secpoll >= 3600) {
 	try {
 	  doSecPoll(&last_secpoll);
 	}
-	catch(std::exception& e)
+	catch (const std::exception& e)
         {
           g_log<<Logger::Error<<"Exception while performing security poll: "<<e.what()<<endl;
         }
-        catch(PDNSException& e)
+        catch (const PDNSException& e)
         {
           g_log<<Logger::Error<<"Exception while performing security poll: "<<e.reason<<endl;
         }
-        catch(ImmediateServFailException &e)
+        catch (const ImmediateServFailException &e)
         {
           g_log<<Logger::Error<<"Exception while performing security poll: "<<e.reason<<endl;
         }
-        catch(...)
+        catch (const PolicyHitException& e) {
+          g_log<<Logger::Error<<"Policy hit while performing security poll"<<endl;
+        }
+        catch (...)
         {
           g_log<<Logger::Error<<"Exception while performing security poll"<<endl;
         }
@@ -2970,14 +3266,20 @@ static void houseKeeping(void *)
         }
       }
     }
-    s_running=false;
+    s_running = false;
   }
-  catch(PDNSException& ae)
-    {
-      s_running=false;
-      g_log<<Logger::Error<<"Fatal error in housekeeping thread: "<<ae.reason<<endl;
-      throw;
-    }
+  catch (const PDNSException& ae)
+  {
+    s_running = false;
+    g_log<<Logger::Error<<"Fatal error in housekeeping thread: "<<ae.reason<<endl;
+    throw;
+  }
+  catch (...)
+  {
+    s_running = false;
+    g_log<<Logger::Error<<"Uncaught exception in housekeeping thread"<<endl;
+    throw;
+  }
 }
 
 static void makeThreadPipes()
@@ -3214,19 +3516,13 @@ template<class T> void *voider(const boost::function<T*()>& func)
   return func();
 }
 
-vector<ComboAddress>& operator+=(vector<ComboAddress>&a, const vector<ComboAddress>& b)
+static vector<ComboAddress>& operator+=(vector<ComboAddress>&a, const vector<ComboAddress>& b)
 {
   a.insert(a.end(), b.begin(), b.end());
   return a;
 }
 
-vector<pair<string, uint16_t> >& operator+=(vector<pair<string, uint16_t> >&a, const vector<pair<string, uint16_t> >& b)
-{
-  a.insert(a.end(), b.begin(), b.end());
-  return a;
-}
-
-vector<pair<DNSName, uint16_t> >& operator+=(vector<pair<DNSName, uint16_t> >&a, const vector<pair<DNSName, uint16_t> >& b)
+static vector<pair<DNSName, uint16_t> >& operator+=(vector<pair<DNSName, uint16_t> >&a, const vector<pair<DNSName, uint16_t> >& b)
 {
   a.insert(a.end(), b.begin(), b.end());
   return a;
@@ -3473,7 +3769,7 @@ retryWithName:
   }
 }
 
-FDMultiplexer* getMultiplexer()
+static FDMultiplexer* getMultiplexer()
 {
   FDMultiplexer* ret;
   for(const auto& i : FDMultiplexer::getMultiplexerMap()) {
@@ -3786,7 +4082,7 @@ static void setupNODThread()
   }
 }
 
-void parseNODWhitelist(const std::string& wlist)
+static void parseNODWhitelist(const std::string& wlist)
 {
   vector<string> parts;
   stringtok(parts, wlist, ",; ");
@@ -3809,6 +4105,27 @@ static void setupNODGlobal()
 }
 #endif /* NOD_ENABLED */
 
+static void checkSocketDir(void)
+{
+  struct stat st;
+  string dir(::arg()["socket-dir"]);
+  string msg;
+
+  if (stat(dir.c_str(), &st) == -1) {
+    msg = "it does not exist or cannot access";
+  }
+  else if (!S_ISDIR(st.st_mode)) {
+    msg = "it is not a directory";
+  }
+  else if (access(dir.c_str(),  R_OK | W_OK | X_OK) != 0) {
+    msg = "cannot read, write or search";
+  } else {
+    return;
+  }
+  g_log << Logger::Error << "Problem with socket directory " << dir << ": " << msg << "; see https://docs.powerdns.com/recursor/upgrade.html#x-to-4-3-0-or-master" << endl;
+  _exit(1);
+}
+
 static int serviceMain(int argc, char*argv[])
 {
   g_log.setName(s_programname);
@@ -3829,28 +4146,24 @@ static int serviceMain(int argc, char*argv[])
 
   checkLinuxIPv6Limits();
   try {
-    vector<string> addrs;
-    if(!::arg()["query-local-address6"].empty()) {
-      SyncRes::s_doIPv6=true;
-      g_log<<Logger::Warning<<"Enabling IPv6 transport for outgoing queries"<<endl;
-
-      stringtok(addrs, ::arg()["query-local-address6"], ", ;");
-      for(const string& addr : addrs) {
-        g_localQueryAddresses6.push_back(ComboAddress(addr));
-      }
-    }
-    else {
-      g_log<<Logger::Warning<<"NOT using IPv6 for outgoing queries - set 'query-local-address6=::' to enable"<<endl;
-    }
-    addrs.clear();
-    stringtok(addrs, ::arg()["query-local-address"], ", ;");
-    for(const string& addr : addrs) {
-      g_localQueryAddresses4.push_back(ComboAddress(addr));
+    pdns::parseQueryLocalAddress(::arg()["query-local-address"]);
+    if (!::arg()["query-local-address6"].empty()) {
+      // TODO remove in 4.5.0
+      g_log<<Logger::Warning<<"query-local-address6 is deprecated and will be removed in a future version. Please use query-local-address for IPv6 addresses as well"<<endl;
+      pdns::parseQueryLocalAddress(::arg()["query-local-address6"]);
     }
   }
   catch(std::exception& e) {
     g_log<<Logger::Error<<"Assigning local query addresses: "<<e.what();
     exit(99);
+  }
+
+  if(pdns::isQueryLocalAddressFamilyEnabled(AF_INET6)) {
+    SyncRes::s_doIPv6=true;
+    g_log<<Logger::Warning<<"Enabling IPv6 transport for outgoing queries"<<endl;
+  }
+  else {
+    g_log<<Logger::Warning<<"NOT using IPv6 for outgoing queries - add an IPv6 address (like '::') to query-local-address to enable"<<endl;
   }
 
   // keep this ABOVE loadRecursorLuaConfig!
@@ -3951,6 +4264,7 @@ static int serviceMain(int argc, char*argv[])
   SyncRes::s_serverdownthrottletime=::arg().asNum("server-down-throttle-time");
   SyncRes::s_serverID=::arg()["server-id"];
   SyncRes::s_maxqperq=::arg().asNum("max-qperq");
+  SyncRes::s_maxnsaddressqperq=::arg().asNum("max-ns-address-qperq");
   SyncRes::s_maxtotusec=1000*::arg().asNum("max-total-msec");
   SyncRes::s_maxdepth=::arg().asNum("max-recursion-depth");
   SyncRes::s_rootNXTrust = ::arg().mustDo( "root-nx-trust");
@@ -3966,6 +4280,12 @@ static int serviceMain(int argc, char*argv[])
   SyncRes::s_ecscachelimitttl = ::arg().asNum("ecs-cache-limit-ttl");
 
   SyncRes::s_qnameminimization = ::arg().mustDo("qname-minimization");
+
+  if (SyncRes::s_qnameminimization) {
+    // With an empty cache, a rev ipv6 query with dnssec enabled takes
+    // almost 100 queries. Default maxqperq is 60.
+    SyncRes::s_maxqperq = std::max(SyncRes::s_maxqperq, static_cast<unsigned int>(100));
+  }
 
   SyncRes::s_hardenNXD = SyncRes::HardenNXD::DNSSEC;
   string value = ::arg()["nothing-below-nxdomain"];
@@ -3983,26 +4303,25 @@ static int serviceMain(int argc, char*argv[])
     SyncRes::setECSScopeZeroAddress(Netmask(scopeZero, scopeZero.isIPv4() ? 32 : 128));
   }
   else {
-    bool found = false;
-    for (const auto& addr : g_localQueryAddresses4) {
-      if (!IsAnyAddress(addr)) {
-        SyncRes::setECSScopeZeroAddress(Netmask(addr, 32));
-        found = true;
-        break;
+    Netmask nm;
+    bool done = false;
+
+    auto addr = pdns::getNonAnyQueryLocalAddress(AF_INET);
+    if (addr.sin4.sin_family != 0) {
+      nm = Netmask(addr, 32);
+      done = true;
+    }
+    if (!done) {
+      addr = pdns::getNonAnyQueryLocalAddress(AF_INET6);
+      if (addr.sin4.sin_family != 0) {
+        nm = Netmask(addr, 128);
+        done = true;
       }
     }
-    if (!found) {
-      for (const auto& addr : g_localQueryAddresses6) {
-        if (!IsAnyAddress(addr)) {
-          SyncRes::setECSScopeZeroAddress(Netmask(addr, 128));
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        SyncRes::setECSScopeZeroAddress(Netmask("127.0.0.1/32"));
-      }
+    if (!done) {
+      nm = Netmask(ComboAddress("127.0.0.1"), 32);
     }
+    SyncRes::setECSScopeZeroAddress(nm);
   }
 
   SyncRes::parseEDNSSubnetWhitelist(::arg()["edns-subnet-whitelist"]);
@@ -4011,6 +4330,29 @@ static int serviceMain(int argc, char*argv[])
 
   g_XPFAcl.toMasks(::arg()["xpf-allow-from"]);
   g_xpfRRCode = ::arg().asNum("xpf-rr-code");
+
+  g_proxyProtocolACL.toMasks(::arg()["proxy-protocol-from"]);
+  g_proxyProtocolMaximumSize = ::arg().asNum("proxy-protocol-maximum-size");
+
+  if (!::arg()["dns64-prefix"].empty()) {
+    try {
+      auto dns64Prefix = Netmask(::arg()["dns64-prefix"]);
+      if (dns64Prefix.getBits() != 96) {
+        g_log << Logger::Error << "Invalid prefix for 'dns64-prefix', the current implementation only supports /96 prefixes: " << ::arg()["dns64-prefix"] << endl;
+        exit(1);
+      }
+      g_dns64Prefix = dns64Prefix.getNetwork();
+      g_dns64PrefixReverse = reverseNameFromIP(*g_dns64Prefix);
+      /* /96 is 24 nibbles + 2 for "ip6.arpa." */
+      while (g_dns64PrefixReverse.countLabels() > 26) {
+        g_dns64PrefixReverse.chopOff();
+      }
+    }
+    catch (const NetmaskException& ne) {
+      g_log << Logger::Error << "Invalid prefix '" << ::arg()["dns64-prefix"] << "' for 'dns64-prefix': " << ne.reason << endl;
+      exit(1);
+    }
+  }
 
   g_networkTimeoutMsec = ::arg().asNum("network-timeout");
 
@@ -4053,14 +4395,14 @@ static int serviceMain(int argc, char*argv[])
   {
     SuffixMatchNode dontThrottleNames;
     vector<string> parts;
-    stringtok(parts, ::arg()["dont-throttle-names"]);
+    stringtok(parts, ::arg()["dont-throttle-names"], " ,");
     for (const auto &p : parts) {
       dontThrottleNames.add(DNSName(p));
     }
     g_dontThrottleNames.setState(std::move(dontThrottleNames));
 
     NetmaskGroup dontThrottleNetmasks;
-    stringtok(parts, ::arg()["dont-throttle-netmasks"]);
+    stringtok(parts, ::arg()["dont-throttle-netmasks"], " ,");
     for (const auto &p : parts) {
       dontThrottleNetmasks.addMask(Netmask(p));
     }
@@ -4146,7 +4488,7 @@ static int serviceMain(int argc, char*argv[])
       For years, this was a safe assumption, but containers change that: in
       most (all?) container implementations, the application itself is running
       as pid 1. This means that sending signals to those applications, will not
-      be handled by default. Results might be "your container not responsing
+      be handled by default. Results might be "your container not responding
       when asking it to stop", or "ctrl-c not working even when the app is
       running in the foreground inside a container".
 
@@ -4204,6 +4546,8 @@ static int serviceMain(int argc, char*argv[])
     else
       g_log<<Logger::Info<<"Chrooted to '"<<::arg()["chroot"]<<"'"<<endl;
   }
+
+  checkSocketDir();
 
   s_pidfname=::arg()["socket-dir"]+"/"+s_programname+".pid";
   if(!s_pidfname.empty())
@@ -4358,11 +4702,13 @@ try
   t_allowFrom = g_initialAllowFrom;
   t_udpclientsocks = std::unique_ptr<UDPClientSocks>(new UDPClientSocks());
   t_tcpClientCounts = std::unique_ptr<tcpClientCounts_t>(new tcpClientCounts_t());
-  primeHints();
+  if (threadInfo.isHandler) {
+    primeHints();
+    g_log<<Logger::Warning<<"Done priming cache with root hints"<<endl;
+  }
 
   t_packetCache = std::unique_ptr<RecursorPacketCache>(new RecursorPacketCache());
 
-  g_log<<Logger::Warning<<"Done priming cache with root hints"<<endl;
 
 #ifdef NOD_ENABLED
   if (threadInfo.isWorker)
@@ -4448,13 +4794,13 @@ try
     if (threadInfo.isListener) {
       if (g_reusePort) {
         /* then every listener has its own FDs */
-        for(const auto deferred : threadInfo.deferredAdds) {
+        for(const auto& deferred : threadInfo.deferredAdds) {
           t_fdm->addReadFD(deferred.first, deferred.second);
         }
       }
       else {
         /* otherwise all listeners are listening on the same ones */
-        for(const auto deferred : g_deferredAdds) {
+        for(const auto& deferred : g_deferredAdds) {
           t_fdm->addReadFD(deferred.first, deferred.second);
         }
       }
@@ -4480,7 +4826,9 @@ try
   while (!RecursorControlChannel::stop) {
     while(MT->schedule(&g_now)); // MTasker letting the mthreads do their thing
 
-    if(!(counter%500)) {
+    // Use primes, it avoid not being scheduled in cases where the counter has a regular pattern.
+    // We want to call handler thread often, it gets scheduled about 2 times per second
+    if ((threadInfo.isHandler && counter % 11 == 0) || counter % 499 == 0) {
       MT->makeThread(houseKeeping, 0);
     }
 
@@ -4631,10 +4979,19 @@ int main(int argc, char **argv)
     ::arg().set("socket-group","Group of socket")="";
     ::arg().set("socket-mode", "Permissions for socket")="";
 
-    ::arg().set("socket-dir",string("Where the controlsocket will live, ")+LOCALSTATEDIR+"/pdns-recursor when unset and not chrooted" )="";
+    ::arg().set("socket-dir",string("Where the controlsocket will live, ")+LOCALSTATEDIR+"/pdns-recursor when unset and not chrooted"
+#ifdef HAVE_SYSTEMD
+      + ". Set to the RUNTIME_DIRECTORY environment variable when that variable has a value (e.g. under systemd).")="";
+   auto runtimeDir = getenv("RUNTIME_DIRECTORY");
+   if (runtimeDir != nullptr) {
+     ::arg().set("socket-dir") = runtimeDir;
+   }
+#else
+      )="";
+#endif
     ::arg().set("delegation-only","Which domains we only accept delegations from")="";
     ::arg().set("query-local-address","Source IP address for sending queries")="0.0.0.0";
-    ::arg().set("query-local-address6","Source IPv6 address for sending queries. IF UNSET, IPv6 WILL NOT BE USED FOR OUTGOING QUERIES")="";
+    ::arg().set("query-local-address6","DEPRECATED: Use query-local-address for IPv6 as well. Source IPv6 address for sending queries. IF UNSET, IPv6 WILL NOT BE USED FOR OUTGOING QUERIES")="";
     ::arg().set("client-tcp-timeout","Timeout in seconds when talking to TCP clients")="2";
     ::arg().set("max-mthreads", "Maximum number of simultaneous Mtasker threads")="2048";
     ::arg().set("max-tcp-clients","Maximum number of simultaneous TCP clients")="128";
@@ -4695,7 +5052,8 @@ int main(int argc, char **argv)
     ::arg().set("udp-truncation-threshold", "Maximum UDP response size before we truncate")="1232";
     ::arg().set("edns-outgoing-bufsize", "Outgoing EDNS buffer size")="1232";
     ::arg().set("minimum-ttl-override", "Set under adverse conditions, a minimum TTL")="0";
-    ::arg().set("max-qperq", "Maximum outgoing queries per query")="50";
+    ::arg().set("max-qperq", "Maximum outgoing queries per query")="60";
+    ::arg().set("max-ns-address-qperq", "Maximum outgoing NS address queries per query")="10";
     ::arg().set("max-total-msec", "Maximum total wall-clock time per query in milliseconds, 0 for unlimited")="7000";
     ::arg().set("max-recursion-depth", "Maximum number of internal recursion calls per query, 0 for unlimited")="40";
     ::arg().set("max-udp-queries-per-round", "Maximum number of UDP queries processed per recvmsg() round, before returning back to normal processing")="10000";
@@ -4732,6 +5090,11 @@ int main(int argc, char **argv)
     ::arg().set("xpf-allow-from","XPF information is only processed from these subnets")="";
     ::arg().set("xpf-rr-code","XPF option code to use")="0";
 
+    ::arg().set("proxy-protocol-from", "A Proxy Protocol header is only allowed from these subnets")="";
+    ::arg().set("proxy-protocol-maximum-size", "The maximum size of a proxy protocol payload, including the TLV values")="512";
+
+    ::arg().set("dns64-prefix", "DNS64 prefix")="";
+
     ::arg().set("udp-source-port-min", "Minimum UDP port to bind on")="1024";
     ::arg().set("udp-source-port-max", "Maximum UDP port to bind on")="65535";
     ::arg().set("udp-source-port-avoid", "List of comma separated UDP port number to avoid")="11211";
@@ -4742,6 +5105,7 @@ int main(int argc, char **argv)
     ::arg().setSwitch("qname-minimization", "Use Query Name Minimization")="yes";
     ::arg().setSwitch("nothing-below-nxdomain", "When an NXDOMAIN exists in cache for a name with fewer labels than the qname, send NXDOMAIN without doing a lookup (see RFC 8020)")="dnssec";
     ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
+    ::arg().set("cache-shards", "Number of shards in the record cache")="1024";
 
 #ifdef NOD_ENABLED
     ::arg().set("new-domain-tracking", "Track newly observed domains (i.e. never seen before).")="no";
@@ -4760,6 +5124,7 @@ int main(int argc, char **argv)
     ::arg().setCmd("help","Provide a helpful message");
     ::arg().setCmd("version","Print version string");
     ::arg().setCmd("config","Output blank configuration");
+    ::arg().setDefaults();
     g_log.toConsole(Logger::Info);
     ::arg().laxParse(argc,argv); // do a lax parse
 
@@ -4777,7 +5142,7 @@ int main(int argc, char **argv)
       }
       cerr<<" (";
       bool first = true;
-      for (auto const c : ::arg().getCommands()) {
+      for (const auto& c : ::arg().getCommands()) {
         if (!first) {
           cerr<<", ";
         }
@@ -4789,7 +5154,7 @@ int main(int argc, char **argv)
     }
 
     if(::arg().mustDo("config")) {
-      cout<<::arg().configstring()<<endl;
+      cout<<::arg().configstring(false, true);
       exit(0);
     }
 
@@ -4838,6 +5203,8 @@ int main(int argc, char **argv)
       showBuildConfiguration();
       exit(0);
     }
+
+    s_RC = std::unique_ptr<MemRecursorCache>(new MemRecursorCache(::arg().asNum("cache-shards")));
 
     Logger::Urgency logUrgency = (Logger::Urgency)::arg().asNum("loglevel");
 

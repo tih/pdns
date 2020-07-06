@@ -19,8 +19,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef PDNS_RECPACKETCACHE_HH
-#define PDNS_RECPACKETCACHE_HH
+#pragma once
 #include <string>
 #include <inttypes.h>
 #include "dns.hh"
@@ -57,7 +56,7 @@ public:
   bool getResponsePacket(unsigned int tag, const std::string& queryPacket, const DNSName& qname, uint16_t qtype, uint16_t qclass, time_t now, std::string* responsePacket, uint32_t* age, vState* valState, uint32_t* qhash, uint16_t* ecsBegin, uint16_t* ecsEnd, RecProtoBufMessage* protobufMessage);
   bool getResponsePacket(unsigned int tag, const std::string& queryPacket, DNSName& qname, uint16_t* qtype, uint16_t* qclass, time_t now, std::string* responsePacket, uint32_t* age, vState* valState, uint32_t* qhash, uint16_t* ecsBegin, uint16_t* ecsEnd, RecProtoBufMessage* protobufMessage);
   void insertResponsePacket(unsigned int tag, uint32_t qhash, std::string&& query, const DNSName& qname, uint16_t qtype, uint16_t qclass, std::string&& responsePacket, time_t now, uint32_t ttl, const vState& valState, uint16_t ecsBegin, uint16_t ecsEnd, boost::optional<RecProtoBufMessage>&& protobufMessage);
-  void doPruneTo(unsigned int maxSize=250000);
+  void doPruneTo(size_t maxSize=250000);
   uint64_t doDump(int fd);
   int doWipePacketCache(const DNSName& name, uint16_t qtype=0xffff, bool subtree=false);
   
@@ -118,5 +117,3 @@ public:
   {
   }
 };
-
-#endif

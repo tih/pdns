@@ -106,6 +106,20 @@ policyName
 ^^^^^^^^^^
 The name logged as 'appliedPolicy' in :doc:`protobuf <protobuf>` messages when this policy is applied.
 
+tags
+^^^^
+.. versionadded:: 4.4.0
+
+List of tags as string, that will be added to the policy tags exported over protobuf when a policy of this zone matches.
+
+overridesGettag
+^^^^^^^^^^^^^^^
+.. versionadded:: 4.4.0
+
+`gettag_ffi` can set an answer to a query.
+By default an RPZ hit overrides this answer, unless this option is set to `false`.
+The default is `true`.
+
 zoneSizeHint
 ^^^^^^^^^^^^
 An indication of the number of expected entries in the zone, speeding up the loading of huge zones by reserving space in advance.
@@ -140,7 +154,7 @@ The default value of 0 means no restriction.
 localAddress
 ^^^^^^^^^^^^
 The source IP address to use when transferring the RPZ.
-When unset, :ref:`setting-query-local-address` and :ref:`setting-query-local-address6` are used.
+When unset, :ref:`setting-query-local-address` is used.
 
 axfrTimeout
 ^^^^^^^^^^^

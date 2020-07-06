@@ -58,14 +58,13 @@ try
       const auto& server = conf.server;
       const std::string& namespace_name = conf.namespace_name;
       std::string hostname = conf.ourname;
-      if(hostname.empty()) {
-        char tmp[80];
-        memset(tmp, 0, sizeof(tmp));
-        gethostname(tmp, sizeof(tmp));
-        char *p = strchr(tmp, '.');
-        if(p) *p=0;
-        hostname=tmp;
-        boost::replace_all(hostname, ".", "_");
+      if (hostname.empty()) {
+        try {
+          hostname = getCarbonHostName();
+        }
+        catch(const std::exception& e) {
+          throw std::runtime_error(std::string("The 'ourname' setting in 'carbonServer()' has not been set and we are unable to determine the system's hostname: ") + e.what());
+        }
       }
       const std::string& instance_name = conf.instance_name;
 
@@ -87,7 +86,7 @@ try
         }
         auto states = g_dstates.getLocal();
         for(const auto& state : *states) {
-          string serverName = state->name.empty() ? (state->remote.toString() + ":" + std::to_string(state->remote.getPort())) : state->getName();
+          string serverName = state->getName().empty() ? (state->remote.toString() + ":" + std::to_string(state->remote.getPort())) : state->getName();
           boost::replace_all(serverName, ".", "_");
           const string base = namespace_name + "." + hostname + "." + instance_name + ".servers." + serverName + ".";
           str<<base<<"queries" << ' ' << state->queries.load() << " " << now << "\r\n";

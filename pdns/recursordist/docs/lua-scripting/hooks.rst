@@ -6,6 +6,7 @@ Please find it `here <https://github.com/PowerDNS/pdns/blob/master/pdns/recursor
 Queries can be intercepted in many places:
 
 -  before any packet parsing begins (:func:`ipfilter`)
+-  before the packet cache has been looked up (:func:`gettag` and its FFI counterpart, :func:`gettag_ffi`)
 -  before any filtering policy have been applied (:func:`prerpz`)
 -  before the resolving logic starts to work (:func:`preresolve`)
 -  after the resolving process failed to find a correct answer for a domain (:func:`nodata`, :func:`nxdomain`)
@@ -53,12 +54,17 @@ Interception Functions
     :param DNSHeader dh: The DNS Header of the query.
 
 
-.. function:: gettag(remote, ednssubnet, localip, qname, qtype, ednsoptions, tcp) -> int
+.. function:: gettag(remote, ednssubnet, localip, qname, qtype, ednsoptions, tcp, proxyprotocolvalues) -> multiple values
+              gettag(remote, ednssubnet, localip, qname, qtype, ednsoptions, tcp) -> int
               gettag(remote, ednssubnet, localip, qname, qtype, ednsoptions) -> int
 
     .. versionchanged:: 4.1.0
 
       The ``tcp`` parameter was added.
+
+    .. versionchanged:: 4.4.0
+
+      The ``proxyprotocolvalues`` parameter was added.
 
     The ``gettag`` function is invoked when the Recursor attempts to discover in which packetcache an answer is available.
 
@@ -69,10 +75,17 @@ Interception Functions
     .. versionadded:: 4.1.0
 
         It can also return a table whose keys and values are strings to fill the :attr:`DNSQuestion.data` table, as well as a ``requestorId`` value to fill the :attr:`DNSQuestion.requestorId` field and a ``deviceId`` value to fill the :attr:`DNSQuestion.deviceId` field.
+
     .. versionadded:: 4.3.0
 
-        Along the ``deviceId`` value that can be returned, it was addded a ``deviceName`` field to fill the :attr:`DNSQuestion.deviceName` field.
+        Along the ``deviceId`` value that can be returned, it was added a ``deviceName`` field to fill the :attr:`DNSQuestion.deviceName` field.
 
+    .. versionadded:: 4.4.0
+       A ``routingTag`` can be returned, which is used as an extra name to identify records in the record cache.
+       If a routing tag is set and a record would be stored with an ENDS subnetmask in the record cache, it will be
+       stored with the tag instead. New request using the same tag will be served by the record in the records cache,
+       avoiding querying authoritative servers.
+ 
     The tagged packetcache can e.g. be used to answer queries from cache that have e.g. been filtered for certain IPs (this logic should be implemented in :func:`gettag`).
     This ensure that queries are answered quickly compared to setting :attr:`dq.variable <DNSQuestion.variable>` to true.
     In the latter case, repeated queries will pass through the entire Lua script.
@@ -84,6 +97,21 @@ Interception Functions
     :param int qtype: The query type of the query
     :param ednsoptions: A table whose keys are EDNS option codes and values are :class:`EDNSOptionView` objects. This table is empty unless the :ref:`setting-gettag-needs-edns-options` option is set.
     :param bool tcp: Added in 4.1.0, a boolean indicating whether the query was received over UDP (false) or TCP (true).
+    :param proxyprotocolvalues: Added in 4.4.0, a table of :class:`ProxyProtocolValue` objects representing the Type-Length Values received via the Proxy Protocol, if any.
+
+    :return: ``tag`` [``, policyTags`` [``, data`` [``, reqId`` [``, deviceId`` [``, deviceName`` [``, routingTag`` ]]]]]]
+
+.. function:: gettag_ffi(param) -> optional Lua object
+
+    .. versionadded:: 4.1.2
+
+    .. versionchanged:: 4.3.0
+
+      The ability to craft answers was added.
+
+    This function is the FFI counterpart of the :func:`gettag` function, and offers the same functionality.
+    It accepts a single, scalable parameter which can be accessed using FFI accessors.
+    Like the non-FFI version, it has the ability to set a tag for the packetcache, policy tags, a routing tag, the :attr:`DNSQuestion.requestorId` and :attr:`DNSQuestion.deviceId`values and to fill the :attr:`DNSQuestion.data` table. It also offers ways to mark the answer as variable so it's not inserted into the packetcache, to set a cap on the TTL of the returned records, and to generate a response by adding records and setting the RCode. It can also instruct the recursor to do a proper resolution in order to follow any `CNAME` records added in this step.
 
 .. function:: prerpz(dq)
 

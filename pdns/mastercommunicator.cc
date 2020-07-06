@@ -40,6 +40,7 @@
 #include "packetcache.hh"
 #include "base64.hh"
 #include "namespaces.hh"
+#include "query-local-address.hh"
 
 
 void CommunicatorClass::queueNotifyDomain(const DomainInfo& di, UeberBackend* B)
@@ -120,8 +121,9 @@ bool CommunicatorClass::notifyDomain(const DNSName &domain, UeberBackend* B)
     return false;
   }
   queueNotifyDomain(di, B);
-  // call backend and tell them we sent out the notification - even though that is premature    
-  di.backend->setNotified(di.id, di.serial);
+  // call backend and tell them we sent out the notification - even though that is premature
+  if (di.serial != di.notified_serial)
+    di.backend->setNotified(di.id, di.serial);
 
   return true; 
 }
@@ -213,7 +215,7 @@ time_t CommunicatorClass::doNotifications(PacketHandler *P)
         ComboAddress remote(ip, 53); // default to 53
         if((d_nsock6 < 0 && remote.sin4.sin_family == AF_INET6) ||
            (d_nsock4 < 0 && remote.sin4.sin_family == AF_INET)) {
-             g_log<<Logger::Warning<<"Unable to notify "<<remote.toStringWithPort()<<" for domain '"<<domain<<"', address family is disabled. Is query-local-address"<<(remote.sin4.sin_family == AF_INET ? "" : "6")<<" unset?"<<endl;
+             g_log<<Logger::Warning<<"Unable to notify "<<remote.toStringWithPort()<<" for domain '"<<domain<<"', address family is disabled. Is an IPv"<<(remote.sin4.sin_family == AF_INET ? "4" : "6")<<" address set in query-local-address?"<<endl;
              d_nq.removeIf(remote.toStringWithPort(), id, domain); // Remove, we'll never be able to notify
              continue; // don't try to notify what we can't!
         }
@@ -279,13 +281,13 @@ void CommunicatorClass::sendNotification(int sock, const DNSName& domain, const 
 
 void CommunicatorClass::drillHole(const DNSName &domain, const string &ip)
 {
-  Lock l(&d_holelock);
+  std::lock_guard<std::mutex> l(d_holelock);
   d_holes[make_pair(domain,ip)]=time(0);
 }
 
 bool CommunicatorClass::justNotified(const DNSName &domain, const string &ip)
 {
-  Lock l(&d_holelock);
+  std::lock_guard<std::mutex> l(d_holelock);
   if(d_holes.find(make_pair(domain,ip))==d_holes.end()) // no hole
     return false;
 
@@ -298,13 +300,13 @@ bool CommunicatorClass::justNotified(const DNSName &domain, const string &ip)
 
 void CommunicatorClass::makeNotifySockets()
 {
-  if(!::arg()["query-local-address"].empty()) {
-    d_nsock4 = makeQuerySocket(ComboAddress(::arg()["query-local-address"]), true, ::arg().mustDo("non-local-bind"));
+  if(pdns::isQueryLocalAddressFamilyEnabled(AF_INET)) {
+    d_nsock4 = makeQuerySocket(pdns::getQueryLocalAddress(AF_INET, 0), true, ::arg().mustDo("non-local-bind"));
   } else {
     d_nsock4 = -1;
   }
-  if(!::arg()["query-local-address6"].empty()) {
-    d_nsock6 = makeQuerySocket(ComboAddress(::arg()["query-local-address6"]), true, ::arg().mustDo("non-local-bind"));
+  if(pdns::isQueryLocalAddressFamilyEnabled(AF_INET6)) {
+    d_nsock6 = makeQuerySocket(pdns::getQueryLocalAddress(AF_INET6, 0), true, ::arg().mustDo("non-local-bind"));
   } else {
     d_nsock6 = -1;
   }

@@ -39,18 +39,8 @@ public:
     d_query = query;
     d_dolog = dolog;
     d_parent = db;
-    d_prepared = false;
     d_nparams = nparams;
-    d_res = NULL;
-    d_res_set = NULL;
-    paramValues = NULL;
-    paramLengths = NULL;
     d_nstatement = nstatement;
-    d_paridx = 0;
-    d_residx = 0;
-    d_resnum = 0;
-    d_fnum = 0;
-    d_cur_set = 0;
   }
 
   SSqlStatement* bind(const string& name, bool value) { return bind(name, string(value ? "t" : "f")); }
@@ -78,10 +68,26 @@ public:
   SSqlStatement* execute() {
     prepareStatement();
     if (d_dolog) {
-      g_log<<Logger::Warning<< "Query "<<((long)(void*)this)<<": " << d_query << endl;
+      g_log<<Logger::Warning<< "Query "<<((long)(void*)this)<<": Statement: " << d_query << endl;
+      if (d_paridx) {
+        // Log message is similar, bot not exactly the same as the postgres server log.
+        std::stringstream log_message;
+        log_message<< "Query "<<((long)(void*)this)<<": Parameters: ";
+        for (int i = 0; i < d_paridx; i++) {
+          if (i != 0) {
+            log_message << ", ";
+          }
+          log_message << "$" << (i + 1) << " = '" << paramValues[i] << "'";
+        }
+        g_log<<Logger::Warning<< log_message.str() << endl;
+      }
       d_dtime.set();
     }
-    d_res_set = PQexecPrepared(d_db(), d_stmt.c_str(), d_nparams, paramValues, paramLengths, NULL, 0);
+    if (!d_stmt.empty()) {
+      d_res_set = PQexecPrepared(d_db(), d_stmt.c_str(), d_nparams, paramValues, paramLengths, nullptr, 0);
+    } else {
+      d_res_set = PQexecParams(d_db(), d_query.c_str(), d_nparams, nullptr, paramValues, paramLengths, nullptr, 0);
+    }
     ExecStatusType status = PQresultStatus(d_res_set);
     if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK && status != PGRES_NONFATAL_ERROR) {
       string errmsg(PQresultErrorMessage(d_res_set));
@@ -99,10 +105,10 @@ public:
   }
 
   void nextResult() {
-    if (d_res_set == NULL) return; // no refcursor
+    if (d_res_set == nullptr) return; // no refcursor
     if (d_cur_set >= PQntuples(d_res_set)) {
       PQclear(d_res_set);
-      d_res_set = NULL;
+      d_res_set = nullptr;
       return;
     }
     // this code handles refcursors if they are returned
@@ -112,7 +118,7 @@ public:
 #if PG_VERSION_NUM > 90000
       // PQescapeIdentifier was added to libpq in postgresql 9.0
       char *val = PQgetvalue(d_res_set, d_cur_set++, 0);
-      char *portal =  PQescapeIdentifier(d_db(), val, strlen(val));
+      char *portal = PQescapeIdentifier(d_db(), val, strlen(val));
       string cmd = string("FETCH ALL FROM \"") + string(portal) + string("\"");
       PQfreemem(portal);
 #else
@@ -120,17 +126,16 @@ public:
       string cmd = string("FETCH ALL FROM \"") + portal + string("\"");
 #endif
       // execute FETCH
-      if (d_dolog)
+      if (d_dolog) {
          g_log<<Logger::Warning<<"Query: "<<cmd<<endl;
+      }
       d_res = PQexec(d_db(),cmd.c_str());
       d_resnum = PQntuples(d_res);
-      d_fnum = PQnfields(d_res);
       d_residx = 0;
     } else {
       d_res = d_res_set;
-      d_res_set = NULL;
+      d_res_set = nullptr;
       d_resnum = PQntuples(d_res);
-      d_fnum = PQnfields(d_res);
     }
   }
 
@@ -150,18 +155,18 @@ public:
     row.reserve(PQnfields(d_res));
     for(i=0;i<PQnfields(d_res);i++) {
       if (PQgetisnull(d_res, d_residx, i)) {
-        row.push_back("");
+        row.emplace_back("");
       } else if (PQftype(d_res, i) == 16) { // BOOLEAN
         char *val = PQgetvalue(d_res, d_residx, i);
-        row.push_back(val[0] == 't' ? "1" : "0");
+        row.emplace_back(val[0] == 't' ? "1" : "0");
       } else {
-        row.push_back(string(PQgetvalue(d_res, d_residx, i)));
+        row.emplace_back(PQgetvalue(d_res, d_residx, i));
       }
     }
     d_residx++;
     if (d_residx >= d_resnum) {
       PQclear(d_res);
-      d_res = NULL;
+      d_res = nullptr;
       nextResult();
     }
     return this;
@@ -169,29 +174,35 @@ public:
 
   SSqlStatement* getResult(result_t& result) {
     result.clear();
-    if (d_res == NULL) return this;
+    if (d_res == nullptr) return this;
     result.reserve(d_resnum);
     row_t row;
-    while(hasNextRow()) { nextRow(row); result.push_back(row); }
+    while(hasNextRow()) { nextRow(row); result.push_back(std::move(row)); }
     return this;
   }
 
   SSqlStatement* reset() {
      int i;
-     if (d_res)
+     if (d_res) {
        PQclear(d_res);
-     if (d_res_set)
+     }
+     if (d_res_set) {
        PQclear(d_res_set);
-     d_res_set = NULL;
-     d_res = NULL;
+     }
+     d_res_set = nullptr;
+     d_res = nullptr;
      d_paridx = d_residx = d_resnum = 0;
-     if (paramValues)
-       for(i=0;i<d_nparams;i++)
-         if (paramValues[i]) delete [] paramValues[i];
+     if (paramValues) {
+       for(i=0;i<d_nparams;i++) {
+         if (paramValues[i]) {
+           delete [] paramValues[i];
+         }
+       }
+     }
      delete [] paramValues;
-     paramValues = NULL;
+     paramValues = nullptr;
      delete [] paramLengths;
-     paramLengths = NULL;
+     paramLengths = nullptr;
      return this;
   }
 
@@ -218,26 +229,28 @@ private:
 
   void prepareStatement() {
     if (d_prepared) return;
-    // prepare a statement; name must be unique per session (using d_nstatement to ensure this).
-    this->d_stmt = string("stmt") + std::to_string(d_nstatement);
-    PGresult* res = PQprepare(d_db(), d_stmt.c_str(), d_query.c_str(), d_nparams, NULL);
-    ExecStatusType status = PQresultStatus(res);
-    string errmsg(PQresultErrorMessage(res));
-    PQclear(res);
-    if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK && status != PGRES_NONFATAL_ERROR) {
-      releaseStatement();
-      throw SSqlException("Fatal error during prepare: " + d_query + string(": ") + errmsg);
+    if (d_parent->usePrepared()) {
+      // prepare a statement; name must be unique per session (using d_nstatement to ensure this).
+      this->d_stmt = string("stmt") + std::to_string(d_nstatement);
+      PGresult* res = PQprepare(d_db(), d_stmt.c_str(), d_query.c_str(), d_nparams, nullptr);
+      ExecStatusType status = PQresultStatus(res);
+      string errmsg(PQresultErrorMessage(res));
+      PQclear(res);
+      if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK && status != PGRES_NONFATAL_ERROR) {
+        releaseStatement();
+        throw SSqlException("Fatal error during prePQpreparepare: " + d_query + string(": ") + errmsg);
+      }
     }
-    paramValues=NULL;
-    d_cur_set=d_paridx=d_residx=d_resnum=d_fnum=0;
-    paramLengths=NULL;
-    d_res=NULL;
-    d_res_set=NULL;
+    paramValues = nullptr;
+    paramLengths = nullptr;
+    d_cur_set = d_paridx = d_residx = d_resnum = 0;
+    d_res = nullptr;
+    d_res_set = nullptr;
     d_prepared = true;
   }
 
   void allocate() {
-     if (paramValues != NULL) return;
+     if (paramValues != nullptr) return;
      paramValues = new char*[d_nparams];
      paramLengths = new int[d_nparams];
      memset(paramValues, 0, sizeof(char*)*d_nparams);
@@ -247,31 +260,30 @@ private:
   string d_query;
   string d_stmt;
   SPgSQL *d_parent;
-  PGresult *d_res_set;
-  PGresult *d_res;
+  PGresult *d_res_set{nullptr};
+  PGresult *d_res{nullptr};
   bool d_dolog;
   DTime d_dtime; // only used if d_dolog is set
-  bool d_prepared;
+  bool d_prepared{false};
   int d_nparams;
-  int d_paridx;
-  char **paramValues;
-  int *paramLengths;
-  int d_residx;
-  int d_resnum;
-  int d_fnum;
-  int d_cur_set;
+  int d_paridx{0};
+  char **paramValues{nullptr};
+  int *paramLengths{nullptr};
+  int d_residx{0};
+  int d_resnum{0};
+  int d_cur_set{0};
   unsigned int d_nstatement;
 };
 
 bool SPgSQL::s_dolog;
 
 SPgSQL::SPgSQL(const string &database, const string &host, const string& port, const string &user,
-               const string &password, const string &extra_connection_parameters)
+               const string &password, const string &extra_connection_parameters, const bool use_prepared)
 {
-  d_db=0;
+  d_db = nullptr;
   d_in_trx = false;
-  d_connectstr="";
-  d_nstatement = 0;
+  d_connectstr = "";
+  d_nstatements = 0;
 
   if (!database.empty())
     d_connectstr+="dbname="+database;
@@ -294,6 +306,8 @@ SPgSQL::SPgSQL(const string &database, const string &host, const string& port, c
     d_connectlogstr+=" password=<HIDDEN>";
     d_connectstr+=" password="+password;
   }
+
+  d_use_prepared = use_prepared;
 
   d_db=PQconnectdb(d_connectstr.c_str());
 
@@ -338,8 +352,8 @@ void SPgSQL::execute(const string& query)
 
 std::unique_ptr<SSqlStatement> SPgSQL::prepare(const string& query, int nparams)
 {
-  d_nstatement++;
-  return std::unique_ptr<SSqlStatement>(new SPgSQLStatement(query, s_dolog, nparams, this, d_nstatement));
+  d_nstatements++;
+  return std::unique_ptr<SSqlStatement>(new SPgSQLStatement(query, s_dolog, nparams, this, d_nstatements));
 }
 
 void SPgSQL::startTransaction() {

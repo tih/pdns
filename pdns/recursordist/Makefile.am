@@ -144,9 +144,11 @@ pdns_recursor_SOURCES = \
 	pdnsexception.hh \
 	pollmplexer.cc \
 	protobuf.cc protobuf.hh \
+	proxy-protocol.cc proxy-protocol.hh \
 	pubsuffix.hh pubsuffix.cc \
 	pubsuffixloader.cc \
 	qtype.hh qtype.cc \
+	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc rcpgenerator.hh \
 	rec-carbon.cc \
 	rec-lua-conf.hh rec-lua-conf.cc \
@@ -159,6 +161,7 @@ pdns_recursor_SOURCES = \
 	reczones.cc \
 	remote_logger.cc remote_logger.hh \
 	resolver.hh resolver.cc \
+	axfr-retriever.hh axfr-retriever.cc \
 	resolve-context.hh \
 	responsestats.hh responsestats.cc \
 	root-addresses.hh \
@@ -167,6 +170,7 @@ pdns_recursor_SOURCES = \
 	secpoll-recursor.cc secpoll-recursor.hh \
 	secpoll.cc secpoll.hh \
 	sholder.hh \
+	shuffle.cc shuffle.hh \
 	sillyrecords.cc \
 	snmp-agent.hh snmp-agent.cc \
 	sortlist.cc sortlist.hh \
@@ -190,8 +194,9 @@ pdns_recursor_SOURCES = \
 if !HAVE_LUA_HPP
 BUILT_SOURCES += lua.hpp
 nodist_pdns_recursor_SOURCES = lua.hpp
-CLEANFILES += lua.hpp
 endif
+
+CLEANFILES += lua.hpp
 
 pdns_recursor_LDADD = \
 	$(YAHTTP_LIBS) \
@@ -219,6 +224,7 @@ endif
 
 testrunner_SOURCES = \
 	arguments.cc \
+	axfr-retriever.hh axfr-retriever.cc \
 	base32.cc \
 	base64.cc base64.hh \
 	circular_buffer.hh \
@@ -250,6 +256,7 @@ testrunner_SOURCES = \
 	pollmplexer.cc \
 	protobuf.cc protobuf.hh \
 	qtype.cc qtype.hh \
+	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc \
 	rec-protobuf.cc rec-protobuf.hh \
 	recpacketcache.cc recpacketcache.hh \
@@ -546,6 +553,7 @@ endif
 pdns-recursor@.service: pdns-recursor.service
 	$(AM_V_GEN)sed -e 's!/pdns_recursor!& --config-name=%i!' \
 	  -e 's!Recursor!& %i!' \
+	  -e 's!RuntimeDirectory=.*!&-%i!' \
 	  < $< > $@
 
 systemdsystemunitdir = $(SYSTEMD_DIR)

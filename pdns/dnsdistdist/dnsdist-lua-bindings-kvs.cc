@@ -26,8 +26,8 @@
 void setupLuaBindingsKVS(bool client)
 {
   /* Key Value Store objects */
-  g_lua.writeFunction("KeyValueLookupKeySourceIP", []() {
-    return std::shared_ptr<KeyValueLookupKey>(new KeyValueLookupKeySourceIP());
+  g_lua.writeFunction("KeyValueLookupKeySourceIP", [](boost::optional<uint8_t> v4Mask, boost::optional<uint8_t> v6Mask) {
+    return std::shared_ptr<KeyValueLookupKey>(new KeyValueLookupKeySourceIP(v4Mask.get_value_or(32), v6Mask.get_value_or(128)));
   });
   g_lua.writeFunction("KeyValueLookupKeyQName", [](boost::optional<bool> wireFormat) {
     return std::shared_ptr<KeyValueLookupKey>(new KeyValueLookupKeyQName(wireFormat ? *wireFormat : true));
@@ -64,26 +64,26 @@ void setupLuaBindingsKVS(bool client)
     }
 
     if (keyVar.type() == typeid(ComboAddress)) {
-      const auto ca = *boost::get<ComboAddress>(&keyVar);
-      KeyValueLookupKeySourceIP lookup;
-      for (const auto& key : lookup.getKeys(ca)) {
+      const auto ca = boost::get<ComboAddress>(&keyVar);
+      KeyValueLookupKeySourceIP lookup(32, 128);
+      for (const auto& key : lookup.getKeys(*ca)) {
         if (kvs->getValue(key, result)) {
           return result;
         }
       }
     }
     else if (keyVar.type() == typeid(DNSName)) {
-      DNSName dn = *boost::get<DNSName>(&keyVar);
+      const DNSName* dn = boost::get<DNSName>(&keyVar);
       KeyValueLookupKeyQName lookup(wireFormat ? *wireFormat : true);
-      for (const auto& key : lookup.getKeys(dn)) {
+      for (const auto& key : lookup.getKeys(*dn)) {
         if (kvs->getValue(key, result)) {
           return result;
         }
       }
     }
     else if (keyVar.type() == typeid(std::string)) {
-      std::string keyStr = *boost::get<std::string>(&keyVar);
-      kvs->getValue(keyStr, result);
+      const std::string* keyStr = boost::get<std::string>(&keyVar);
+      kvs->getValue(*keyStr, result);
     }
 
     return result;

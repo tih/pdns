@@ -19,8 +19,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef STATBAG_HH
-#define STATBAG_HH
+#pragma once
 #include <pthread.h>
 #include <map>
 #include <mutex>
@@ -33,19 +32,19 @@
 #include "circular_buffer.hh"
 
 
-
 template<typename T, typename Comp=std::less<T> >
 class StatRing
 {
 public:
   StatRing(unsigned int size=10000);
-  // Some older C++ libs have trouble emplacing without a copy-contructor, so provide one
+  // Some older C++ libs have trouble emplacing without a copy-constructor, so provide one
   StatRing(const StatRing &);
   StatRing & operator=(const StatRing &) = delete;
   
   void account(const T &item);
 
-  unsigned int getSize();
+  uint64_t getSize() const;
+  uint64_t getEntriesCount() const;
   void resize(unsigned int newsize);  
   void reset();
   void setHelp(const string &str);
@@ -63,14 +62,19 @@ private:
   string d_help;
 };
 
+enum class StatType : uint8_t {
+  counter = 1,
+  gauge = 2,
+};
 
 //! use this to gather and query statistics
 class StatBag
 {
   map<string, std::unique_ptr<AtomicCounter>> d_stats;
   map<string, string> d_keyDescrips;
+  map<string, StatType> d_statTypes;
   map<string,StatRing<string, CIStringCompare> >d_rings;
-  map<string,StatRing<SComboAddress> >d_comborings;
+  map<string,StatRing<SComboAddress> >d_comboRings;
   map<string,StatRing<std::tuple<DNSName, QType> > >d_dnsnameqtyperings;
   typedef boost::function<uint64_t(const std::string&)> func_t;
   typedef map<string, func_t> funcstats_t;
@@ -78,11 +82,13 @@ class StatBag
   bool d_doRings;
   std::set<string> d_blacklist;
 
+  void registerRingStats(const string& name);
+
 public:
   StatBag(); //!< Naked constructor. You need to declare keys before this class becomes useful
   ~StatBag();
-  void declare(const string &key, const string &descrip=""); //!< Before you can store or access a key, you need to declare it
-  void declare(const string &key, const string &descrip, func_t func); //!< Before you can store or access a key, you need to declare it
+  void declare(const string &key, const string &descrip="", StatType statType=StatType::counter); //!< Before you can store or access a key, you need to declare it
+  void declare(const string &key, const string &descrip, func_t func, StatType statType); //!< Before you can store or access a key, you need to declare it
 
   void declareRing(const string &name, const string &title, unsigned int size=10000);
   void declareComboRing(const string &name, const string &help, unsigned int size=10000);
@@ -101,9 +107,9 @@ public:
   void ringAccount(const char* name, const ComboAddress &item)
   {
     if(d_doRings) {
-      if(!d_comborings.count(name))
-	throw runtime_error("Attempting to account to non-existent comboring '"+std::string(name)+"'");
-      d_comborings[name].account(item);
+      if(!d_comboRings.count(name))
+	throw runtime_error("Attempting to account to non-existent comboRing '"+std::string(name)+"'");
+      d_comboRings[name].account(item);
     }
   }
   void ringAccount(const char* name, const DNSName &dnsname, const QType &qtype)
@@ -124,11 +130,13 @@ public:
   bool ringExists(const string &name);
   void resetRing(const string &name);
   void resizeRing(const string &name, unsigned int newsize);
-  unsigned int getRingSize(const string &name);
+  uint64_t getRingSize(const string &name);
+  uint64_t getRingEntriesCount(const string &name);
 
   string directory(); //!< Returns a list of all data stored
   vector<string> getEntries(); //!< returns a vector with datums (items)
   string getDescrip(const string &item); //!< Returns the description of this datum/item
+  StatType getStatType(const string &item); //!< Returns the stats type for the metrics endpoint
   void exists(const string &key); //!< call this function to throw an exception in case a key does not exist
   inline void deposit(const string &key, int value); //!< increment the statistics behind this key by value amount
   inline void inc(const string &key); //!< increase this key's value by one
@@ -152,6 +160,3 @@ inline void StatBag::inc(const string &key)
 {
   deposit(key,1);
 }
-
-
-#endif /* STATBAG_HH */

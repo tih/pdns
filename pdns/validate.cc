@@ -339,14 +339,14 @@ static bool provesNSEC3NoWildCard(DNSName wildcard, uint16_t const qtype, const 
   - If `wantsNoDataProof` is set but a NSEC proves that the whole name does not exist, the function will return
   NXQTYPE is the name is proven to be ENT and NXDOMAIN otherwise.
   - If `needWildcardProof` is false, the proof that a wildcard covering this qname|qtype is not checked. It is
-  useful when we have a positive answer synthetized from a wildcard and we only need to prove that the exact
+  useful when we have a positive answer synthesized from a wildcard and we only need to prove that the exact
   name does not exist.
 */
 dState getDenial(const cspmap_t &validrrsets, const DNSName& qname, const uint16_t qtype, bool referralToUnsigned, bool wantsNoDataProof, bool needWildcardProof, unsigned int wildcardLabelsCount)
 {
   bool nsec3Seen = false;
   if (!needWildcardProof && wildcardLabelsCount == 0) {
-    throw PDNSException("Invalid wildcard labels count for the validation of a positive answer synthetized from a wildcard");
+    throw PDNSException("Invalid wildcard labels count for the validation of a positive answer synthesized from a wildcard");
   }
 
   for(const auto& v : validrrsets) {
@@ -419,13 +419,21 @@ dState getDenial(const cspmap_t &validrrsets, const DNSName& qname, const uint16
         }
 
         /* check if the whole NAME is denied existing */
-        if(isCoveredByNSEC(qname, owner, nsec->d_next)) {
+        if (isCoveredByNSEC(qname, owner, nsec->d_next)) {
           LOG(qname<<" is covered ");
-          /* if the name is an ENT and we received a NODATA answer,
-             we are fine with a NSEC proving that the name does not exist. */
-          if (wantsNoDataProof && nsecProvesENT(qname, owner, nsec->d_next)) {
-            LOG("Denies existence of type "<<qname<<"/"<<QType(qtype).getName()<<" by proving that "<<qname<<" is an ENT"<<endl);
-            return NXQTYPE;
+
+          if (nsecProvesENT(qname, owner, nsec->d_next)) {
+            if (wantsNoDataProof) {
+              /* if the name is an ENT and we received a NODATA answer,
+                 we are fine with a NSEC proving that the name does not exist. */
+              LOG("Denies existence of type "<<qname<<"/"<<QType(qtype).getName()<<" by proving that "<<qname<<" is an ENT"<<endl);
+              return NXQTYPE;
+            }
+            else {
+              /* but for a NXDOMAIN proof, this doesn't make sense! */
+              LOG("but it tries to deny the existence of "<<qname<<" by proving that "<<qname<<" is an ENT, this does not make sense!"<<endl);
+              return NODATA;
+            }
           }
 
           if (!needWildcardProof) {
@@ -535,7 +543,7 @@ dState getDenial(const cspmap_t &validrrsets, const DNSName& qname, const uint16
   if (needWildcardProof) {
     /* We now need to look for a NSEC3 covering the closest (provable) encloser
        RFC 5155 section-7.2.1
-       FRC 7129 section-5.5
+       RFC 7129 section-5.5
     */
     LOG("Now looking for the closest encloser for "<<qname<<endl);
 
@@ -599,7 +607,7 @@ dState getDenial(const cspmap_t &validrrsets, const DNSName& qname, const uint16
 
   if (found == true) {
     /* now that we have found the closest (provable) encloser,
-       we can construct the next closer (FRC7129 section-5.5) name
+       we can construct the next closer (RFC7129 section-5.5) name
        and look for a NSEC3 RR covering it */
     unsigned int labelIdx = qname.countLabels() - closestEncloser.countLabels();
     if (labelIdx >= 1) {
@@ -627,7 +635,7 @@ dState getDenial(const cspmap_t &validrrsets, const DNSName& qname, const uint16
               LOG("Denies existence of name "<<qname<<"/"<<QType(qtype).getName());
               nextCloserFound = true;
 
-              if (qtype == QType::DS && nsec3->d_flags & 1) {
+              if ((qtype == QType::DS || qtype == 0) && nsec3->d_flags & 1) {
                 LOG(" but is opt-out!");
                 isOptOut = true;
               }
@@ -693,7 +701,7 @@ static const vector<DNSName> getZoneCuts(const DNSName& begin, const DNSName& en
     qname.prependRawLabel(labelsToAdd.back());
     labelsToAdd.pop_back();
     auto records = dro.get(qname, (uint16_t)QType::NS);
-    for (const auto record : records) {
+    for (const auto& record : records) {
       if(record.d_type != QType::NS || record.d_name != qname)
         continue;
       foundCut = true;
@@ -1090,7 +1098,7 @@ bool isSupportedDS(const DSRecordContent& ds)
 
 DNSName getSigner(const std::vector<std::shared_ptr<RRSIGRecordContent> >& signatures)
 {
-  for (const auto sig : signatures) {
+  for (const auto& sig : signatures) {
     if (sig) {
       return sig->d_signer;
     }

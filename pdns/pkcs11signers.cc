@@ -8,6 +8,8 @@
 #include <boost/format.hpp>
 #include <p11-kit/p11-kit.h>
 
+#include <mutex>
+
 #include "pdns/dnssecinfra.hh"
 #include "pdns/logger.hh"
 #include "pdns/pdnsexception.hh"
@@ -15,6 +17,7 @@
 #include "pdns/lock.hh"
 
 #ifdef HAVE_LIBCRYPTO_ECDSA
+#include <openssl/bn.h>
 #include <openssl/ec.h>
 #endif
 
@@ -42,6 +45,9 @@ in it. you need to use softhsm tools to manage this all.
 static CK_FUNCTION_LIST** p11_modules;
 #endif
 
+#define ECDSA256_PARAMS "\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07"
+#define ECDSA384_PARAMS "\x06\x05\x2b\x81\x04\x00\x22"
+
 // map for signing algorithms
 static std::map<unsigned int,CK_MECHANISM_TYPE> dnssec2smech = boost::assign::map_list_of
 (5, CKM_SHA1_RSA_PKCS)
@@ -59,6 +65,14 @@ static std::map<unsigned int,CK_MECHANISM_TYPE> dnssec2hmech = boost::assign::ma
 (10, CKM_SHA512)
 (13, CKM_SHA256)
 (14, CKM_SHA384);
+
+static std::map<unsigned int,CK_MECHANISM_TYPE> dnssec2cmech = boost::assign::map_list_of
+(5, CKM_RSA_PKCS_KEY_PAIR_GEN)
+(7, CKM_RSA_PKCS_KEY_PAIR_GEN)
+(8, CKM_RSA_PKCS_KEY_PAIR_GEN)
+(10, CKM_RSA_PKCS_KEY_PAIR_GEN)
+(13, CKM_ECDSA_KEY_PAIR_GEN)
+(14, CKM_ECDSA_KEY_PAIR_GEN);
 
 typedef enum { Attribute_Byte, Attribute_Long, Attribute_String } CkaValueType;
 
@@ -205,11 +219,11 @@ class Pkcs11Slot {
     CK_SESSION_HANDLE d_session;
     CK_SLOT_ID d_slot;
     CK_RV d_err;
-    pthread_mutex_t d_m;
+    std::mutex d_m;
 
     void logError(const std::string& operation) const {
       if (d_err) {
-        std::string msg = boost::str( boost::format("PKCS#11 operation %s failed: %s (0x%X)") % operation % p11_kit_strerror(d_err) % d_err );
+        std::string msg = boost::str( boost::format("PKCS#11 operation %s failed: %s (0x%X) (%s)") % operation % p11_kit_strerror(d_err) % d_err % p11_kit_message() );
         g_log<<Logger::Error<< msg << endl;
       }
     }
@@ -222,8 +236,7 @@ class Pkcs11Slot {
     d_err(0)
   {
       CK_TOKEN_INFO tokenInfo;
-      pthread_mutex_init(&(this->d_m), NULL);
-      Lock l(&d_m);
+      std::lock_guard<std::mutex> l(d_m);
 
       if ((d_err = d_functions->C_OpenSession(this->d_slot, CKF_SERIAL_SESSION|CKF_RW_SESSION, 0, 0, &(this->d_session)))) {
         logError("C_OpenSession");
@@ -260,7 +273,7 @@ class Pkcs11Slot {
 
     CK_FUNCTION_LIST* f() { return d_functions; }
 
-    pthread_mutex_t *m() { return &d_m; }
+    std::mutex& m() { return d_m; }
 
     static std::shared_ptr<Pkcs11Slot> GetSlot(const std::string& module, const string& tokenId);
     static CK_RV HuntSlot(const string& tokenId, CK_SLOT_ID &slotId, _CK_SLOT_INFO* info, CK_FUNCTION_LIST* functions);
@@ -288,7 +301,7 @@ class Pkcs11Token {
 
     void logError(const std::string& operation) const {
       if (d_err) {
-        std::string msg = boost::str( boost::format("PKCS#11 operation %s failed: %s (0x%X)") % operation % p11_kit_strerror(d_err) % d_err );
+        std::string msg = boost::str( boost::format("PKCS#11 operation %s failed: %s (0x%X) (%s)") % operation % p11_kit_strerror(d_err) % d_err % p11_kit_message());
         g_log<<Logger::Error<< msg << endl;
       }
     }
@@ -314,8 +327,8 @@ class Pkcs11Token {
 
       return bits;
 #else
-      if (d_ecdsa_params == "\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07") return 256;
-      else if (d_ecdsa_params == "\x06\x05\x2b\x81\x04\x00\x22") return 384;
+      if (d_ecdsa_params == ECDSA256_PARAMS) return 256;
+      else if (d_ecdsa_params == ECDSA384_PARAMS) return 384;
       else throw PDNSException("Unsupported EC key");
 #endif
     }
@@ -341,7 +354,7 @@ class Pkcs11Token {
     }
 
     void LoadAttributes() {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
       std::vector<P11KitAttribute> attr;
       std::vector<CK_OBJECT_HANDLE> key;
       attr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY));
@@ -406,7 +419,7 @@ class Pkcs11Token {
 
     int GenerateKeyPair(CK_MECHANISM_PTR mechanism, std::vector<P11KitAttribute>& pubAttributes, std::vector<P11KitAttribute>& privAttributes, CK_OBJECT_HANDLE_PTR pubKey, CK_OBJECT_HANDLE_PTR privKey) {
       {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
 
       size_t k;
       std::unique_ptr<CK_ATTRIBUTE[]> pubAttr(new CK_ATTRIBUTE[pubAttributes.size()]);
@@ -434,7 +447,7 @@ class Pkcs11Token {
     }
 
     int Sign(const std::string& data, std::string& result, CK_MECHANISM_PTR mechanism) {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
 
       CK_BYTE buffer[1024];
       CK_ULONG buflen = sizeof buffer; // should be enough for most signatures.
@@ -453,7 +466,7 @@ class Pkcs11Token {
     }
 
     int Verify(const std::string& data, const std::string& signature, CK_MECHANISM_PTR mechanism) {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
 
       if ((d_err = this->d_slot->f()->C_VerifyInit(d_slot->Session(), mechanism, d_public_key))) { logError("C_VerifyInit"); return d_err; }
       d_err = this->d_slot->f()->C_Verify(d_slot->Session(), (unsigned char*)data.c_str(), data.size(), (unsigned char*)signature.c_str(), signature.size());
@@ -462,7 +475,7 @@ class Pkcs11Token {
     }
 
     int Digest(const std::string& data, std::string& result, CK_MECHANISM_PTR mechanism) {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
 
       CK_BYTE buffer[1024];
       CK_ULONG buflen = sizeof buffer; // should be enough for most digests
@@ -489,7 +502,7 @@ class Pkcs11Token {
     }
 
     int DigestKey(std::string& result) {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
       CK_MECHANISM mech;
       mech.mechanism = CKM_SHA_1;
 
@@ -520,7 +533,7 @@ class Pkcs11Token {
     }
 
     int FindObjects(const std::vector<P11KitAttribute>& attributes, std::vector<CK_OBJECT_HANDLE>& objects, int maxobjects) {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
       return FindObjects2(attributes, objects, maxobjects);
     }
 
@@ -566,7 +579,7 @@ class Pkcs11Token {
 
     int GetAttributeValue(const CK_OBJECT_HANDLE& object, std::vector<P11KitAttribute>& attributes) 
     {
-      Lock l(d_slot->m());
+      std::lock_guard<std::mutex> l(d_slot->m());
       return GetAttributeValue2(object, attributes);
     }
 
@@ -783,7 +796,6 @@ void PKCS11DNSCryptoKeyEngine::create(unsigned int bits) {
   std::vector<P11KitAttribute> privAttr;
   CK_MECHANISM mech;
   CK_OBJECT_HANDLE pubKey, privKey;
-  CK_RV rv;
   std::shared_ptr<Pkcs11Token> d_slot;
   d_slot = Pkcs11Token::GetToken(d_module, d_slot_id, d_label, d_pub_label);
   if (d_slot->LoggedIn() == false)
@@ -792,33 +804,66 @@ void PKCS11DNSCryptoKeyEngine::create(unsigned int bits) {
 
   std::string pubExp("\000\001\000\001", 4); // 65537
 
-  pubAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PUBLIC_KEY));
-  pubAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_RSA));
-  pubAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
-  pubAttr.push_back(P11KitAttribute(CKA_ENCRYPT, (char)CK_TRUE));
-  pubAttr.push_back(P11KitAttribute(CKA_VERIFY, (char)CK_TRUE));
-  pubAttr.push_back(P11KitAttribute(CKA_WRAP, (char)CK_TRUE));
-  pubAttr.push_back(P11KitAttribute(CKA_MODULUS_BITS, (unsigned long)bits));
-  pubAttr.push_back(P11KitAttribute(CKA_PUBLIC_EXPONENT, pubExp));
-  pubAttr.push_back(P11KitAttribute(CKA_LABEL, d_pub_label));
+  try {
+    mech.mechanism = dnssec2cmech.at(d_algorithm);
+  } catch (std::out_of_range& e) {
+    throw PDNSException("pkcs11: unsupported algorithm "+std::to_string(d_algorithm)+ " for key pair generation");
+  }
 
-  privAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY));
-  privAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_RSA));
-  privAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
-  privAttr.push_back(P11KitAttribute(CKA_PRIVATE, (char)CK_TRUE));
-//  privAttr.push_back(P11KitAttribute(CKA_SUBJECT, "CN=keygen"));
-  privAttr.push_back(P11KitAttribute(CKA_ID, "\x01\x02\x03\x04")); // this is mandatory if you want to export anything
-  privAttr.push_back(P11KitAttribute(CKA_SENSITIVE, (char)CK_TRUE));
-  privAttr.push_back(P11KitAttribute(CKA_DECRYPT, (char)CK_TRUE));
-  privAttr.push_back(P11KitAttribute(CKA_SIGN, (char)CK_TRUE));
-  privAttr.push_back(P11KitAttribute(CKA_UNWRAP, (char)CK_TRUE));
-  privAttr.push_back(P11KitAttribute(CKA_LABEL, d_label));
-
-  mech.mechanism = CKM_RSA_PKCS_KEY_PAIR_GEN;
   mech.pParameter = NULL;
   mech.ulParameterLen = 0;
 
-  if ((rv = d_slot->GenerateKeyPair(&mech, pubAttr, privAttr, &pubKey, &privKey))) {
+  if (mech.mechanism == CKM_RSA_PKCS_KEY_PAIR_GEN) {
+    pubAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PUBLIC_KEY));
+    pubAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_RSA));
+    pubAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_ENCRYPT, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_VERIFY, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_WRAP, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_MODULUS_BITS, (unsigned long)bits));
+    pubAttr.push_back(P11KitAttribute(CKA_PUBLIC_EXPONENT, pubExp));
+    pubAttr.push_back(P11KitAttribute(CKA_LABEL, d_pub_label));
+
+    privAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY));
+    privAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_RSA));
+    privAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_PRIVATE, (char)CK_TRUE));
+  //  privAttr.push_back(P11KitAttribute(CKA_SUBJECT, "CN=keygen"));
+    privAttr.push_back(P11KitAttribute(CKA_ID, "\x01\x02\x03\x04")); // this is mandatory if you want to export anything
+    privAttr.push_back(P11KitAttribute(CKA_SENSITIVE, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_DECRYPT, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_SIGN, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_UNWRAP, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_LABEL, d_label));
+  } else if (mech.mechanism == CKM_ECDSA_KEY_PAIR_GEN) {
+    pubAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PUBLIC_KEY));
+    pubAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_ECDSA));
+    pubAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_ENCRYPT, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_VERIFY, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_WRAP, (char)CK_TRUE));
+    pubAttr.push_back(P11KitAttribute(CKA_LABEL, d_pub_label));
+    if (d_algorithm == 13) pubAttr.push_back(P11KitAttribute(CKA_ECDSA_PARAMS, ECDSA256_PARAMS));
+    else if (d_algorithm == 14) pubAttr.push_back(P11KitAttribute(CKA_ECDSA_PARAMS, ECDSA384_PARAMS));
+    else throw PDNSException("pkcs11: unknown algorithm "+std::to_string(d_algorithm)+" for ECDSA key pair generation");
+
+    privAttr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY));
+    privAttr.push_back(P11KitAttribute(CKA_KEY_TYPE, (unsigned long)CKK_ECDSA));
+    privAttr.push_back(P11KitAttribute(CKA_TOKEN, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_PRIVATE, (char)CK_TRUE));
+  //  privAttr.push_back(P11KitAttribute(CKA_SUBJECT, "CN=keygen"));
+    privAttr.push_back(P11KitAttribute(CKA_ID, "\x01\x02\x03\x04")); // this is mandatory if you want to export anything
+    privAttr.push_back(P11KitAttribute(CKA_SENSITIVE, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_DECRYPT, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_SIGN, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_UNWRAP, (char)CK_TRUE));
+    privAttr.push_back(P11KitAttribute(CKA_LABEL, d_label));
+  } else {
+    throw PDNSException("pkcs11: don't know how make key for algorithm "+std::to_string(d_algorithm));
+  }
+
+
+  if (d_slot->GenerateKeyPair(&mech, pubAttr, privAttr, &pubKey, &privKey)) {
     throw PDNSException("Keypair generation failed");
   }
 };

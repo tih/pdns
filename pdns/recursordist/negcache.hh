@@ -30,7 +30,7 @@
 
 using namespace ::boost::multi_index;
 
-/* FIXME should become part of the normal cache (I think) and shoudl become more like
+/* FIXME should become part of the normal cache (I think) and should become more like
  * struct {
  *   vector<DNSRecord> records;
  *   vector<DNSRecord> signatures;
@@ -64,11 +64,11 @@ public:
 
   void add(const NegCacheEntry& ne);
   void updateValidationStatus(const DNSName& qname, const QType& qtype, const vState newState, boost::optional<uint32_t> capTTD);
-  bool get(const DNSName& qname, const QType& qtype, const struct timeval& now, const NegCacheEntry** ne, bool typeMustMatch = false);
-  bool getRootNXTrust(const DNSName& qname, const struct timeval& now, const NegCacheEntry** ne);
+  bool get(const DNSName& qname, const QType& qtype, const struct timeval& now, NegCacheEntry& ne, bool typeMustMatch = false);
+  bool getRootNXTrust(const DNSName& qname, const struct timeval& now, NegCacheEntry& ne);
   uint64_t count(const DNSName& qname) const;
   uint64_t count(const DNSName& qname, const QType qtype) const;
-  void prune(unsigned int maxEntries);
+  void prune(size_t maxEntries);
   void clear();
   uint64_t dumpToFile(FILE* fd);
   uint64_t wipe(const DNSName& name, bool subtree = false);

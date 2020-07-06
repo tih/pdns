@@ -57,6 +57,8 @@ class DNSDistTest(AssertEqualDNSMessageMixin, unittest.TestCase):
     _healthCheckName = 'a.root-servers.net.'
     _healthCheckCounter = 0
     _answerUnexpected = True
+    _checkConfigExpectedOutput = None
+    _verboseMode = False
 
     @classmethod
     def startResponders(cls):
@@ -81,6 +83,9 @@ class DNSDistTest(AssertEqualDNSMessageMixin, unittest.TestCase):
 
         dnsdistcmd = [os.environ['DNSDISTBIN'], '--supervised', '-C', confFile,
                       '-l', '%s:%d' % (cls._dnsDistListeningAddr, cls._dnsDistPort) ]
+        if cls._verboseMode:
+            dnsdistcmd.append('-v')
+
         for acl in cls._acl:
             dnsdistcmd.extend(['--acl', acl])
         print(' '.join(dnsdistcmd))
@@ -91,8 +96,11 @@ class DNSDistTest(AssertEqualDNSMessageMixin, unittest.TestCase):
             output = subprocess.check_output(testcmd, stderr=subprocess.STDOUT, close_fds=True)
         except subprocess.CalledProcessError as exc:
             raise AssertionError('dnsdist --check-config failed (%d): %s' % (exc.returncode, exc.output))
-        expectedOutput = ('Configuration \'%s\' OK!\n' % (confFile)).encode()
-        if output != expectedOutput:
+        if cls._checkConfigExpectedOutput is not None:
+          expectedOutput = cls._checkConfigExpectedOutput
+        else:
+          expectedOutput = ('Configuration \'%s\' OK!\n' % (confFile)).encode()
+        if not cls._verboseMode and output != expectedOutput:
             raise AssertionError('dnsdist --check-config failed: %s' % output)
 
         logFile = os.path.join('configs', 'dnsdist_%s.log' % (cls.__name__))
@@ -548,6 +556,9 @@ class DNSDistTest(AssertEqualDNSMessageMixin, unittest.TestCase):
         if withCookies:
             for option in received.options:
                 self.assertEquals(option.otype, 10)
+        else:
+            for option in received.options:
+                self.assertNotEquals(option.otype, 10)
 
     def checkMessageEDNSWithECS(self, expected, received, additionalOptions=0):
         self.assertEquals(expected, received)

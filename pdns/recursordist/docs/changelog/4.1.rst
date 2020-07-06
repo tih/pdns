@@ -2,7 +2,54 @@ Changelogs for 4.1.x
 ====================
 
 .. changelog::
-  :version: 4.1.15
+  :version: 4.1.17
+  :released: 1st of July 2020
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9283
+
+    Backport of CVE-2020-14196: Enforce webserver ACL.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9129
+    :tickets: 9127, 8640
+
+    Fix compilation on systems that do not define HOST_NAME_MAX.
+
+
+.. changelog::
+  :version: 4.1.16
+  :released: 19th of May 2020
+
+  .. change::
+     :tags: Bug Fixes
+     :pullreq: 9117
+
+     Backport of security fixes for CVE-2020-10995, CVE-2020-12244 and
+     CVE-2020-10030, plus avoid a crash when loading an invalid RPZ.
+
+  .. change::
+     :tags: Internals
+     :pullreq: 8809
+
+     Update python dependencies for docs generation.
+
+  .. change::
+     :tags: Improvements
+     :pullreq:  8868
+
+     Only log qname parsing errors when 'log-common-errors' is set.
+
+  .. change::
+     :tags: Internals
+     :pullreq: 8753
+
+     Update boost.m4.
+
+.. changelog::
+   :version: 4.1.15
   :released: 6th of December 2019
 
   .. change::
@@ -751,7 +798,7 @@ Changelogs for 4.1.x
     :pullreq: 5912
 
     Fix going Insecure on NSEC3 hashes with too many iterations, since
-    we could have gone Bogus on a positive answer synthetized from a
+    we could have gone Bogus on a positive answer synthesized from a
     wildcard if the corresponding NSEC3 had more iterations that we were
     willing to accept, while the correct result is Insecure.
 
@@ -938,7 +985,7 @@ Changelogs for 4.1.x
     :tags: Internals, Improvements
     :pullreq: 5543
 
-    Wrap the webserver's and Resolver::tryGetSOASerial objects into smart pointers (also thanks to Christian Hofstaedtler for reviewing!)
+    Wrap the webserver's and Resolver::tryGetSOASerial objects into smart pointers (also thanks to Chris Hofstaedtler for reviewing!)
 
   .. change::
     :tags: Internals, Improvements
@@ -1091,7 +1138,7 @@ Changelogs for 4.1.x
     :tags: Improvements
     :pullreq: 5699
 
-    Implement dynamic cache sizeing.
+    Implement dynamic cache sizing.
 
   .. change::
     :tags: Bug Fixes, DNSSEC
@@ -1366,7 +1413,7 @@ Changelogs for 4.1.x
     :pullreq: 5466
     :tickets: 5398
 
-    Clean up auth/recursor code mismatches in the API (Christian Hofstaedtler).
+    Clean up auth/recursor code mismatches in the API (Chris Hofstaedtler).
 
   .. change::
     :tags: Bug Fixes

@@ -42,18 +42,27 @@ bool Connector::send(Json& value) {
  * result. Logging is performed here, too.
  */
 bool Connector::recv(Json& value) {
-    if (recv_message(value)>0) {
-       bool rv = true;
-       // check for error
-       if (value["result"] == Json())
-         return false;
-       if (value["result"].is_bool() && boolFromJson(value, "result", false) == false)
-         rv = false;
-       for(const auto& message: value["log"].array_items())
-         g_log<<Logger::Info<<"[remotebackend]: "<< message.string_value() <<std::endl;
-       return rv;
+  if (recv_message(value) > 0) {
+    bool retval = true;
+    if (value["result"] == Json()) {
+      throw PDNSException("No 'result' field in response from remote process");
+    } else if (value["result"].is_bool() && boolFromJson(value, "result", false) == false) {
+      retval = false;
     }
-    return false;
+    for(const auto& message: value["log"].array_items()) {
+      g_log<<Logger::Info<<"[remotebackend]: "<< message.string_value() <<std::endl;
+    }
+    return retval;
+  }
+  throw PDNSException("Unknown error while receiving data");
+}
+
+void RemoteBackend::makeErrorAndThrow(Json &value) {
+  std::string msg = "Remote process indicated a failure";
+  for(const auto& message: value["log"].array_items()) {
+    msg += " '" + message.string_value() + "'";
+  }
+  throw PDNSException(msg);
 }
 
 /**
@@ -74,29 +83,31 @@ RemoteBackend::RemoteBackend(const std::string &suffix)
 RemoteBackend::~RemoteBackend() { }
 
 bool RemoteBackend::send(Json& value) {
-   try {
-     return connector->send(value);
-   } catch (PDNSException &ex) {
-     g_log<<Logger::Error<<"Exception caught when sending: "<<ex.reason<<std::endl;
-   }
-
-   this->connector.reset();
-   build();
-   return false;
+  try {
+    if (!connector->send(value)) {
+      // XXX does this work work even though we throw?
+      this->connector.reset();
+      build();
+      throw DBException("Could not send a message to remote process");
+    }
+  } catch (const PDNSException &ex) {
+    throw DBException("Exception caught when sending: " + ex.reason);
+  }
+  return true;
 }
 
 bool RemoteBackend::recv(Json& value) {
-   try {
-     return connector->recv(value);
-   } catch (PDNSException &ex) {
-     g_log<<Logger::Error<<"Exception caught when receiving: "<<ex.reason<<std::endl;
-   } catch (...) {
-     g_log<<Logger::Error<<"Exception caught when receiving"<<std::endl;;
-   }
-
-   this->connector.reset();
-   build();
-   return false;
+  try {
+    return connector->recv(value);
+  } catch (const PDNSException &ex) {
+    this->connector.reset();
+    build();
+    throw DBException("Exception caught when receiving: " + ex.reason);
+  } catch (const std::exception &e) {
+    this->connector.reset();
+    build();
+    throw DBException("Exception caught when receiving: " + std::string(e.what()));
+  }
 }
 
 
@@ -374,6 +385,7 @@ bool RemoteBackend::getDomainKeys(const DNSName& name, std::vector<DNSBackend::K
      key.id = intFromJson(jsonKey, "id");
      key.flags = intFromJson(jsonKey, "flags");
      key.active = asBool(jsonKey["active"]);
+     key.published = boolFromJson(jsonKey, "published", true);
      key.content = stringFromJson(jsonKey, "content");
      keys.push_back(key);
    }
@@ -411,6 +423,7 @@ bool RemoteBackend::addDomainKey(const DNSName& name, const KeyData& key, int64_
        { "key", Json::object {
          { "flags", static_cast<int>(key.flags) },
          { "active", key.active },
+         { "published", key.published },
          { "content", key.content }
        }}
      }}
@@ -461,6 +474,45 @@ bool RemoteBackend::deactivateDomainKey(const DNSName& name, unsigned int id) {
 
    return true;
 }
+
+bool RemoteBackend::publishDomainKey(const DNSName& name, unsigned int id) {
+   // no point doing dnssec if it's not supported
+   if (d_dnssec == false) return false;
+
+   Json query = Json::object{
+     { "method", "publishDomainKey" },
+     { "parameters", Json::object {
+       { "name", name.toString() },
+       { "id", static_cast<int>(id) }
+     }}
+   };
+
+   Json answer;
+   if (this->send(query) == false || this->recv(answer) == false)
+     return false;
+
+   return true;
+}
+
+bool RemoteBackend::unpublishDomainKey(const DNSName& name, unsigned int id) {
+   // no point doing dnssec if it's not supported
+   if (d_dnssec == false) return false;
+
+   Json query = Json::object{
+     { "method", "unpublishDomainKey" },
+     { "parameters", Json::object {
+       { "name", name.toString() },
+       { "id", static_cast<int>(id) }
+     }}
+   };
+
+   Json answer;
+   if (this->send(query) == false || this->recv(answer) == false)
+     return false;
+
+   return true;
+}
+
 
 bool RemoteBackend::doesDNSSEC() {
    return d_dnssec;
@@ -904,6 +956,13 @@ void RemoteBackend::getAllDomains(vector<DomainInfo> *domains, bool include_disa
   }
 }
 
+void RemoteBackend::alsoNotifies(const DNSName &domain, set<string> *ips)
+{
+  std::vector<std::string> meta;
+  getDomainMetadata(domain, "ALSO-NOTIFY", meta);
+  ips->insert(meta.begin(), meta.end());
+}
+
 void RemoteBackend::getUpdatedMasters(vector<DomainInfo>* domains)
 {
   Json query = Json::object{
@@ -923,6 +982,40 @@ void RemoteBackend::getUpdatedMasters(vector<DomainInfo>* domains)
     this->parseDomainInfo(row, di);
     domains->push_back(di);
   }
+}
+
+void RemoteBackend::getUnfreshSlaveInfos(vector<DomainInfo>* domains) {
+  Json query = Json::object{
+   { "method", "getUnfreshSlaveInfos" },
+   { "parameters", Json::object{ } },
+  };
+
+  Json answer;
+  if (this->send(query) == false || this->recv(answer) == false)
+    return;
+
+  if (answer["result"].is_array() == false)
+    return;
+
+  for(const auto& row: answer["result"].array_items()) {
+    DomainInfo di;
+    this->parseDomainInfo(row, di);
+    domains->push_back(di);
+  }
+}
+
+void RemoteBackend::setFresh(uint32_t domain_id) {
+   Json query = Json::object{
+     { "method", "setFresh" },
+     { "parameters", Json::object {
+       { "id", static_cast<double>(domain_id) }
+     }}
+   };
+
+   Json answer;
+   if (this->send(query) == false || this->recv(answer) == false) {
+      g_log<<Logger::Error<<kBackendId<<" Failed to execute RPC for RemoteBackend::setFresh("<<domain_id<<")"<<endl;
+   }
 }
 
 DNSBackend *RemoteBackend::maker()

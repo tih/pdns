@@ -19,9 +19,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef PDNS_WSRECURSOR_HH
-#define PDNS_WSRECURSOR_HH
-
+#pragma once
 #include <boost/utility.hpp> 
 #include "namespaces.hh"
 #include "mplexer.hh"
@@ -32,7 +30,10 @@ class HttpResponse;
 
 class AsyncServer : public Server {
 public:
-  AsyncServer(const string &localaddress, int port) : Server(localaddress, port) { };
+  AsyncServer(const string &localaddress, int port) : Server(localaddress, port)
+  {
+    d_server_socket.setNonBlocking();
+  };
 
   friend void AsyncServerNewConnectionMT(void *p);
 
@@ -71,5 +72,3 @@ public:
 private:
   std::unique_ptr<AsyncWebServer> d_ws{nullptr};
 };
-
-#endif /* PDNS_WSRECURSOR_HH */

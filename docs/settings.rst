@@ -35,7 +35,12 @@ Allow 8 bit DNS queries.
 -  Default: 127.0.0.0/8,::1
 
 If set, only these IP addresses or netmasks will be able to perform
-AXFR.
+AXFR without TSIG.
+
+.. warning::
+   This setting only applies to AXFR without TSIG keys. If you allow a TSIG key to perform an AXFR,
+   this setting will not be checked for that transfer, and the client will be able to perform the AXFR
+   from everywhere.
 
 .. _setting-allow-dnsupdate-from:
 
@@ -359,7 +364,7 @@ to enable DNSSEC. Must be one of:
 
 .. note::
   Actual supported algorithms depend on the crypto-libraries
-  PowerDNS was compiled against. To check the supported DNSSEC algoritms
+  PowerDNS was compiled against. To check the supported DNSSEC algorithms
   in your build of PowerDNS, run ``pdnsutil list-algorithms``.
 
 .. _setting-default-ksk-size:
@@ -372,6 +377,31 @@ to enable DNSSEC. Must be one of:
 
 The default keysize for the KSK generated with :doc:`pdnsutil secure-zone <dnssec/pdnsutil>`.
 Only relevant for algorithms with non-fixed keysizes (like RSA).
+
+.. _setting-default-publish-cdnskey:
+
+``default-publish-cdnskey``
+---------------------------
+- Integer
+- Default: empty
+
+.. versionadded:: 4.3.0
+
+The default PUBLISH-CDNSKEY value for zones that do not have one individually specified.
+See the :ref:`metadata-publish-cdnskey-publish-cds` docs for more information.
+
+.. _setting-default-publish-cds:
+
+``default-publish-cds``
+-----------------------
+
+- Comma-separated integers
+- Default: empty
+
+.. versionadded:: 4.3.0
+
+The default PUBLISH-CDS value for zones that do not have one individually specified.
+See the :ref:`metadata-publish-cdnskey-publish-cds` docs for more information.
 
 .. _setting-default-soa-edit:
 
@@ -404,7 +434,7 @@ Overrides :ref:`setting-default-soa-edit`
 -  String
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Mail address to insert in the SOA record if none set in the backend.
 
@@ -417,7 +447,7 @@ Mail address to insert in the SOA record if none set in the backend.
 -  Default: a.misconfigured.powerdns.server
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Name to insert in the SOA record if none set in the backend.
 
@@ -457,7 +487,7 @@ to enable DNSSEC. Must be one of:
 
 .. note::
   Actual supported algorithms depend on the crypto-libraries
-  PowerDNS was compiled against. To check the supported DNSSEC algoritms
+  PowerDNS was compiled against. To check the supported DNSSEC algorithms
   in your build of PowerDNS, run ``pdnsutil list-algorithms``.
 
 .. _setting-default-zsk-size:
@@ -640,7 +670,7 @@ Entropy source file to use.
 
 .. versionadded:: 4.1.0
 
-If this is enabled, ALIAS records are expanded (synthesised to their
+If this is enabled, ALIAS records are expanded (synthesized to their
 A/AAAA).
 
 If this is disabled (the default), ALIAS records will not be expanded and
@@ -745,19 +775,27 @@ available in non-static distributions.
 ``local-address``
 -----------------
 .. versionchanged:: 4.3.0
-  now also takes your IPv6 addresses
+  now also accepts IPv6 addresses
 
 .. versionchanged:: 4.3.0
-  Before 4.3.0, this setting only supported IPv4.
+  Before 4.3.0, this setting only supported IPv4 addresses.
 
--  IPv4 Addresses, separated by commas or whitespace
--  Default: 0.0.0.0, ``::``
+-  IPv4/IPv6 Addresses, with optional port numbers, separated by commas or whitespace
+-  Default: ``0.0.0.0, ::``
 
-Local IP addresses to which we bind. It is highly advised to bind to
-specific interfaces and not use the default 'bind to any'. This causes
-big problems if you have multiple IP addresses. Unix does not provide a
-way of figuring out what IP address a packet was sent to when binding to
-any.
+Local IP addresses to which we bind. Each address specified can
+include a port number; if no port is included then the
+:ref:`setting-local-port` port will be used for that address. If a
+port number is specified, it must be separated from the address with a
+':'; for an IPv6 address the address must be enclosed in square
+brackets.
+
+Examples::
+
+  local-address=127.0.0.1 ::1
+  local-address=0.0.0.0:5353
+  local-address=[::]:8053
+  local-address=127.0.0.1:53, [::1]:5353
 
 .. _setting-local-address-nonexist-fail:
 
@@ -774,14 +812,14 @@ Fail to start if one or more of the
 
 ``local-ipv6``
 --------------
-.. versionchanged:: 4.3.0
+.. versionchanged:: 4.4.0
   removed, use :ref:`setting-local-address`
 
 .. deprecated:: 4.3.0
-  This setting has been removed, use :ref:`setting-localaddress`
+  This setting has been deprecated, use :ref:`setting-local-address`
 
 -  IPv6 Addresses, separated by commas or whitespace
--  Default: '::'
+-  Default: ``::``
 
 Local IPv6 address to which we bind. It is highly advised to bind to
 specific interfaces and not use the default 'bind to any'. This causes
@@ -792,8 +830,8 @@ big problems if you have multiple IP addresses.
 ``local-ipv6-nonexist-fail``
 ----------------------------
 
-.. deprecated:: 4.3.0
-  This setting has been removed, use :ref:`setting-localaddress-nonexist-fail`
+.. versionchanged:: 4.3.0
+  This setting has been removed, use :ref:`setting-local-address-nonexist-fail`
 
 -  Boolean
 -  Default: no
@@ -809,7 +847,8 @@ addresses do not exist on this server.
 -  Integer
 -  Default: 53
 
-The port on which we listen. Only one port possible.
+Local port to bind to.
+If an address in :ref:`setting-local-address` does not have an explicit port, this port is used.
 
 .. _setting-log-dns-details:
 
@@ -1199,7 +1238,7 @@ default has been "yes" since 2005.
 -  Boolean
 -  Default: no
 
-If this is enabled, ALIAS records are expanded (synthesised to their
+If this is enabled, ALIAS records are expanded (synthesized to their
 A/AAAA) during outgoing AXFR. This means slaves will not automatically
 follow changes in those A/AAAA records unless you AXFR regularly!
 
@@ -1245,21 +1284,33 @@ Seconds to store queries with an answer in the Query Cache. See :ref:`query-cach
 
 ``query-local-address``
 -----------------------
+.. versionchanged:: 4.4.0
+  Accepts both IPv4 and IPv6 addresses. Also accept more than one address per
+  address family.
 
--  IPv4 Address
--  Default: 0.0.0.0
+-  IP addresses, separated by spaces or commas
+-  Default: 0.0.0.0 ::
 
-The IP address to use as a source address for sending queries. Useful if
+The IP addresses to use as a source address for sending queries. Useful if
 you have multiple IPs and PowerDNS is not bound to the IP address your
 operating system uses by default for outgoing packets.
+
+PowerDNS will pick the correct address family based on the remote's address (v4
+for outgoing v4, v6 for outgoing v6). However, addresses are selected at random
+without taking into account ip subnet reachability. It is highly recommended to
+use the defaults in that case (the kernel will pick the right source address for
+the network).
 
 .. _setting-query-local-address6:
 
 ``query-local-address6``
 ------------------------
+.. deprecated:: 4.4.0
+  Use :ref:`setting-query-local-address`. The default has been changed
+  from '::' to unset.
 
 -  IPv6 Address
--  Default: '::'
+-  Default: unset
 
 Source IP address for sending IPv6 queries.
 
@@ -1368,7 +1419,7 @@ it is disabled by default.
 - String
 - Default: auto
 
-Specify which random number generator to use. Permissible choises are:
+Specify which random number generator to use. Permissible choices are:
 
 - auto - choose automatically
 - sodium - Use libsodium ``randombytes_uniform``
@@ -1379,7 +1430,7 @@ Specify which random number generator to use. Permissible choises are:
 - kiss - Use simple settable deterministic RNG. **FOR TESTING PURPOSES ONLY!**
 
 .. note::
-  Not all choises are available on all systems.
+  Not all choices are available on all systems.
 
 .. _setting-security-poll-suffix:
 
@@ -1491,7 +1542,7 @@ See :ref:`metadata-slave-renotify` to set this per-zone.
 -  Default: 604800
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Default :ref:`types-soa` expire.
 
@@ -1504,7 +1555,7 @@ Default :ref:`types-soa` expire.
 -  Default: 3600
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Default :ref:`types-soa` minimum ttl.
 
@@ -1517,7 +1568,7 @@ Default :ref:`types-soa` minimum ttl.
 -  Default: 10800
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Default :ref:`types-soa` refresh.
 
@@ -1530,7 +1581,7 @@ Default :ref:`types-soa` refresh.
 -  Default: 3600
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.3.0
+  This setting has been deprecated and will be removed in 4.4.0
 
 Default :ref:`types-soa` retry.
 

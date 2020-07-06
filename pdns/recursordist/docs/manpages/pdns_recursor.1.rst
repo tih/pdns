@@ -76,6 +76,8 @@ at `<https://doc.powerdns.com/>`
     Load root hints from this *filename*
 --local-address=<address>
     Listen on *address*, separated by spaces or commas.
+    Addresses specified can include port numbers; any which do not
+    include port numbers will listen on *--local-port*.
 --local-port=<port>
     Listen on *port*.
 --log-common-errors
@@ -88,12 +90,8 @@ at `<https://doc.powerdns.com/>`
     Maximum number of simultaneous TCP clients.
 --max-tcp-per-client=<num>
     If set, maximum number of TCP sessions per client (IP address).
---query-local-address=<address>
+--query-local-address=<address[,address...]>
     Use *address* as Source IP address when sending queries.
---query-local-address6=<address>
-    Send out local IPv6 queries from *address*. Disabled by default,
-    which also disables outgoing IPv6 support. A useful setting is
-    '::0'.
 --quiet
     Suppress logging of questions and answers.
 --server-id=<text>

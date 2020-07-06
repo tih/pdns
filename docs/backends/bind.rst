@@ -75,6 +75,8 @@ slave DNSSEC-enabled domains (where the RRSIGS are in the AXFR), a
 :ref:`metadata-presigned` domain metadata is set
 during the zonetransfer.
 
+You can use ``pdnsutil create-bind-db`` to make this database file for you.
+
 .. warning::
    If this is left empty on slaves and a presigned zone is transferred,
    it will (silently) serve it without DNSSEC. This in turn results in
@@ -144,7 +146,16 @@ will be loaded at first request.
 .. note::
   This does not add the zone to the :ref:`setting-bind-config` file.
 
-``bind-domain-status <domain> [domain]``
+``bind-domain-extended-status [domain ...]``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 4.3.0
+
+Output an extended status of a domain or domains, containing much more information than
+the simple domain status, like the number of records currently loaded, whether pdns
+is master or slave for the domain, the list of masters, various timers, etc
+
+``bind-domain-status [domain ...]``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Output status of domain or domains. Can be one of:

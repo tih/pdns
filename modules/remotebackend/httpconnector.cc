@@ -127,7 +127,7 @@ void HTTPConnector::restful_requestbuilder(const std::string &method, const Json
     addUrlComponent(parameters, "qtype", ss);
 
     // set the correct type of request based on method
-    if (method == "activateDomainKey" || method == "deactivateDomainKey") {
+    if (method == "activateDomainKey" || method == "deactivateDomainKey" || method == "publishDomainKey" || method == "unpublishDomainKey") {
         // create an empty post
         req.preparePost();
         verb = "POST";
@@ -142,6 +142,7 @@ void HTTPConnector::restful_requestbuilder(const std::string &method, const Json
         const Json& param = parameters["key"];
         req.POST()["flags"] = asString(param["flags"]);
         req.POST()["active"] = (param["active"].bool_value() ? "1" : "0");
+        req.POST()["published"] = (param["published"].bool_value() ? "1" : "0");
         req.POST()["content"] = param["content"].string_value();
         req.preparePost();
         verb = "PUT";
@@ -235,6 +236,9 @@ void HTTPConnector::restful_requestbuilder(const std::string &method, const Json
         verb = "DELETE";
     } else if (method == "setNotified") {
         req.POST()["serial"] = std::to_string(parameters["serial"].number_value());
+        req.preparePost();
+        verb = "PATCH";
+    } else if (method == "setFresh") {
         req.preparePost();
         verb = "PATCH";
     } else if (method == "directBackendCmd") {
@@ -380,7 +384,6 @@ int HTTPConnector::recv_message(Json& output) {
     if (d_socket == nullptr ) return -1; // cannot receive :(
     char buffer[4096];
     int rd = -1;
-    bool fail = false;
     time_t t0;
 
     arl.initialize(&resp);
@@ -395,28 +398,22 @@ int HTTPConnector::recv_message(Json& output) {
           throw NetworkError(std::string(strerror(rd)));
         arl.feed(std::string(buffer, rd));
       }
-      // timeout occured.
+      // timeout occurred.
       if (arl.ready() == false)
         throw NetworkError("timeout");
     } catch (NetworkError &ne) {
-      g_log<<Logger::Error<<"While reading from HTTP endpoint "<<d_addr.toStringWithPort()<<": "<<ne.what()<<std::endl; 
       d_socket.reset();
-      fail = true;
+      throw PDNSException("While reading from HTTP endpoint " + d_addr.toStringWithPort() + ": " + ne.what());
     } catch (...) {
-      g_log<<Logger::Error<<"While reading from HTTP endpoint "<<d_addr.toStringWithPort()<<": exception caught"<<std::endl;
       d_socket.reset();
-      fail = true;
-    }
-
-    if (fail) {
-      return -1;
+      throw PDNSException("While reading from HTTP endpoint " + d_addr.toStringWithPort() + ": unknown error");
     }
 
     arl.finalize();
 
-    if (resp.status < 200 || resp.status >= 400) {
+    if ((resp.status < 200 || resp.status >= 400) && resp.status != 404) {
       // bad. 
-      return -1;
+      throw PDNSException("Received unacceptable HTTP status code " + std::to_string(resp.status) + " from HTTP endpoint " + d_addr.toStringWithPort());
     }
 
     int rv = -1;

@@ -16,11 +16,12 @@
 #include "dns_random.hh"
 #include "backends/gsql/ssql.hh"
 #include "communicator.hh"
+#include "query-local-address.hh"
 
 extern StatBag S;
 extern CommunicatorClass Communicator;
 
-pthread_mutex_t PacketHandler::s_rfc2136lock=PTHREAD_MUTEX_INITIALIZER;
+std::mutex PacketHandler::s_rfc2136lock;
 
 // Implement section 3.2.1 and 3.2.2 of RFC2136
 int PacketHandler::checkUpdatePrerequisites(const DNSRecord *rr, DomainInfo *di) {
@@ -597,14 +598,10 @@ int PacketHandler::forwardPacket(const string &msgPrefix, const DNSPacket& p, co
   for(const auto& remote : di.masters) {
     g_log<<Logger::Notice<<msgPrefix<<"Forwarding packet to master "<<remote<<endl;
 
-    ComboAddress local;
-    if (remote.sin4.sin_family == AF_INET && !::arg()["query-local-address"].empty()) {
-      local = ComboAddress(::arg()["query-local-address"]);
-    } else if(remote.sin4.sin_family == AF_INET6 && !::arg()["query-local-address6"].empty()) {
-      local = ComboAddress(::arg()["query-local-address6"]);
-    } else {
+    if (!pdns::isQueryLocalAddressFamilyEnabled(remote.sin4.sin_family)) {
       continue;
     }
+    auto local = pdns::getQueryLocalAddress(remote.sin4.sin_family, 0);
     int sock = makeQuerySocket(local, false); // create TCP socket. RFC2136 section 6.2 seems to be ok with this.
     if(sock < 0) {
       g_log<<Logger::Error<<msgPrefix<<"Error creating socket: "<<stringerror()<<endl;
@@ -646,7 +643,7 @@ int PacketHandler::forwardPacket(const string &msgPrefix, const DNSPacket& p, co
         closesocket(sock);
       }
       catch(const PDNSException& e) {
-        g_log<<Logger::Error<<"Error closing master forwarding socket after a timeout occured: "<<e.reason<<endl;
+        g_log<<Logger::Error<<"Error closing master forwarding socket after a timeout occurred: "<<e.reason<<endl;
       }
       continue;
     }
@@ -656,7 +653,7 @@ int PacketHandler::forwardPacket(const string &msgPrefix, const DNSPacket& p, co
         closesocket(sock);
       }
       catch(const PDNSException& e) {
-        g_log<<Logger::Error<<"Error closing master forwarding socket after an error occured: "<<e.reason<<endl;
+        g_log<<Logger::Error<<"Error closing master forwarding socket after an error occurred: "<<e.reason<<endl;
       }
       continue;
     }
@@ -823,7 +820,7 @@ int PacketHandler::processUpdate(DNSPacket& p) {
   }
 
 
-  Lock l(&s_rfc2136lock); //TODO: i think this lock can be per zone, not for everything
+  std::lock_guard<std::mutex> l(s_rfc2136lock); //TODO: i think this lock can be per zone, not for everything
   g_log<<Logger::Info<<msgPrefix<<"starting transaction."<<endl;
   if (!di.backend->startTransaction(p.qdomain, -1)) { // Not giving the domain_id means that we do not delete the existing records.
     g_log<<Logger::Error<<msgPrefix<<"Backend for domain "<<p.qdomain<<" does not support transaction. Can't do Update packet."<<endl;

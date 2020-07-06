@@ -28,12 +28,15 @@
 std::vector<std::string> KeyValueLookupKeySourceIP::getKeys(const ComboAddress& addr)
 {
   std::vector<std::string> result;
+  ComboAddress truncated(addr);
 
-  if (addr.sin4.sin_family == AF_INET) {
-    result.emplace_back(reinterpret_cast<const char*>(&addr.sin4.sin_addr.s_addr), sizeof(addr.sin4.sin_addr.s_addr));
+  if (truncated.isIPv4()) {
+    truncated.truncate(d_v4Mask);
+    result.emplace_back(reinterpret_cast<const char*>(&truncated.sin4.sin_addr.s_addr), sizeof(truncated.sin4.sin_addr.s_addr));
   }
-  else if (addr.sin4.sin_family == AF_INET6) {
-    result.emplace_back(reinterpret_cast<const char*>(&addr.sin6.sin6_addr.s6_addr), sizeof(addr.sin6.sin6_addr.s6_addr));
+  else if (truncated.isIPv6()) {
+    truncated.truncate(d_v6Mask);
+    result.emplace_back(reinterpret_cast<const char*>(&truncated.sin6.sin6_addr.s6_addr), sizeof(truncated.sin6.sin6_addr.s6_addr));
   }
 
   return result;
@@ -117,7 +120,6 @@ bool LMDBKVStore::keyExists(const std::string& key)
 
 CDBKVStore::CDBKVStore(const std::string& fname, time_t refreshDelay): d_fname(fname), d_refreshDelay(refreshDelay)
 {
-  pthread_rwlock_init(&d_lock, nullptr);
   d_refreshing.clear();
 
   time_t now = time(nullptr);
@@ -129,7 +131,6 @@ CDBKVStore::CDBKVStore(const std::string& fname, time_t refreshDelay): d_fname(f
 }
 
 CDBKVStore::~CDBKVStore() {
-  pthread_rwlock_destroy(&d_lock);
 }
 
 bool CDBKVStore::reload(const struct stat& st)

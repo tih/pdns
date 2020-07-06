@@ -35,7 +35,7 @@
  * \param ne       A NegCacheEntry that is filled when there is a cache entry
  * \return         true if ne was filled out, false otherwise
  */
-bool NegCache::getRootNXTrust(const DNSName& qname, const struct timeval& now, const NegCacheEntry** ne)
+bool NegCache::getRootNXTrust(const DNSName& qname, const struct timeval& now, NegCacheEntry& ne)
 {
   // Never deny the root.
   if (qname.isRoot())
@@ -49,7 +49,7 @@ bool NegCache::getRootNXTrust(const DNSName& qname, const struct timeval& now, c
   while (ni != d_negcache.end() && ni->d_name == lastLabel && ni->d_auth.isRoot() && ni->d_qtype == qtnull) {
     // We have something
     if ((uint32_t)now.tv_sec < ni->d_ttd) {
-      *ne = &(*ni);
+      ne = *ni;
       moveCacheItemToBack<SequenceTag>(d_negcache, ni);
       return true;
     }
@@ -68,7 +68,7 @@ bool NegCache::getRootNXTrust(const DNSName& qname, const struct timeval& now, c
  * \param ne       A NegCacheEntry that is filled when there is a cache entry
  * \return         true if ne was filled out, false otherwise
  */
-bool NegCache::get(const DNSName& qname, const QType& qtype, const struct timeval& now, const NegCacheEntry** ne, bool typeMustMatch)
+bool NegCache::get(const DNSName& qname, const QType& qtype, const struct timeval& now, NegCacheEntry& ne, bool typeMustMatch)
 {
   const auto& idx = d_negcache.get<2>();
   auto range = idx.equal_range(qname);
@@ -82,7 +82,7 @@ bool NegCache::get(const DNSName& qname, const QType& qtype, const struct timeva
 
       if ((uint32_t)now.tv_sec < ni->d_ttd) {
         // Not expired
-        *ne = &(*ni);
+        ne = *ni;
         moveCacheItemToBack<SequenceTag>(d_negcache, firstIndexIterator);
         return true;
       }
@@ -183,7 +183,7 @@ void NegCache::clear()
  *
  * \param maxEntries The maximum number of entries that may exist in the cache.
  */
-void NegCache::prune(unsigned int maxEntries)
+void NegCache::prune(size_t maxEntries)
 {
   pruneCollection<SequenceTag>(*this, d_negcache, maxEntries, 200);
 }
@@ -203,11 +203,17 @@ uint64_t NegCache::dumpToFile(FILE* fp)
   for (const NegCacheEntry& ne : sidx) {
     ret++;
     fprintf(fp, "%s %" PRId64 " IN %s VIA %s ; (%s)\n", ne.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), ne.d_qtype.getName().c_str(), ne.d_auth.toString().c_str(), vStates[ne.d_validationState]);
+    for (const auto& rec : ne.authoritySOA.records) {
+      fprintf(fp, "%s %" PRId64 " IN %s %s ; (%s)\n", rec.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), DNSRecordContent::NumberToType(rec.d_type).c_str(), rec.d_content->getZoneRepresentation().c_str(), vStates[ne.d_validationState]);
+    }
+    for (const auto& sig : ne.authoritySOA.signatures) {
+      fprintf(fp, "%s %" PRId64 " IN RRSIG %s ;\n", sig.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), sig.d_content->getZoneRepresentation().c_str());
+    }
     for (const auto& rec : ne.DNSSECRecords.records) {
-      fprintf(fp, "%s %" PRId64 " IN %s %s ; (%s)\n", ne.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), DNSRecordContent::NumberToType(rec.d_type).c_str(), rec.d_content->getZoneRepresentation().c_str(), vStates[ne.d_validationState]);
+      fprintf(fp, "%s %" PRId64 " IN %s %s ; (%s)\n", rec.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), DNSRecordContent::NumberToType(rec.d_type).c_str(), rec.d_content->getZoneRepresentation().c_str(), vStates[ne.d_validationState]);
     }
     for (const auto& sig : ne.DNSSECRecords.signatures) {
-      fprintf(fp, "%s %" PRId64 " IN RRSIG %s ;\n", ne.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), sig.d_content->getZoneRepresentation().c_str());
+      fprintf(fp, "%s %" PRId64 " IN RRSIG %s ;\n", sig.d_name.toString().c_str(), static_cast<int64_t>(ne.d_ttd - now.tv_sec), sig.d_content->getZoneRepresentation().c_str());
     }
   }
   return ret;
