@@ -32,6 +32,8 @@
 #include <unistd.h>
 
 #if defined (__OpenBSD__) || defined(__NetBSD__)
+// If this is not undeffed, __attribute__ wil be redefined by /usr/include/readline/rlstdc.h
+#undef __STRICT_ANSI__
 #include <readline/readline.h>
 #else
 #include <editline/readline.h>
@@ -309,8 +311,8 @@ static bool fixUpResponse(char** response, uint16_t* responseLen, size_t* respon
     return true;
   }
 
-  if(g_fixupCase) {
-    string realname = qname.toDNSString();
+  if (g_fixupCase) {
+    const auto& realname = qname.getStorage();
     if (*responseLen >= (sizeof(dnsheader) + realname.length())) {
       memcpy(*response + sizeof(dnsheader), realname.c_str(), realname.length());
     }
@@ -550,7 +552,7 @@ try {
   std::vector<int> sockets;
   sockets.reserve(dss->sockets.size());
 
-  for(;;) {
+  for(; !dss->isStopped(); ) {
     dnsheader* dh = reinterpret_cast<struct dnsheader*>(packet);
     try {
       pickBackendSocketsReadyForReceiving(dss, sockets);
@@ -559,8 +561,13 @@ try {
         char * response = packet;
         size_t responseSize = sizeof(packet);
 
-        if (got < 0 || static_cast<size_t>(got) < sizeof(dnsheader))
+        if (got == 0 && dss->isStopped()) {
+          break;
+        }
+
+        if (got < 0 || static_cast<size_t>(got) < sizeof(dnsheader)) {
           continue;
+        }
 
         uint16_t responseLen = static_cast<uint16_t>(got);
         queryId = dh->id;
@@ -1191,8 +1198,8 @@ ProcessQueryResult processQuery(DNSQuestion& dq, ClientState& cs, LocalHolders& 
     if (serverPool->policy != nullptr) {
       policy = *(serverPool->policy);
     }
-    auto servers = serverPool->getServers();
-    selectedBackend = getSelectedBackendFromPolicy(policy, servers, dq);
+    const auto servers = serverPool->getServers();
+    selectedBackend = policy.getSelectedBackend(*servers, dq);
 
     uint16_t cachedResponseSize = dq.size;
     uint32_t allowExpired = selectedBackend ? 0 : g_staleCacheEntriesTTL;
@@ -1849,14 +1856,12 @@ static void setUpLocalBind(std::unique_ptr<ClientState>& cs)
   }
 
   if (cs->reuseport) {
-#ifdef SO_REUSEPORT
-    SSetsockopt(fd, SOL_SOCKET, SO_REUSEPORT, 1);
-#else
-    if (warn) {
-      /* no need to warn again if configured but support is not available, we already did for UDP */
-      warnlog("SO_REUSEPORT has been configured on local address '%s' but is not supported", cs->local.toStringWithPort());
+    if (!setReusePort(fd)) {
+      if (warn) {
+        /* no need to warn again if configured but support is not available, we already did for UDP */
+        warnlog("SO_REUSEPORT has been configured on local address '%s' but is not supported", cs->local.toStringWithPort());
+      }
     }
-#endif
   }
 
   /* Only set this on IPv4 UDP sockets.
@@ -2163,7 +2168,7 @@ try
 
   g_policy.setState(leastOutstandingPol);
   if(g_cmdLine.beClient || !g_cmdLine.command.empty()) {
-    setupLua(true, false, g_cmdLine.config);
+    setupLua(g_lua, true, false, g_cmdLine.config);
     if (clientAddress != ComboAddress())
       g_serverControl = clientAddress;
     doClient(g_serverControl, g_cmdLine.command);
@@ -2184,22 +2189,22 @@ try
   g_consoleACL.setState(consoleACL);
 
   if (g_cmdLine.checkConfig) {
-    setupLua(false, true, g_cmdLine.config);
+    setupLua(g_lua, false, true, g_cmdLine.config);
     // No exception was thrown
     infolog("Configuration '%s' OK!", g_cmdLine.config);
     _exit(EXIT_SUCCESS);
   }
 
-  auto todo=setupLua(false, false, g_cmdLine.config);
+  auto todo = setupLua(g_lua, false, false, g_cmdLine.config);
 
   auto localPools = g_pools.getCopy();
   {
     bool precompute = false;
-    if (g_policy.getLocal()->name == "chashed") {
+    if (g_policy.getLocal()->getName() == "chashed") {
       precompute = true;
     } else {
       for (const auto& entry: localPools) {
-        if (entry.second->policy != nullptr && entry.second->policy->name == "chashed") {
+        if (entry.second->policy != nullptr && entry.second->policy->getName() == "chashed") {
           precompute = true;
           break ;
         }

@@ -315,8 +315,8 @@ public:
   {
   }
 
-  //! Called when the Master of a domain should be changed
-  virtual bool setMaster(const DNSName &domain, const string &ip)
+  //! Called when the Master list of a domain should be changed
+  virtual bool setMasters(const DNSName &domain, const vector<ComboAddress> &masters)
   {
     return false;
   }
@@ -336,6 +336,12 @@ public:
   //! Can be called to seed the getArg() function with a prefix
   void setArgPrefix(const string &prefix);
 
+  //! Add an entry for a super master
+  virtual bool superMasterAdd(const string &ip, const string &nameserver, const string &account) 
+  {
+    return false; 
+  }
+
   //! determine if ip is a supermaster or a domain
   virtual bool superMasterBackend(const string &ip, const DNSName &domain, const vector<DNSResourceRecord>&nsset, string *nameserver, string *account, DNSBackend **db)
   {
@@ -343,7 +349,7 @@ public:
   }
 
   //! called by PowerDNS to create a new domain
-  virtual bool createDomain(const DNSName &domain)
+  virtual bool createDomain(const DNSName &domain, const DomainInfo::DomainKind kind, const vector<ComboAddress> &masters, const string &account)
   {
     return false;
   }
@@ -412,10 +418,11 @@ class BackendMakerClass
 public:
   void report(BackendFactory *bf);
   void launch(const string &instr);
-  vector<DNSBackend *>all(bool skipBIND=false);
+  vector<DNSBackend *> all(bool skipBIND=false);
   void load(const string &module);
-  int numLauncheable();
+  size_t numLauncheable() const;
   vector<string> getModules();
+  void clear();
 
 private:
   void load_all();

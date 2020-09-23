@@ -45,6 +45,7 @@ gSQLite3Backend::gSQLite3Backend( const std::string & mode, const std::string & 
   {
     SSQLite3 *ptr = new SSQLite3( getArg( "database" ), getArg( "pragma-journal-mode") );
     setDB(ptr);
+    allocateStatements();
     if(!getArg("pragma-synchronous").empty()) {
       ptr->execute("PRAGMA synchronous="+getArg("pragma-synchronous"));
     }
@@ -72,7 +73,7 @@ public:
   }
   
   //! Declares all needed arguments.
-  void declareArguments( const std::string & suffix = "" )
+  void declareArguments( const std::string & suffix = "" ) override
   {
     declare(suffix, "database", "Filename of the SQLite3 database", "powerdns.sqlite");
     declare(suffix, "pragma-synchronous", "Set this to 0 for blazing speed", "");
@@ -99,6 +100,7 @@ public:
     declare(suffix, "info-all-slaves-query", "","select id,name,master,last_check from domains where type='SLAVE'");
     declare(suffix, "supermaster-query", "", "select account from supermasters where ip=:ip and nameserver=:nameserver");
     declare(suffix, "supermaster-name-to-ips", "", "select ip,account from supermasters where nameserver=:nameserver and account=:account");
+    declare(suffix,"supermaster-add","", "insert into supermasters (ip, nameserver, account) values (:ip,:nameserver,:account)"); 
 
     declare(suffix, "insert-zone-query", "", "insert into domains (type,name,master,account,last_check,notified_serial) values(:type, :domain, :masters, :account, null, null)");
 
@@ -156,7 +158,7 @@ public:
   }
 
   //! Constructs a new gSQLite3Backend object.
-  DNSBackend *make( const string & suffix = "" )
+  DNSBackend *make( const string & suffix = "" ) override
   {
     return new gSQLite3Backend( d_mode, suffix );
   }

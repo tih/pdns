@@ -2,6 +2,9 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <fcntl.h>
+
 #include "dnsseckeeper.hh"
 #include "dnssecinfra.hh"
 #include "statbag.hh"
@@ -49,6 +52,14 @@ ArgvMap &arg()
 {
   static ArgvMap arg;
   return arg;
+}
+
+static std::string comboAddressVecToString(const std::vector<ComboAddress>& vec) {
+  vector<string> strs;
+  for (const auto& ca : vec) {
+    strs.push_back(ca.toStringWithPortExcept(53));
+  }
+  return boost::join(strs, ",");
 }
 
 static void loadMainConfig(const std::string& configdir)
@@ -355,7 +366,7 @@ static int checkZone(DNSSECKeeper &dk, UeberBackend &B, const DNSName& zone, con
       rr.content = "\""+rr.content+"\"";
 
     try {
-      shared_ptr<DNSRecordContent> drc(DNSRecordContent::mastermake(rr.qtype.getCode(), 1, rr.content));
+      shared_ptr<DNSRecordContent> drc(DNSRecordContent::mastermake(rr.qtype.getCode(), QClass::IN, rr.content));
       string tmp=drc->serialize(rr.qname);
       tmp = drc->getZoneRepresentation(true);
       if (rr.qtype.getCode() != QType::AAAA) {
@@ -1085,7 +1096,7 @@ static int loadZone(DNSName zone, const string& fname) {
   }
   else {
     cerr<<"Creating '"<<zone<<"'"<<endl;
-    B.createDomain(zone);
+    B.createDomain(zone, DomainInfo::Native, vector<ComboAddress>(), "");
 
     if(!B.getDomainInfo(zone, di)) {
       cerr<<"Domain '"<<zone<<"' was not created - perhaps backend ("<<::arg()["launch"]<<") does not support storing new zones."<<endl;
@@ -1128,7 +1139,7 @@ static int createZone(const DNSName &zone, const DNSName& nsname) {
     return EXIT_FAILURE;
   }
   cerr<<"Creating empty zone '"<<zone<<"'"<<endl;
-  B.createDomain(zone);
+  B.createDomain(zone, DomainInfo::Native, vector<ComboAddress>(), "");
   if(!B.getDomainInfo(zone, di)) {
     cerr<<"Domain '"<<zone<<"' was not created!"<<endl;
     return EXIT_FAILURE;
@@ -1170,19 +1181,16 @@ static int createSlaveZone(const vector<string>& cmds) {
     cerr<<"Domain '"<<zone<<"' exists already"<<endl;
     return EXIT_FAILURE;
   }
-  vector<string> masters;
+  vector<ComboAddress> masters;
   for (unsigned i=2; i < cmds.size(); i++) {
-    ComboAddress master(cmds[i], 53);
-    masters.push_back(master.toStringWithPort());
+    masters.emplace_back(cmds[i], 53);
   }
-  cerr<<"Creating slave zone '"<<zone<<"', with master(s) '"<<boost::join(masters, ",")<<"'"<<endl;
-  B.createDomain(zone);
+  cerr<<"Creating slave zone '"<<zone<<"', with master(s) '"<<comboAddressVecToString(masters)<<"'"<<endl;
+  B.createDomain(zone, DomainInfo::Slave, masters, "");
   if(!B.getDomainInfo(zone, di)) {
     cerr<<"Domain '"<<zone<<"' was not created!"<<endl;
     return EXIT_FAILURE;
   }
-  di.backend->setKind(zone, DomainInfo::Slave);
-  di.backend->setMaster(zone, boost::join(masters, ","));
   return EXIT_SUCCESS;
 }
 
@@ -1194,14 +1202,13 @@ static int changeSlaveZoneMaster(const vector<string>& cmds) {
     cerr<<"Domain '"<<zone<<"' doesn't exist"<<endl;
     return EXIT_FAILURE;
   }
-  vector<string> masters;
+  vector<ComboAddress> masters;
   for (unsigned i=2; i < cmds.size(); i++) {
-    ComboAddress master(cmds[i], 53);
-    masters.push_back(master.toStringWithPort());
+    masters.emplace_back(cmds[i], 53);
   }
-  cerr<<"Updating slave zone '"<<zone<<"', master(s) to '"<<boost::join(masters, ",")<<"'"<<endl;
+  cerr<<"Updating slave zone '"<<zone<<"', master(s) to '"<<comboAddressVecToString(masters)<<"'"<<endl;
   try {
-    di.backend->setMaster(zone, boost::join(masters, ","));
+    di.backend->setMasters(zone, masters);
     return EXIT_SUCCESS;
   }
   catch (PDNSException& e) {
@@ -1299,6 +1306,17 @@ static int addOrReplaceRecord(bool addOrReplace, const vector<string>& cmds) {
   }
   di.backend->commitTransaction();
   return EXIT_SUCCESS;
+}
+
+// addSuperMaster add anew super master
+static int addSuperMaster(const std::string &IP, const std::string &nameserver, const std::string &account)
+{
+  UeberBackend B("default");
+
+  if ( B.superMasterAdd(IP, nameserver, account) ){ 
+    return EXIT_SUCCESS; 
+  }
+  return EXIT_FAILURE;
 }
 
 // delete-rrset zone name type
@@ -2000,6 +2018,8 @@ try
     cout<<"activate-zone-key ZONE KEY-ID      Activate the key with key id KEY-ID in ZONE"<<endl;
     cout<<"add-record ZONE NAME TYPE [ttl] content"<<endl;
     cout<<"             [content..]           Add one or more records to ZONE"<<endl;
+    cout<<"add-supermaster IP NAMESERVER [account]"<<endl;
+    cout<<"                                   Add a new super-master "<<endl;
     cout<<"add-zone-key ZONE {zsk|ksk} [BITS] [active|inactive] [published|unpublished]"<<endl;
     cout<<"             [rsasha1|rsasha1-nsec3-sha1|rsasha256|rsasha512|ecdsa256|ecdsa384";
 #if defined(HAVE_LIBSODIUM) || defined(HAVE_LIBDECAF) || defined(HAVE_LIBCRYPTO_ED25519)
@@ -2049,7 +2069,7 @@ try
     cout<<"import-tsig-key NAME ALGORITHM KEY Import TSIG key"<<endl;
     cout<<"import-zone-key ZONE FILE          Import from a file a private key, ZSK or KSK"<<endl;
     cout<<"       [active|inactive] [ksk|zsk] [published|unpublished] Defaults to KSK, active and published"<<endl;
-    cout<<"ipdecrypt IP passphrase/key [key]  Encrypt IP address using passphrase or base64 key"<<endl;
+    cout<<"ipdecrypt IP passphrase/key [key]  Decrypt IP address using passphrase or base64 key"<<endl;
     cout<<"ipencrypt IP passphrase/key [key]  Encrypt IP address using passphrase or base64 key"<<endl;
     cout<<"load-zone ZONE FILE                Load ZONE from FILE, possibly creating zone or atomically"<<endl;
     cout<<"                                   replacing contents"<<endl;
@@ -2466,6 +2486,13 @@ try
       return 0;
     }
     return addOrReplaceRecord(true, cmds);
+  }
+  else if(cmds[0] == "add-supermaster") {
+    if(cmds.size() < 3) {
+      cerr<<"Syntax: pdnsutil add-supermaster IP NAMESERVER [account]"<<endl;
+      return 0;
+    }
+    exit(addSuperMaster(cmds[1], cmds[2], cmds.size() > 3 ? cmds[3] : "" ));
   }
   else if(cmds[0] == "replace-rrset") {
     if(cmds.size() < 5) {
@@ -3115,7 +3142,7 @@ try
     DNSName zone(cmds[1]);
     string kind = cmds[2];
     static vector<string> multiMetaWhitelist = {"ALLOW-AXFR-FROM", "ALLOW-DNSUPDATE-FROM",
-      "ALSO-NOTIFY", "TSIG-ALLOW-AXFR", "TSIG-ALLOW-DNSUPDATE", "GSS-ALLOW-AXFR-PRINCIPAL",
+      "ALSO-NOTIFY", "TSIG-ALLOW-AXFR", "TSIG-ALLOW-DNSUPDATE",
       "PUBLISH-CDS"};
     bool clobber = true;
     if (cmds[0] == "add-meta") {
@@ -3310,19 +3337,8 @@ try
       DNSResourceRecord rr;
       cout<<"Processing '"<<di.zone<<"'"<<endl;
       // create zone
-      if (!tgt->createDomain(di.zone)) throw PDNSException("Failed to create zone");
+      if (!tgt->createDomain(di.zone, di.kind, di.masters, di.account)) throw PDNSException("Failed to create zone");
       if (!tgt->getDomainInfo(di.zone, di_new)) throw PDNSException("Failed to create zone");
-      tgt->setKind(di_new.zone, di.kind);
-      tgt->setAccount(di_new.zone,di.account);
-      string masters="";
-      bool first = true;
-      for(const auto& master: di.masters) {
-        if (!first)
-          masters += ", ";
-        first = false;
-        masters += master.toStringWithPortExcept(53);
-      }
-      tgt->setMaster(di_new.zone, masters);
       // move records
       if (!src->list(di.zone, di.id, true)) throw PDNSException("Failed to list records");
       nr=0;

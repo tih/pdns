@@ -8,6 +8,11 @@ zone behaves in certain circumstances.
   Domain metadata is only available for DNSSEC capable
   backends! Make sure to enable the proper '-dnssec' setting to benefit.
 
+.. warning::
+  When multiple backends are in use, domain metadata is only retrieved from
+  and written to the first DNSSEC-capable backend, no matter where the related
+  zones live.
+
 For the BIND backend, this information is either stored in the
 :ref:`setting-bind-dnssec-db` or the hybrid database,
 depending on your settings.
@@ -113,6 +118,8 @@ Use this named TSIG key to retrieve this zone from its master, see :ref:`tsig-pr
 
 GSS-ALLOW-AXFR-PRINCIPAL
 ------------------------
+  .. versionchanged:: 4.3.1
+    GSS support was removed
 
 Allow this GSS principal to perform AXFR retrieval. Most commonly it is
 ``host/something@REALM``, ``DNS/something@REALM`` or ``user@REALM``.
@@ -120,6 +127,8 @@ Allow this GSS principal to perform AXFR retrieval. Most commonly it is
 
 GSS-ACCEPTOR-PRINCIPAL
 ----------------------
+  .. versionchanged:: 4.4.0
+    GSS support was removed
 
 Use this principal for accepting GSS context.
 (See :ref:`tsig-gss-tsig`).

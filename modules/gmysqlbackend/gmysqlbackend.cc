@@ -62,6 +62,7 @@ void gMySQLBackend::reconnect()
                    getArgAsNum("timeout"),
                    mustDo("thread-cleanup"),
                    mustDo("ssl")));
+  allocateStatements();
 }
 
 class gMySQLFactory : public BackendFactory
@@ -69,7 +70,7 @@ class gMySQLFactory : public BackendFactory
 public:
   gMySQLFactory(const string &mode) : BackendFactory(mode),d_mode(mode) {}
 
-  void declareArguments(const string &suffix="")
+  void declareArguments(const string &suffix="") override
   {
     declare(suffix,"dbname","Database name to connect to","powerdns");
     declare(suffix,"user","Database backend user to connect as","powerdns");
@@ -103,6 +104,7 @@ public:
     declare(suffix,"info-all-slaves-query","","select id,name,master,last_check from domains where type='SLAVE'");
     declare(suffix,"supermaster-query","", "select account from supermasters where ip=? and nameserver=?");
     declare(suffix,"supermaster-name-to-ips", "", "select ip,account from supermasters where nameserver=? and account=?");
+    declare(suffix,"supermaster-add","", "insert into supermasters (ip, nameserver, account) values (?,?,?)");
 
     declare(suffix,"insert-zone-query","", "insert into domains (type,name,master,account,last_check,notified_serial) values(?,?,?,?,NULL,NULL)");
 
@@ -159,7 +161,7 @@ public:
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name LIKE ? OR comment LIKE ? LIMIT ?");
   }
 
-  DNSBackend *make(const string &suffix="")
+  DNSBackend *make(const string &suffix="") override
   {
     return new gMySQLBackend(d_mode,suffix);
   }

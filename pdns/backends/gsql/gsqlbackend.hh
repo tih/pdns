@@ -48,11 +48,11 @@ public:
     d_db=std::unique_ptr<SSql>(db);
     if (d_db) {
       d_db->setLog(::arg().mustDo("query-logging"));
-      allocateStatements();
     }
   }
 
-  void allocateStatements()
+protected:
+  virtual void allocateStatements()
   {
     if (d_db) {
       d_NoIdQuery_stmt = d_db->prepare(d_NoIdQuery, 2);
@@ -66,6 +66,7 @@ public:
       d_InfoOfAllSlaveDomainsQuery_stmt = d_db->prepare(d_InfoOfAllSlaveDomainsQuery, 0);
       d_SuperMasterInfoQuery_stmt = d_db->prepare(d_SuperMasterInfoQuery, 2);
       d_GetSuperMasterIPs_stmt = d_db->prepare(d_GetSuperMasterIPs, 2);
+      d_AddSuperMaster_stmt = d_db->prepare(d_AddSuperMaster, 3); 
       d_InsertZoneQuery_stmt = d_db->prepare(d_InsertZoneQuery, 4);
       d_InsertRecordQuery_stmt = d_db->prepare(d_InsertRecordQuery, 9);
       d_InsertEmptyNonTerminalOrderQuery_stmt = d_db->prepare(d_InsertEmptyNonTerminalOrderQuery, 4);
@@ -117,7 +118,7 @@ public:
     }
   }
 
-  void freeStatements() {
+  virtual void freeStatements() {
     d_NoIdQuery_stmt.reset();
     d_IdQuery_stmt.reset();
     d_ANYNoIdQuery_stmt.reset();
@@ -129,6 +130,7 @@ public:
     d_InfoOfAllSlaveDomainsQuery_stmt.reset();
     d_SuperMasterInfoQuery_stmt.reset();
     d_GetSuperMasterIPs_stmt.reset();
+    d_AddSuperMaster_stmt.reset();
     d_InsertZoneQuery_stmt.reset();
     d_InsertRecordQuery_stmt.reset();
     d_InsertEmptyNonTerminalOrderQuery_stmt.reset();
@@ -179,6 +181,7 @@ public:
     d_SearchCommentsQuery_stmt.reset();
   }
 
+public:
   void lookup(const QType &, const DNSName &qdomain, int zoneId, DNSPacket *p=nullptr) override;
   bool list(const DNSName &target, int domain_id, bool include_disabled=false) override;
   bool get(DNSResourceRecord &r) override;
@@ -190,18 +193,17 @@ public:
   bool feedRecord(const DNSResourceRecord &r, const DNSName &ordername, bool ordernameIsNSEC3=false) override;
   bool feedEnts(int domain_id, map<DNSName,bool>& nonterm) override;
   bool feedEnts3(int domain_id, const DNSName &domain, map<DNSName,bool> &nonterm, const NSEC3PARAMRecordContent& ns3prc, bool narrow) override;
-  bool createDomain(const DNSName &domain) override {
-    return createDomain(domain, "NATIVE", "", "");
-  };
+  bool createDomain(const DNSName &domain, const DomainInfo::DomainKind kind, const vector<ComboAddress> &masters, const string &account) override;
   bool createSlaveDomain(const string &ip, const DNSName &domain, const string &nameserver, const string &account) override;
   bool deleteDomain(const DNSName &domain) override;
+  bool superMasterAdd(const string &ip, const string &nameserver, const string &account) override; 
   bool superMasterBackend(const string &ip, const DNSName &domain, const vector<DNSResourceRecord>&nsset, string *nameserver, string *account, DNSBackend **db) override;
   void setFresh(uint32_t domain_id) override;
   void getUnfreshSlaveInfos(vector<DomainInfo> *domains) override;
   void getUpdatedMasters(vector<DomainInfo> *updatedDomains) override;
   bool getDomainInfo(const DNSName &domain, DomainInfo &di, bool getSerial=true) override;
   void setNotified(uint32_t domain_id, uint32_t serial) override;
-  bool setMaster(const DNSName &domain, const string &ip) override;
+  bool setMasters(const DNSName &domain, const vector<ComboAddress> &masters) override;
   bool setKind(const DNSName &domain, const DomainInfo::DomainKind kind) override;
   bool setAccount(const DNSName &domain, const string &account) override;
 
@@ -239,7 +241,6 @@ public:
   bool searchComments(const string &pattern, int maxResults, vector<Comment>& result) override;
 
 protected:
-  bool createDomain(const DNSName &domain, const string &type, const string &masters, const string &account);
   string pattern2SQLPattern(const string& pattern);
   void extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& rr);
   void extractComment(SSqlStatement::row_t& row, Comment& c);
@@ -263,11 +264,12 @@ protected:
     return d_inTransaction;
   }
 
-private:
   string d_query_name;
   DNSName d_qname;
   SSqlStatement::result_t d_result;
+  unique_ptr<SSqlStatement>* d_query_stmt;
 
+private:
   string d_NoIdQuery;
   string d_IdQuery;
   string d_ANYNoIdQuery;
@@ -283,6 +285,7 @@ private:
   string d_SuperMasterInfoQuery;
   string d_GetSuperMasterName;
   string d_GetSuperMasterIPs;
+  string d_AddSuperMaster;
 
   string d_InsertZoneQuery;
   string d_InsertRecordQuery;
@@ -342,7 +345,6 @@ private:
   string d_SearchRecordsQuery;
   string d_SearchCommentsQuery;
 
-  unique_ptr<SSqlStatement>* d_query_stmt;
 
   unique_ptr<SSqlStatement> d_NoIdQuery_stmt;
   unique_ptr<SSqlStatement> d_IdQuery_stmt;
@@ -355,6 +357,7 @@ private:
   unique_ptr<SSqlStatement> d_InfoOfAllSlaveDomainsQuery_stmt;
   unique_ptr<SSqlStatement> d_SuperMasterInfoQuery_stmt;
   unique_ptr<SSqlStatement> d_GetSuperMasterIPs_stmt;
+  unique_ptr<SSqlStatement> d_AddSuperMaster_stmt;
   unique_ptr<SSqlStatement> d_InsertZoneQuery_stmt;
   unique_ptr<SSqlStatement> d_InsertRecordQuery_stmt;
   unique_ptr<SSqlStatement> d_InsertEmptyNonTerminalOrderQuery_stmt;

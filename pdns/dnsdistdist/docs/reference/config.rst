@@ -123,7 +123,7 @@ Listen Sockets
                       The default port is 443.
   :param str certFile(s): The path to a X.509 certificate file in PEM format, or a list of paths to such files.
   :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones.
-  :param str-or-list urls: A base URL, or a list of base URLs, to accept queries on. Any query with a path under one of these will be treated as a DoH query. The default is /dns-query.
+  :param str-or-list urls: The path part of a URL, or a list of paths, to accept queries on. Any query with a path under one of these will be treated as a DoH query. The default is /dns-query.
   :param table options: A table with key: value pairs with listen options.
 
   Options:
@@ -232,6 +232,14 @@ Control Socket, Console and Webserver
 
   :param str netmask: A CIDR netmask, e.g. ``"192.0.2.0/24"``. Without a subnetmask, only the specific address is allowed.
 
+.. function:: clearConsoleHistory()
+
+  .. versionadded:: 1.6.0
+
+  Clear the internal (in-memory) buffers of console commands. These buffers are used to provide the :func:`delta` command and
+  console completion and history, and can end up being quite large when a lot of commands are issued via the console, consuming
+  a noticeable amount of memory.
+
 .. function:: controlSocket(address)
 
   Bind to ``addr`` and listen for a connection for the console. Since 1.3.0 only connections from local users are allowed
@@ -240,6 +248,10 @@ Control Socket, Console and Webserver
   local connections, since not enabling it allows any local user to connect to the console.
 
   :param str address: An IP address with optional port. By default, the port is 5199.
+
+.. function:: delta()
+
+  Issuing `delta` on the console will print the changes to the configuration that have been made since startup.
 
 .. function:: inClientStartup()
 
@@ -469,7 +481,8 @@ Servers
       sockets=NUM,           -- Number of sockets (and thus source ports) used toward the backend server, defaults to a single one
       disableZeroScope=BOOL, -- Disable the EDNS Client Subnet 'zero scope' feature, which does a cache lookup for an answer valid for all subnets (ECS scope of 0) before adding ECS information to the query and doing the regular lookup. This requires the ``parseECS`` option of the corresponding cache to be set to true
       rise=NUM,              -- Require NUM consecutive successful checks before declaring the backend up, default: 1
-      useProxyProtocol=BOOL  -- Add a proxy protocol header to the query, passing along the client's IP address and port along with the original destination address and port. Default is disabled.
+      useProxyProtocol=BOOL, -- Add a proxy protocol header to the query, passing along the client's IP address and port along with the original destination address and port. Default is disabled.
+      reconnectOnUp=BOOL     -- Close and reopen the sockets when a server transits from Down to Up. This helps when an interface is missing when dnsdist is started. Default is disabled.
     })
 
   :param str server_string: A simple IP:PORT string.
@@ -514,6 +527,14 @@ A server object returned by :func:`getServer` can be manipulated with these func
     Add this server to a pool.
 
     :param str pool: The pool to add the server to
+
+  .. method:: Server:getLatency() -> double
+
+    .. versionadded:: 1.6.0
+
+    Return the average latency of this server over the last 128 UDP queries, in microseconds.
+
+    :returns: The number of outstanding queries
 
   .. method:: Server:getName() -> string
 
@@ -685,6 +706,9 @@ See :doc:`../guides/cache` for a how to.
 
   .. versionadded:: 1.4.0
 
+  .. versionchanged:: 1.6.0
+    ``cookieHashing`` parameter added.
+
   Creates a new :class:`PacketCache` with the settings specified.
 
   :param int maxEntries: The maximum number of entries in this cache
@@ -701,6 +725,7 @@ See :doc:`../guides/cache` for a how to.
   * ``parseECS=false``: bool - Whether any EDNS Client Subnet option present in the query should be extracted and stored to be able to detect hash collisions involving queries with the same qname, qtype and qclass but a different incoming ECS value. Enabling this option adds a parsing cost and only makes sense if at least one backend might send different responses based on the ECS value, so it's disabled by default. Enabling this option is required for the 'zero scope' option to work
   * ``staleTTL=60``: int - When the backend servers are not reachable, and global configuration ``setStaleCacheEntriesTTL`` is set appropriately, TTL that will be used when a stale cache entry is returned.
   * ``temporaryFailureTTL=60``: int - On a SERVFAIL or REFUSED from the backend, cache for this amount of seconds..
+  * ``cookieHashing=false``: bool - Whether EDNS Cookie values will be hashed, resulting in separate entries for different cookies in the packet cache. This is required if the backend is sending answers with EDNS Cookies, otherwise a client might receive an answer with the wrong cookie.
 
 .. class:: PacketCache
 
@@ -725,11 +750,14 @@ See :doc:`../guides/cache` for a how to.
     .. versionchanged:: 1.2.0
       ``suffixMatch`` parameter added.
 
+    .. versionchanged:: 1.6.0
+      ``name`` can now also be a string
+
     Remove entries matching ``name`` and type from the cache.
 
     :param DNSName name: The name to expunge
     :param int qtype: The type to expunge, can be a pre-defined :ref:`DNSQType`
-    :param bool suffixMatch: When set to true, remove al entries under ``name``
+    :param bool suffixMatch: When set to true, remove all entries under ``name``
 
   .. method:: PacketCache:getStats()
 
@@ -1372,7 +1400,7 @@ DOHFrontend
 
   .. versionadded:: 1.4.0
 
-  Return a DOHResponseMapEntry that can be used with :meth:`DOHFrontend.setResponsesMap`. Every query whose path matches the regular expression supplied in ``regex`` will be immediately answered with a HTTP response.
+  Return a DOHResponseMapEntry that can be used with :meth:`DOHFrontend.setResponsesMap`. Every query whose path is listed in the ``urls`` parameter to :func:`addDOHLocal` and matches the regular expression supplied in ``regex`` will be immediately answered with a HTTP response.
   The status of the HTTP response will be the one supplied by ``status``, and the content set to the one supplied by ``content``, except if the status is a redirection (3xx) in which case the content is expected to be the URL to redirect to.
 
   :param str regex: A regular expression to match the path against.
@@ -1425,8 +1453,8 @@ record if the received request had one, which is the case by default and can be 
 :func:`setAddEDNSToSelfGeneratedResponses`.
 
 We must, however, provide a responder's maximum payload size in this record, and we can't easily know the
-maximum payload size of the actual backend so we need to provide one. The default value is 1500 and can be
-overridden using :func:`setPayloadSizeOnSelfGeneratedAnswers`.
+maximum payload size of the actual backend so we need to provide one. The default value is 1232 since 1.6.0,
+and can be overridden using :func:`setPayloadSizeOnSelfGeneratedAnswers`.
 
 .. function:: setAddEDNSToSelfGeneratedResponses(add)
 
@@ -1440,10 +1468,13 @@ overridden using :func:`setPayloadSizeOnSelfGeneratedAnswers`.
 
   .. versionadded:: 1.3.3
 
+  .. versionchanged:: 1.6.0
+    Default value changed from 1500 to 1232.
+
   Set the UDP payload size advertised via EDNS on self-generated responses. In accordance with
   :rfc:`RFC 6891 <6891#section-6.2.5>`, values lower than 512 will be treated as equal to 512.
 
-  :param int payloadSize: The responder's maximum UDP payload size, in bytes. Default is 1500.
+  :param int payloadSize: The responder's maximum UDP payload size, in bytes. Default is 1232 since 1.6.0, it was 1500 before.
 
 Security Polling
 ~~~~~~~~~~~~~~~~

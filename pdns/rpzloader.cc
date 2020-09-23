@@ -147,14 +147,14 @@ static void RPZRecordToPolicy(const DNSRecord& dr, std::shared_ptr<DNSFilterEngi
   if(dr.d_name.isPartOf(rpzNSDname)) {
     DNSName filt=dr.d_name.makeRelative(rpzNSDname);
     if(addOrRemove)
-      zone->addNSTrigger(filt, std::move(pol));
+      zone->addNSTrigger(filt, std::move(pol), defpolApplied);
     else
       zone->rmNSTrigger(filt, std::move(pol));
   } else if(dr.d_name.isPartOf(rpzClientIP)) {
     DNSName filt=dr.d_name.makeRelative(rpzClientIP);
     auto nm=makeNetmaskFromRPZ(filt);
     if(addOrRemove)
-      zone->addClientTrigger(nm, std::move(pol));
+      zone->addClientTrigger(nm, std::move(pol), defpolApplied);
     else
       zone->rmClientTrigger(nm, std::move(pol));
     
@@ -163,14 +163,14 @@ static void RPZRecordToPolicy(const DNSRecord& dr, std::shared_ptr<DNSFilterEngi
     DNSName filt=dr.d_name.makeRelative(rpzIP);
     auto nm=makeNetmaskFromRPZ(filt);
     if(addOrRemove)
-      zone->addResponseTrigger(nm, std::move(pol));
+      zone->addResponseTrigger(nm, std::move(pol), defpolApplied);
     else
       zone->rmResponseTrigger(nm, std::move(pol));
   } else if(dr.d_name.isPartOf(rpzNSIP)) {
     DNSName filt=dr.d_name.makeRelative(rpzNSIP);
     auto nm=makeNetmaskFromRPZ(filt);
     if(addOrRemove)
-      zone->addNSIPTrigger(nm, std::move(pol));
+      zone->addNSIPTrigger(nm, std::move(pol), defpolApplied);
     else
       zone->rmNSIPTrigger(nm, std::move(pol));
   } else {
@@ -307,14 +307,14 @@ static bool dumpZoneToDisk(const DNSName& zoneName, const std::shared_ptr<DNSFil
   std::string temp = dumpZoneFileName + "XXXXXX";
   int fd = mkstemp(&temp.at(0));
   if (fd < 0) {
-    g_log<<Logger::Warning<<"Unable to open a file to dump the content of the RPZ zone "<<zoneName.toLogString()<<endl;
+    g_log<<Logger::Warning<<"Unable to open a file to dump the content of the RPZ zone "<<zoneName<<endl;
     return false;
   }
 
   auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(fd, "w+"), fclose);
   if (!fp) {
     close(fd);
-    g_log<<Logger::Warning<<"Unable to open a file pointer to dump the content of the RPZ zone "<<zoneName.toLogString()<<endl;
+    g_log<<Logger::Warning<<"Unable to open a file pointer to dump the content of the RPZ zone "<<zoneName<<endl;
     return false;
   }
   fd = -1;
@@ -323,27 +323,27 @@ static bool dumpZoneToDisk(const DNSName& zoneName, const std::shared_ptr<DNSFil
     newZone->dump(fp.get());
   }
   catch(const std::exception& e) {
-    g_log<<Logger::Warning<<"Error while dumping the content of the RPZ zone "<<zoneName.toLogString()<<": "<<e.what()<<endl;
+    g_log<<Logger::Warning<<"Error while dumping the content of the RPZ zone "<<zoneName<<": "<<e.what()<<endl;
     return false;
   }
 
   if (fflush(fp.get()) != 0) {
-    g_log<<Logger::Warning<<"Error while flushing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
+    g_log<<Logger::Warning<<"Error while flushing the content of the RPZ zone "<<zoneName<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (fsync(fileno(fp.get())) != 0) {
-    g_log<<Logger::Warning<<"Error while syncing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
+    g_log<<Logger::Warning<<"Error while syncing the content of the RPZ zone "<<zoneName<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (fclose(fp.release()) != 0) {
-    g_log<<Logger::Warning<<"Error while writing the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
+    g_log<<Logger::Warning<<"Error while writing the content of the RPZ zone "<<zoneName<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
   if (rename(temp.c_str(), dumpZoneFileName.c_str()) != 0) {
-    g_log<<Logger::Warning<<"Error while moving the content of the RPZ zone "<<zoneName.toLogString()<<" to the dump file: "<<stringerror()<<endl;
+    g_log<<Logger::Warning<<"Error while moving the content of the RPZ zone "<<zoneName<<" to the dump file: "<<stringerror()<<endl;
     return false;
   }
 
@@ -378,6 +378,8 @@ void RPZIXFRTracker(const std::vector<ComboAddress>& masters, boost::optional<DN
         sr = loadRPZFromServer(master, zoneName, newZone, defpol, defpolOverrideLocal, maxTTL, tt, maxReceivedBytes, localAddress, axfrTimeout);
         newZone->setSerial(sr->d_st.serial);
         newZone->setRefresh(sr->d_st.refresh);
+        // This period gets used below this loop
+        oldZone->setRefresh(sr->d_st.refresh);
         setRPZZoneNewState(polName, sr->d_st.serial, newZone->size(), true);
 
         g_luaconfs.modify([zoneIdx, &newZone](LuaConfigItems& lci) {

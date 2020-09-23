@@ -109,10 +109,10 @@ bool UeberBackend::getDomainInfo(const DNSName &domain, DomainInfo &di, bool get
   return false;
 }
 
-bool UeberBackend::createDomain(const DNSName &domain)
+bool UeberBackend::createDomain(const DNSName &domain, const DomainInfo::DomainKind kind, const vector<ComboAddress> &masters, const string &account)
 {
   for(DNSBackend* mydb :  backends) {
-    if(mydb->createDomain(domain)) {
+    if(mydb->createDomain(domain, kind, masters, account)) {
       return true;
     }
   }
@@ -322,7 +322,7 @@ bool UeberBackend::getAuth(const DNSName &target, const QType& qtype, SOAData* s
         DLOG(g_log<<Logger::Error<<"has pos cache entry: "<<shorter<<endl);
         fillSOAData(d_answers[0], *sd);
 
-        sd->db = 0;
+        sd->db = nullptr;
         sd->qname = shorter;
         goto found;
       } else if(cstat == 0 && d_negcache_ttl) {
@@ -416,7 +416,7 @@ bool UeberBackend::getSOA(const DNSName &domain, SOAData &sd)
     fillSOAData(d_answers[0],sd);
     sd.domain_id=d_answers[0].domain_id;
     sd.ttl=d_answers[0].dr.d_ttl;
-    sd.db=0;
+    sd.db = nullptr;
     return true;
   }
 
@@ -454,6 +454,14 @@ bool UeberBackend::getSOAUncached(const DNSName &domain, SOAData &sd)
   return false;
 }
 
+bool UeberBackend::superMasterAdd(const string &ip, const string &nameserver, const string &account) 
+{
+  for(vector<DNSBackend *>::const_iterator i=backends.begin();i!=backends.end();++i)
+    if((*i)->superMasterAdd(ip, nameserver, account)) 
+      return true;
+  return false;
+}
+
 bool UeberBackend::superMasterBackend(const string &ip, const DNSName &domain, const vector<DNSResourceRecord>&nsset, string *nameserver, string *account, DNSBackend **db)
 {
   for(vector<DNSBackend *>::const_iterator i=backends.begin();i!=backends.end();++i)
@@ -476,7 +484,7 @@ UeberBackend::UeberBackend(const string &pname)
   d_cache_ttl = ::arg().asNum("query-cache-ttl");
   d_negcache_ttl = ::arg().asNum("negquery-cache-ttl");
 
-  d_stale=false;
+  d_stale = false;
 
   backends=BackendMakers().all(pname=="key-only");
 }

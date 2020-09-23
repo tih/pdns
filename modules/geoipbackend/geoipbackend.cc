@@ -263,7 +263,7 @@ void GeoIPBackend::initialize() {
     for(auto &item: dom.records) {
       map<uint16_t, float> weights;
       map<uint16_t, float> sums;
-      map<uint16_t, GeoIPDNSResourceRecord> lasts;
+      map<uint16_t, GeoIPDNSResourceRecord*> lasts;
       bool has_weight=false;
       // first we look for used weight
       for(const auto &rr: item.second) {
@@ -277,13 +277,13 @@ void GeoIPBackend::initialize() {
           rr.weight=static_cast<int>((static_cast<float>(rr.weight) / weights[rr_type])*1000.0);
           sums[rr_type] += rr.weight;
           rr.has_weight = has_weight;
-          lasts[rr_type] = rr;
+          lasts[rr_type] = &rr;
         }
         // remove rounding gap
         for(auto &x: lasts) {
           float sum = sums[x.first];
           if (sum < 1000)
-            x.second.weight += (1000-sum);
+            x.second->weight += (1000-sum);
         }
       }
     }
@@ -314,11 +314,13 @@ GeoIPBackend::~GeoIPBackend() {
 bool GeoIPBackend::lookup_static(const GeoIPDomain &dom, const DNSName &search, const QType &qtype, const DNSName& qdomain, const Netmask& addr, GeoIPNetmask &gl) {
   const auto& i = dom.records.find(search);
   map<uint16_t,int> cumul_probabilities;
+  map<uint16_t,bool> weighted_match;
   int probability_rnd = 1+(dns_random(1000)); // setting probability=0 means it never is used
 
   if (i != dom.records.end()) { // return static value
     for(const auto& rr : i->second) {
-      if (qtype != QType::ANY && rr.qtype != qtype) continue;
+      if ((qtype != QType::ANY && rr.qtype != qtype) || weighted_match[rr.qtype.getCode()])
+        continue;
 
       if (rr.has_weight) {
         gl.netmask = (addr.isIPv6()?128:32);
@@ -332,6 +334,10 @@ bool GeoIPBackend::lookup_static(const GeoIPDomain &dom, const DNSName &search, 
       d_result.push_back(rr);
       d_result.back().content = content;
       d_result.back().qname = qdomain;
+      // If we are weighted we only return one resource and we found a matching resource,
+      // so no need to check the other ones.
+      if (rr.has_weight)
+        weighted_match[rr.qtype.getCode()] = true;
     }
     // ensure we get most strict netmask
     for(DNSResourceRecord& rr: d_result) {
@@ -929,13 +935,13 @@ class GeoIPFactory : public BackendFactory{
 public:
   GeoIPFactory() : BackendFactory("geoip") {}
 
-  void declareArguments(const string &suffix = "") {
+  void declareArguments(const string &suffix = "") override {
     declare(suffix, "zones-file", "YAML file to load zone(s) configuration", "");
     declare(suffix, "database-files", "File(s) to load geoip data from ([driver:]path[;opt=value]", "");
     declare(suffix, "dnssec-keydir", "Directory to hold dnssec keys (also turns DNSSEC on)", "");
   }
 
-  DNSBackend *make(const string &suffix) {
+  DNSBackend *make(const string &suffix) override {
     return new GeoIPBackend(suffix);
   }
 };

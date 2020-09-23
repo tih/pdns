@@ -38,6 +38,12 @@ write_centos()
     PKG=$2
     CMD=$3
 
+    if [ "$VERSION" = "8" ]; then
+        CENTOS8_FLAGS="--nobest"
+    else
+        CENTOS8_FLAGS=""
+    fi
+
     cat <<EOF > Dockerfile.$RELEASE.$OS-$VERSION
 FROM $OS:$VERSION
 
@@ -57,7 +63,7 @@ EOF
 
     cat <<EOF >> Dockerfile.$RELEASE.$OS-$VERSION
 RUN curl -o /etc/yum.repos.d/powerdns-$RELEASE.repo https://repo.powerdns.com/repo-files/$OS-$RELEASE.repo
-RUN yum install --assumeyes --nobest $PKG
+RUN yum install --assumeyes $CENTOS8_FLAGS $PKG
 EOF
 
     if [ "$RELEASE" = "rec-43"  -o "$RELEASE" = "rec-44" ]; then
@@ -149,19 +155,15 @@ RELEASE=$1
 if [ "$RELEASE" = "auth-40" ]; then
     write_centos 6 pdns pdns_server
     write_centos 7 pdns pdns_server
-    write_debian jessie pdns-server pdns_server
     write_debian stretch pdns-server pdns_server
-    write_ubuntu trusty pdns-server pdns_server
     write_ubuntu xenial pdns-server pdns_server
 elif [ "$RELEASE" = "auth-41" ]; then
     write_centos 6 pdns pdns_server
     write_centos 7 pdns pdns_server
-    write_debian jessie pdns-server pdns_server
     write_debian stretch pdns-server pdns_server
-    write_ubuntu trusty pdns-server pdns_server
     write_ubuntu xenial pdns-server pdns_server
     write_ubuntu bionic pdns-server pdns_server
-elif [ "$RELEASE" = "auth-42" -o "$RELEASE" = "auth-43" -o "$RELEASE" = "auth-master" ]; then
+elif [ "$RELEASE" = "auth-42" ]; then
     write_centos 6 pdns pdns_server
     write_centos 7 pdns pdns_server
     write_centos 8 pdns pdns_server
@@ -169,22 +171,27 @@ elif [ "$RELEASE" = "auth-42" -o "$RELEASE" = "auth-43" -o "$RELEASE" = "auth-ma
     write_debian buster pdns-server pdns_server
     write_ubuntu xenial pdns-server pdns_server
     write_ubuntu bionic pdns-server pdns_server
+elif [ "$RELEASE" = "auth-43" -o "$RELEASE" = "auth-master" ]; then
+    write_centos 6 pdns pdns_server
+    write_centos 7 pdns pdns_server
+    write_centos 8 pdns pdns_server
+    write_debian stretch pdns-server pdns_server
+    write_debian buster pdns-server pdns_server
+    write_ubuntu xenial pdns-server pdns_server
+    write_ubuntu bionic pdns-server pdns_server
+    write_ubuntu focal pdns-server pdns_server
 elif [ "$RELEASE" = "rec-40" ]; then
     write_centos 6 pdns-recursor pdns_recursor
     write_centos 7 pdns-recursor pdns_recursor
-    write_debian jessie pdns-recursor pdns_recursor
     write_debian stretch pdns-recursor pdns_recursor
-    write_ubuntu trusty pdns-recursor pdns_recursor
     write_ubuntu xenial pdns-recursor pdns_recursor
 elif [ "$RELEASE" = "rec-41" ]; then
     write_centos 6 pdns-recursor pdns_recursor
     write_centos 7 pdns-recursor pdns_recursor
-    write_debian jessie pdns-recursor pdns_recursor
     write_debian stretch pdns-recursor pdns_recursor
-    write_ubuntu trusty pdns-recursor pdns_recursor
     write_ubuntu xenial pdns-recursor pdns_recursor
     write_ubuntu bionic pdns-recursor pdns_recursor
-elif [ "$RELEASE" = "rec-42" -o "$RELEASE" = "rec-43" -o "$RELEASE" = "rec-44" -o "$RELEASE" = "rec-master" ]; then
+elif [ "$RELEASE" = "rec-42" ]; then
     write_centos 6 pdns-recursor pdns_recursor
     write_centos 7 pdns-recursor pdns_recursor
     write_centos 8 pdns-recursor pdns_recursor
@@ -192,6 +199,15 @@ elif [ "$RELEASE" = "rec-42" -o "$RELEASE" = "rec-43" -o "$RELEASE" = "rec-44" -
     write_debian buster pdns-recursor pdns_recursor
     write_ubuntu xenial pdns-recursor pdns_recursor
     write_ubuntu bionic pdns-recursor pdns_recursor
+elif [ "$RELEASE" = "rec-43" -o "$RELEASE" = "rec-44" -o "$RELEASE" = "rec-master" ]; then
+    write_centos 6 pdns-recursor pdns_recursor
+    write_centos 7 pdns-recursor pdns_recursor
+    write_centos 8 pdns-recursor pdns_recursor
+    write_debian stretch pdns-recursor pdns_recursor
+    write_debian buster pdns-recursor pdns_recursor
+    write_ubuntu xenial pdns-recursor pdns_recursor
+    write_ubuntu bionic pdns-recursor pdns_recursor
+    write_ubuntu focal pdns-recursor pdns_recursor
 elif [ "$RELEASE" = "dnsdist-15" -o "$RELEASE" = "dnsdist-master" ]; then
     write_centos 6 dnsdist dnsdist
     write_centos 7 dnsdist dnsdist
@@ -200,6 +216,7 @@ elif [ "$RELEASE" = "dnsdist-15" -o "$RELEASE" = "dnsdist-master" ]; then
     write_debian buster dnsdist dnsdist
     write_ubuntu xenial dnsdist dnsdist
     write_ubuntu bionic dnsdist dnsdist
+    write_ubuntu focal dnsdist dnsdist
 else
     echo "Invalid release: $RELEASE"
     exit 1

@@ -290,7 +290,7 @@ bool Bind2Backend::feedRecord(const DNSResourceRecord &rr, const DNSName &ordern
     throw DBException("out-of-zone data '"+rr.qname.toLogString()+"' during AXFR of zone '"+bbd.d_name.toLogString()+"'");
   }
 
-  shared_ptr<DNSRecordContent> drc(DNSRecordContent::mastermake(rr.qtype.getCode(), 1, rr.content));
+  shared_ptr<DNSRecordContent> drc(DNSRecordContent::mastermake(rr.qtype.getCode(), QClass::IN, rr.content));
   string content = drc->getZoneRepresentation();
 
   // SOA needs stripping too! XXX FIXME - also, this should not be here I think
@@ -1150,7 +1150,7 @@ void Bind2Backend::lookup(const QType &qtype, const DNSName &qname, int zoneId, 
 
   if(!found) {
     if(mustlog)
-      g_log<<Logger::Warning<<"Found no authoritative zone for '"<<qname<<"' and/or id "<<bbd.d_id<<endl;
+      g_log<<Logger::Warning<<"Found no authoritative zone for '"<<qname<<"' and/or id "<<zoneId<<endl;
     d_handle.d_list=false;
     return;
   }
@@ -1443,7 +1443,7 @@ class Bind2Factory : public BackendFactory
    public:
       Bind2Factory() : BackendFactory("bind") {}
 
-      void declareArguments(const string &suffix="")
+      void declareArguments(const string &suffix="") override
       {
          declare(suffix,"ignore-broken-records","Ignore records that are out-of-bound for the zone.","no");
          declare(suffix,"config","Location of named.conf","");
@@ -1456,13 +1456,13 @@ class Bind2Factory : public BackendFactory
          declare(suffix,"hybrid","Store DNSSEC metadata in other backend","no");
       }
 
-      DNSBackend *make(const string &suffix="")
+      DNSBackend *make(const string &suffix="") override
       {
          assertEmptySuffix(suffix);
          return new Bind2Backend(suffix);
       }
       
-      DNSBackend *makeMetadataOnly(const string &suffix="")
+      DNSBackend *makeMetadataOnly(const string &suffix="") override
       {
         assertEmptySuffix(suffix);
         return new Bind2Backend(suffix, false);

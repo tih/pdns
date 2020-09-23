@@ -61,7 +61,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_secure)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A || record.d_type == QType::RRSIG);
@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_secure)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Secure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Secure);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A || record.d_type == QType::RRSIG);
@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_insecure)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A);
@@ -145,7 +145,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_insecure)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Insecure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Insecure);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A);
@@ -211,7 +211,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_bogus)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A);
@@ -224,7 +224,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_bogus)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   /* check that we correctly capped the TTD for a Bogus record after
      just-in-time validation */
@@ -240,7 +240,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_cname_cache_bogus)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::CNAME || record.d_type == QType::A);
@@ -310,7 +310,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_additional_without_rrsig)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_CHECK_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::RRSIG || record.d_type == QType::A);
@@ -323,7 +323,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_additional_without_rrsig)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(addTarget, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Secure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Secure);
   BOOST_CHECK_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK(record.d_type == QType::RRSIG || record.d_type == QType::A);
@@ -383,14 +383,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_secure)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   BOOST_CHECK_EQUAL(queriesCount, 1U);
   /* check that the entry has been negatively cached */
   NegCache::NegCacheEntry ne;
-  BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Indeterminate);
+  BOOST_CHECK_EQUAL(g_negCache->size(), 1U);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Indeterminate);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
   BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 1U);
@@ -401,12 +401,12 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_secure)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Secure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Secure);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   BOOST_CHECK_EQUAL(queriesCount, 4U);
-  BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Secure);
+  BOOST_CHECK_EQUAL(g_negCache->size(), 1U);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Secure);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
   BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 1U);
@@ -461,7 +461,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_secure_ds)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::DS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   BOOST_CHECK_EQUAL(queriesCount, 1U);
 
@@ -470,7 +470,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_secure_ds)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::DS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Secure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Secure);
   BOOST_REQUIRE_EQUAL(ret.size(), 4U);
   BOOST_CHECK_EQUAL(queriesCount, 4U);
 }
@@ -521,14 +521,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_insecure)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 1U);
   BOOST_CHECK_EQUAL(queriesCount, 1U);
   /* check that the entry has not been negatively cached */
   NegCache::NegCacheEntry ne;
-  BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Indeterminate);
+  BOOST_CHECK_EQUAL(g_negCache->size(), 1U);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Indeterminate);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 0U);
   BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 0U);
@@ -539,11 +539,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_insecure)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Insecure);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Insecure);
   BOOST_REQUIRE_EQUAL(ret.size(), 1U);
   BOOST_CHECK_EQUAL(queriesCount, 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Insecure);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Insecure);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 0U);
   BOOST_CHECK_EQUAL(ne.DNSSECRecords.records.size(), 0U);
@@ -604,7 +604,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_bogus)
   sr->setDNSSECValidationRequested(false);
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Indeterminate);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     if (record.d_type == QType::SOA) {
@@ -613,9 +613,9 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_bogus)
   }
   BOOST_CHECK_EQUAL(queriesCount, 1U);
   NegCache::NegCacheEntry ne;
-  BOOST_CHECK_EQUAL(SyncRes::t_sstorage.negcache.size(), 1U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Indeterminate);
+  BOOST_CHECK_EQUAL(g_negCache->size(), 1U);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Indeterminate);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
   BOOST_CHECK_EQUAL(ne.d_ttd, now + SyncRes::s_maxnegttl);
@@ -627,14 +627,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_bogus)
   sr->setDNSSECValidationRequested(true);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK_EQUAL(record.d_ttl, SyncRes::s_maxbogusttl);
   }
   BOOST_CHECK_EQUAL(queriesCount, 4U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Bogus);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Bogus);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
   BOOST_CHECK_EQUAL(ne.d_ttd, now + SyncRes::s_maxbogusttl);
@@ -647,14 +647,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_validation_from_negcache_bogus)
   sr->setDNSSECValidationRequested(false);
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   for (const auto& record : ret) {
     BOOST_CHECK_EQUAL(record.d_ttl, SyncRes::s_maxbogusttl);
   }
   BOOST_CHECK_EQUAL(queriesCount, 4U);
-  BOOST_REQUIRE_EQUAL(SyncRes::t_sstorage.negcache.get(target, QType(QType::A), sr->getNow(), ne), true);
-  BOOST_CHECK_EQUAL(ne.d_validationState, Bogus);
+  BOOST_REQUIRE_EQUAL(g_negCache->get(target, QType(QType::A), sr->getNow(), ne), true);
+  BOOST_CHECK_EQUAL(ne.d_validationState, vState::Bogus);
   BOOST_CHECK_EQUAL(ne.authoritySOA.records.size(), 1U);
   BOOST_CHECK_EQUAL(ne.authoritySOA.signatures.size(), 1U);
   BOOST_CHECK_EQUAL(ne.d_ttd, now + SyncRes::s_maxbogusttl);
@@ -765,7 +765,7 @@ BOOST_AUTO_TEST_CASE(test_getDSRecords_multialgo)
 
   dsmap_t ds;
   auto state = sr->getDSRecords(target, ds, false, 0, false);
-  BOOST_CHECK_EQUAL(state, Secure);
+  BOOST_CHECK_EQUAL(state, vState::Secure);
   BOOST_REQUIRE_EQUAL(ds.size(), 1U);
   for (const auto& i : ds) {
     BOOST_CHECK_EQUAL(i.d_digesttype, DNSSECKeeper::DIGEST_SHA256);
@@ -818,7 +818,7 @@ BOOST_AUTO_TEST_CASE(test_getDSRecords_multialgo_all_sha)
 
   dsmap_t ds;
   auto state = sr->getDSRecords(target, ds, false, 0, false);
-  BOOST_CHECK_EQUAL(state, Secure);
+  BOOST_CHECK_EQUAL(state, vState::Secure);
   BOOST_REQUIRE_EQUAL(ds.size(), 1U);
   for (const auto& i : ds) {
     BOOST_CHECK_EQUAL(i.d_digesttype, DNSSECKeeper::DIGEST_SHA384);
@@ -871,7 +871,7 @@ BOOST_AUTO_TEST_CASE(test_getDSRecords_multialgo_two_highest)
 
   dsmap_t ds;
   auto state = sr->getDSRecords(target, ds, false, 0, false);
-  BOOST_CHECK_EQUAL(state, Secure);
+  BOOST_CHECK_EQUAL(state, vState::Secure);
   BOOST_REQUIRE_EQUAL(ds.size(), 2U);
   for (const auto& i : ds) {
     BOOST_CHECK_EQUAL(i.d_digesttype, DNSSECKeeper::DIGEST_SHA256);
@@ -937,7 +937,7 @@ BOOST_AUTO_TEST_CASE(test_cname_plus_authority_ns_ttl)
   vector<DNSRecord> cached;
   bool wasAuth = false;
 
-  auto ttl = s_RC->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who, boost::none, nullptr, nullptr, nullptr, nullptr, &wasAuth);
+  auto ttl = g_recCache->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who, boost::none, nullptr, nullptr, nullptr, nullptr, &wasAuth);
   BOOST_REQUIRE_GE(ttl, 1);
   BOOST_REQUIRE_LE(ttl, 42);
   BOOST_CHECK_EQUAL(cached.size(), 1U);
@@ -946,7 +946,7 @@ BOOST_AUTO_TEST_CASE(test_cname_plus_authority_ns_ttl)
   cached.clear();
 
   /* Also check that the the part in additional is still not auth */
-  BOOST_REQUIRE_GE(s_RC->get(now, DNSName("a.gtld-servers.net."), QType(QType::A), false, &cached, who, boost::none, nullptr, nullptr, nullptr, nullptr, &wasAuth), -1);
+  BOOST_REQUIRE_GE(g_recCache->get(now, DNSName("a.gtld-servers.net."), QType(QType::A), false, &cached, who, boost::none, nullptr, nullptr, nullptr, nullptr, &wasAuth), -1);
   BOOST_CHECK_EQUAL(cached.size(), 1U);
   BOOST_CHECK_EQUAL(wasAuth, false);
 }
@@ -987,14 +987,14 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_general)
 
   const ComboAddress who;
   vector<DNSRecord> cached;
-  BOOST_CHECK_GT(s_RC->get(now, target, QType(QType::A), true, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, target, QType(QType::A), true, &cached, who), 0);
   cached.clear();
-  BOOST_CHECK_LT(s_RC->get(now, target, QType(QType::AAAA), true, &cached, who), 0);
-  BOOST_CHECK_EQUAL(s_RC->get(now, DNSName("not-sanitization.powerdns.com."), QType(QType::DNAME), true, &cached, who), -1);
-  BOOST_CHECK_LT(s_RC->get(now, target, QType(QType::MX), true, &cached, who), 0);
-  BOOST_CHECK_EQUAL(s_RC->get(now, DNSName("not-sanitization.powerdns.com."), QType(QType::SOA), true, &cached, who), -1);
-  BOOST_CHECK_LT(s_RC->get(now, target, QType(QType::TXT), false, &cached, who), 0);
-  BOOST_CHECK_EQUAL(s_RC->get(now, DNSName("powerdns.com."), QType(QType::AAAA), false, &cached, who), -1);
+  BOOST_CHECK_LT(g_recCache->get(now, target, QType(QType::AAAA), true, &cached, who), 0);
+  BOOST_CHECK_EQUAL(g_recCache->get(now, DNSName("not-sanitization.powerdns.com."), QType(QType::DNAME), true, &cached, who), -1);
+  BOOST_CHECK_LT(g_recCache->get(now, target, QType(QType::MX), true, &cached, who), 0);
+  BOOST_CHECK_EQUAL(g_recCache->get(now, DNSName("not-sanitization.powerdns.com."), QType(QType::SOA), true, &cached, who), -1);
+  BOOST_CHECK_LT(g_recCache->get(now, target, QType(QType::TXT), false, &cached, who), 0);
+  BOOST_CHECK_EQUAL(g_recCache->get(now, DNSName("powerdns.com."), QType(QType::AAAA), false, &cached, who), -1);
 }
 
 BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_relevant_additional_aaaa)
@@ -1022,11 +1022,11 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_relevant_additional_aaaa)
 
   const ComboAddress who;
   vector<DNSRecord> cached;
-  BOOST_CHECK_GT(s_RC->get(now, target, QType(QType::A), true, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, target, QType(QType::A), true, &cached, who), 0);
   cached.clear();
   /* not auth since it was in the additional section */
-  BOOST_CHECK_LT(s_RC->get(now, target, QType(QType::AAAA), true, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, target, QType(QType::AAAA), false, &cached, who), 0);
+  BOOST_CHECK_LT(g_recCache->get(now, target, QType(QType::AAAA), true, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, target, QType(QType::AAAA), false, &cached, who), 0);
 }
 
 BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_glue)
@@ -1054,6 +1054,7 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_glue)
       setLWResult(res, 0, false, false, true);
       addRecordToLW(res, "powerdns.com.", QType::NS, "pdns-public-ns1.powerdns.com.", DNSResourceRecord::AUTHORITY, 172800);
       addRecordToLW(res, "powerdns.com.", QType::NS, "pdns-public-ns2.powerdns.com.", DNSResourceRecord::AUTHORITY, 172800);
+      addRecordToLW(res, "powerdns.com.", QType::DS, "1 8 2 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAA", DNSResourceRecord::AUTHORITY, 172800);
       addRecordToLW(res, "pdns-public-ns1.powerdns.com.", QType::A, "192.0.2.2", DNSResourceRecord::ADDITIONAL, 172800);
       addRecordToLW(res, "pdns-public-ns1.powerdns.com.", QType::AAAA, "2001:DB8::2", DNSResourceRecord::ADDITIONAL, 172800);
       addRecordToLW(res, "pdns-public-ns2.powerdns.com.", QType::A, "192.0.2.3", DNSResourceRecord::ADDITIONAL, 172800);
@@ -1063,6 +1064,7 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_glue)
     else if (ip == ComboAddress("192.0.2.2:53") || ip == ComboAddress("192.0.2.3:53") || ip == ComboAddress("[2001:DB8::2]:53") || ip == ComboAddress("[2001:DB8::3]:53")) {
       setLWResult(res, 0, true, false, true);
       addRecordToLW(res, target, QType::A, "192.0.2.4");
+      addRecordToLW(res, "powerdns.com.", QType::DS, "2 8 2 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBB", DNSResourceRecord::AUTHORITY);
       return 1;
     }
     else {
@@ -1080,17 +1082,23 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_keep_glue)
 
   const ComboAddress who;
   vector<DNSRecord> cached;
-  BOOST_CHECK_GT(s_RC->get(now, target, QType(QType::A), true, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, target, QType(QType::A), true, &cached, who), 0);
   cached.clear();
 
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("com."), QType(QType::NS), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("a.gtld-servers.net."), QType(QType::A), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("a.gtld-servers.net."), QType(QType::AAAA), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("pdns-public-ns1.powerdns.com."), QType(QType::A), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("pdns-public-ns1.powerdns.com."), QType(QType::AAAA), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("pdns-public-ns2.powerdns.com."), QType(QType::A), false, &cached, who), 0);
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("pdns-public-ns2.powerdns.com."), QType(QType::AAAA), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("com."), QType(QType::NS), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("a.gtld-servers.net."), QType(QType::A), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("a.gtld-servers.net."), QType(QType::AAAA), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("pdns-public-ns1.powerdns.com."), QType(QType::A), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("pdns-public-ns1.powerdns.com."), QType(QType::AAAA), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("pdns-public-ns2.powerdns.com."), QType(QType::A), false, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("pdns-public-ns2.powerdns.com."), QType(QType::AAAA), false, &cached, who), 0);
+
+  cached.clear();
+  /* check that we accepted the DS from the parent, and not from the child zone */
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("powerdns.com."), QType(QType::DS), false, &cached, who), 0);
+  BOOST_REQUIRE_EQUAL(cached.size(), 1U);
+  BOOST_CHECK_EQUAL(cached.at(0).d_content->getZoneRepresentation(), "1 8 2 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 }
 
 BOOST_AUTO_TEST_CASE(test_records_sanitization_scrubs_ns_nxd)
@@ -1120,12 +1128,12 @@ BOOST_AUTO_TEST_CASE(test_records_sanitization_scrubs_ns_nxd)
 
   const ComboAddress who;
   vector<DNSRecord> cached;
-  BOOST_CHECK_GT(s_RC->get(now, DNSName("powerdns.com."), QType(QType::SOA), true, &cached, who), 0);
+  BOOST_CHECK_GT(g_recCache->get(now, DNSName("powerdns.com."), QType(QType::SOA), true, &cached, who), 0);
   cached.clear();
 
-  BOOST_CHECK_LT(s_RC->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who), 0);
-  BOOST_CHECK_LT(s_RC->get(now, DNSName("spoofed.ns."), QType(QType::A), false, &cached, who), 0);
-  BOOST_CHECK_LT(s_RC->get(now, DNSName("spoofed.ns."), QType(QType::AAAA), false, &cached, who), 0);
+  BOOST_CHECK_LT(g_recCache->get(now, DNSName("powerdns.com."), QType(QType::NS), false, &cached, who), 0);
+  BOOST_CHECK_LT(g_recCache->get(now, DNSName("spoofed.ns."), QType(QType::A), false, &cached, who), 0);
+  BOOST_CHECK_LT(g_recCache->get(now, DNSName("spoofed.ns."), QType(QType::AAAA), false, &cached, who), 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

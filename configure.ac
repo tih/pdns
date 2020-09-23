@@ -19,7 +19,7 @@ AM_SILENT_RULES([yes])
 AC_CANONICAL_HOST
 # Add some default CFLAGS and CXXFLAGS, can be appended to using the environment variables
 CFLAGS="-g -O2 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls $CFLAGS"
-CXXFLAGS="-g -O2 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls $CXXFLAGS"
+CXXFLAGS="-std=c++11 -g -O2 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls $CXXFLAGS"
 
 AC_PROG_CC
 AM_PROG_CC_C_O
@@ -48,7 +48,7 @@ PTHREAD_SET_NAME
 PDNS_WITH_LUA([mandatory])
 PDNS_CHECK_LUA_HPP
 
-AX_CXX_COMPILE_STDCXX_11
+AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
 
 AC_MSG_CHECKING([whether we will enable compiler security checks])
 AC_ARG_ENABLE([hardening],
@@ -144,7 +144,6 @@ AC_SUBST([LIBDL], [$lt_cv_dlopen_libs])
 
 PDNS_ENABLE_VERBOSE_LOGGING
 PDNS_ENABLE_PKCS11
-PDNS_ENABLE_GSS_TSIG
 
 AC_SUBST([socketdir])
 socketdir="/var/run"
@@ -397,9 +396,6 @@ AS_IF([test "x$LUAPC" != "x"],
 ])
 AS_IF([test "x$enable_experimental_pkcs11" = "xyes"],
   [AC_MSG_NOTICE([PKCS-11: yes])]
-)
-AS_IF([test "x$enable_experimental_gss_tsig" = "xyes"],
-  [AC_MSG_NOTICE([GSS-TSIG: yes])]
 )
 AS_IF([test "x$enable_lua_records" = "xyes"],
   [AC_MSG_NOTICE([LUA records: yes])]

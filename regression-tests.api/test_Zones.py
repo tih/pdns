@@ -539,6 +539,21 @@ class AuthZones(ApiTestCase, AuthZonesHelperMixin):
         self.assertEquals(data['kind'], 'NSEC3NARROW')
         self.assertEquals(data['metadata'][0], '1')
 
+    def test_create_zone_with_nsec3param_switch_to_nsec(self):
+        """
+        Create a zone with "nsec3param", then remove the params
+        """
+        name, payload, data = self.create_zone(dnssec=True,
+                                               nsec3param='1 0 1 ab')
+        self.session.put(self.url("/api/v1/servers/localhost/zones/" + name),
+                         data=json.dumps({'nsec3param': ''}))
+        r = self.session.get(
+            self.url("/api/v1/servers/localhost/zones/" + name))
+        data = r.json()
+
+        self.assertEquals(r.status_code, 200)
+        self.assertEquals(data['nsec3param'], '')
+
     def test_create_zone_dnssec_serial(self):
         """
         Create a zone set/unset "dnssec" and see if the serial was increased
@@ -1183,6 +1198,35 @@ $ORIGIN %NAME%
         # verify that the records are gone
         data = self.session.get(self.url("/api/v1/servers/localhost/zones/" + name)).json()
         self.assertIsNone(get_rrset(data, name, 'NS'))
+
+    def test_zone_rr_update_rrset_combine_replace_and_delete(self):
+        name, payload, zone = self.create_zone()
+        rrset1 = {
+            'changetype': 'delete',
+            'name': 'sub.' + name,
+            'type': 'CNAME',
+        }
+        rrset2 = {
+            'changetype': 'replace',
+            'name': 'sub.' + name,
+            'type': 'CNAME',
+            'ttl': 500,
+            'records': [
+                {
+                    "content": "www.example.org.",
+                    "disabled": False
+                }
+            ]
+        }
+        payload = {'rrsets': [rrset1, rrset2]}
+        r = self.session.patch(
+            self.url("/api/v1/servers/localhost/zones/" + name),
+            data=json.dumps(payload),
+            headers={'content-type': 'application/json'})
+        self.assert_success(r)
+        # verify that (only) the new record is there
+        data = self.session.get(self.url("/api/v1/servers/localhost/zones/" + name)).json()
+        self.assertEquals(get_rrset(data, 'sub.' + name, 'CNAME')['records'], rrset2['records'])
 
     def test_zone_disable_reenable(self):
         # This also tests that SOA-EDIT-API works.

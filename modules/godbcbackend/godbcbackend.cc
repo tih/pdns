@@ -47,6 +47,8 @@ gODBCBackend::gODBCBackend (const std::string & mode, const std::string & suffix
     throw PDNSException( "Unable to launch " + mode + " connection: " + e.txtReason());
   }
 
+  allocateStatements();
+
   g_log << Logger::Warning << mode << " Connection successful" << std::endl;
 }
 
@@ -61,7 +63,7 @@ public:
   }
 
   //! Declares all needed arguments.
-  void declareArguments( const std::string & suffix = "" )
+  void declareArguments( const std::string & suffix = "" ) override
   {
     declare( suffix, "datasource", "Datasource (DSN) to use","PowerDNS");
     declare( suffix, "username", "User to connect as","powerdns");
@@ -86,6 +88,7 @@ public:
     declare(suffix,"info-all-slaves-query","","select id,name,master,last_check from domains where type='SLAVE'");
     declare(suffix,"supermaster-query","", "select account from supermasters where ip=? and nameserver=?");
     declare(suffix,"supermaster-name-to-ips", "", "select ip,account from supermasters where nameserver=? and account=?");
+    declare(suffix,"supermaster-add","", "insert into supermasters (ip, nameserver, account) values (?,?,?)");
 
     declare(suffix,"insert-zone-query","", "insert into domains (type,name,master,account,last_check,notified_serial) values(?,?,?,?,null,null)");
 
@@ -146,7 +149,7 @@ public:
   }
 
   //! Constructs a new gODBCBackend object.
-  DNSBackend *make(const string & suffix = "" )
+  DNSBackend *make(const string & suffix = "" ) override
   {
     return new gODBCBackend( d_mode, suffix );
   }

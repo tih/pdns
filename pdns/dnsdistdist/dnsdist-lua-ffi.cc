@@ -21,6 +21,7 @@
  */
 
 #include "dnsdist-lua-ffi.hh"
+#include "dnsdist-lua.hh"
 #include "dnsdist-ecs.hh"
 
 uint16_t dnsdist_ffi_dnsquestion_get_qtype(const dnsdist_ffi_dnsquestion_t* dq)
@@ -468,6 +469,11 @@ int dnsdist_ffi_server_get_order(const dnsdist_ffi_server_t* server)
   return server->server->order;
 }
 
+double dnsdist_ffi_server_get_latency(const dnsdist_ffi_server_t* server)
+{
+  return server->server->latencyUsec;
+}
+
 bool dnsdist_ffi_server_is_up(const dnsdist_ffi_server_t* server)
 {
   return server->server->isUp();
@@ -498,4 +504,16 @@ const std::string& getLuaFFIWrappers()
 
 )FFICodeContent";
   return code;
+}
+
+void setupLuaLoadBalancingContext(LuaContext& luaCtx)
+{
+  setupLuaBindings(luaCtx, true);
+  setupLuaBindingsDNSQuestion(luaCtx);
+  setupLuaBindingsKVS(luaCtx, true);
+  setupLuaVars(luaCtx);
+
+#ifdef LUAJIT_VERSION
+  luaCtx.executeCode(getLuaFFIWrappers());
+#endif
 }

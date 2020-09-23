@@ -32,10 +32,6 @@ if LUA
 AM_CPPFLAGS +=$(LUA_CFLAGS)
 endif
 
-if GSS_TSIG
-AM_CPPFLAGS +=$(GSS_CFLAGS)
-endif
-
 if LIBSODIUM
 AM_CPPFLAGS +=$(LIBSODIUM_CFLAGS)
 endif
@@ -184,7 +180,6 @@ pdns_server_SOURCES = \
 	dynmessenger.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc iputils.hh \
 	ixfr.cc ixfr.hh \
 	json.cc json.hh \
@@ -230,6 +225,7 @@ pdns_server_SOURCES = \
 	unix_utility.cc \
 	utility.hh \
 	version.cc version.hh \
+	views.hh \
 	webserver.cc webserver.hh \
 	ws-api.cc ws-api.hh \
 	ws-auth.cc ws-auth.hh \
@@ -279,10 +275,6 @@ if LUA
 pdns_server_LDADD += $(LUA_LIBS)
 endif
 
-if GSS_TSIG
-pdns_server_LDADD += $(GSS_LIBS)
-endif
-
 pdnsutil_SOURCES = \
 	arguments.cc \
 	auth-caches.cc auth-caches.hh \
@@ -311,7 +303,6 @@ pdnsutil_SOURCES = \
 	dynlistener.cc \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc \
-	gss_context.cc gss_context.hh \
 	ipcipher.cc ipcipher.hh \
 	iputils.cc iputils.hh \
 	json.cc \
@@ -376,10 +367,6 @@ endif
 
 if LUA
 pdnsutil_LDADD += $(LUA_LIBS)
-endif
-
-if GSS_TSIG
-pdnsutil_LDADD += $(GSS_LIBS)
 endif
 
 zone2sql_SOURCES = \
@@ -537,6 +524,7 @@ dumresp_SOURCES = \
 	dnslabeltext.cc \
 	dnsname.cc dnsname.hh \
 	dumresp.cc \
+	iputils.cc iputils.hh \
 	logger.cc \
 	misc.cc misc.hh \
 	statbag.cc \
@@ -587,7 +575,6 @@ saxfr_SOURCES = \
 	dnsrecords.cc \
 	dnssecinfra.cc \
 	dnswriter.cc dnswriter.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc \
 	logger.cc \
 	misc.cc misc.hh \
@@ -608,10 +595,6 @@ saxfr_SOURCES += pkcs11signers.cc pkcs11signers.hh
 saxfr_LDADD += $(P11KIT1_LIBS)
 endif
 
-if GSS_TSIG
-saxfr_LDADD += $(GSS_LIBS)
-endif
-
 ixfrdist_SOURCES = \
 	arguments.cc \
 	base32.cc \
@@ -624,7 +607,6 @@ ixfrdist_SOURCES = \
 	dnsrecords.cc \
 	dnssecinfra.cc \
 	dnswriter.cc dnswriter.hh \
-	gss_context.cc gss_context.hh \
 	iputils.hh iputils.cc \
 	ixfr.cc ixfr.hh \
 	ixfrdist.cc \
@@ -669,11 +651,6 @@ ixfrdist_SOURCES += pkcs11signers.cc pkcs11signers.hh
 ixfrdist_LDADD += $(P11KIT1_LIBS)
 endif
 
-if GSS_TSIG
-ixfrdist_LDADD += $(GSS_LIBS)
-endif
-
-
 ixplore_SOURCES = \
 	arguments.cc \
 	base32.cc \
@@ -686,7 +663,6 @@ ixplore_SOURCES = \
 	dnsrecords.cc \
 	dnssecinfra.cc \
 	dnswriter.cc dnswriter.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc \
 	logger.cc \
 	misc.cc misc.hh \
@@ -712,11 +688,6 @@ if PKCS11
 ixplore_SOURCES += pkcs11signers.cc pkcs11signers.hh
 ixplore_LDADD += $(P11KIT1_LIBS)
 endif
-
-if GSS_TSIG
-ixplore_LDADD += $(GSS_LIBS)
-endif
-
 
 dnstcpbench_SOURCES = \
 	base32.cc \
@@ -757,7 +728,6 @@ nsec3dig_SOURCES = \
 	dnsrecords.cc \
 	dnssecinfra.cc \
 	dnswriter.cc dnswriter.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc \
 	logger.cc \
 	misc.cc misc.hh \
@@ -778,10 +748,6 @@ nsec3dig_SOURCES += pkcs11signers.cc pkcs11signers.hh
 nsec3dig_LDADD += $(P11KIT1_LIBS)
 endif
 
-if GSS_TSIG
-nsec3dig_LDADD += $(GSS_LIBS)
-endif
-
 toysdig_SOURCES = \
 	base32.cc \
 	base64.cc base64.hh \
@@ -794,7 +760,6 @@ toysdig_SOURCES = \
 	dnswriter.cc dnswriter.hh \
 	ednssubnet.cc ednssubnet.hh \
 	filterpo.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc \
 	logger.cc \
 	misc.cc misc.hh \
@@ -819,10 +784,6 @@ toysdig_LDFLAGS = $(AM_LDFLAGS) \
 	$(LIBCRYPTO_LDFLAGS)
 toysdig_LDADD = $(LIBCRYPTO_LIBS)
 
-if GSS_TSIG
-toysdig_LDADD += $(GSS_LIBS)
-endif
-
 if PKCS11
 toysdig_SOURCES += pkcs11signers.cc pkcs11signers.hh
 toysdig_LDADD += $(P11KIT1_LIBS)
@@ -842,7 +803,6 @@ tsig_tests_SOURCES = \
 	dnsrecords.cc \
 	dnssecinfra.cc \
 	dnswriter.cc dnswriter.hh \
-	gss_context.cc gss_context.hh \
 	iputils.cc \
 	logger.cc \
 	misc.cc misc.hh \
@@ -864,10 +824,6 @@ tsig_tests_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
 if PKCS11
 tsig_tests_SOURCES += pkcs11signers.cc pkcs11signers.hh
 tsig_tests_LDADD += $(P11KIT1_LIBS)
-endif
-
-if GSS_TSIG
-tsig_tests_LDADD += $(GSS_LIBS)
 endif
 
 speedtest_SOURCES = \
@@ -1264,7 +1220,7 @@ endif
 endif
 
 pdns.conf-dist: pdns_server
-	$(AM_V_GEN)./pdns_server --no-config --config=default 2>/dev/null > $@
+	$(AM_V_GEN)./pdns_server --config=default 2>/dev/null > $@
 
 testrunner_SOURCES = \
 	arguments.cc \
@@ -1292,7 +1248,6 @@ testrunner_SOURCES = \
 	ednscookies.cc ednscookies.hh \
 	ednssubnet.cc \
 	gettime.cc gettime.hh \
-	gss_context.cc gss_context.hh \
 	ipcipher.cc ipcipher.hh \
 	iputils.cc \
 	ixfr.cc ixfr.hh \
@@ -1343,11 +1298,12 @@ testrunner_SOURCES = \
 	test-sha_hh.cc \
 	test-statbag_cc.cc \
 	test-tsig.cc \
+	test-ueberbackend_cc.cc \
 	test-zoneparser_tng_cc.cc \
 	testrunner.cc \
 	threadname.hh threadname.cc \
 	tsigverifier.cc tsigverifier.hh \
-	ueberbackend.cc \
+	ueberbackend.cc ueberbackend.hh \
 	unix_utility.cc \
 	zoneparser-tng.cc zoneparser-tng.hh
 
@@ -1590,11 +1546,23 @@ endif
 if !HAVE_SYSTEMD_PRIVATE_TMP
 	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateTmp/' $@
 endif
+if !HAVE_SYSTEMD_PRIVATE_USERS
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateUsers/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_CLOCK
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectClock/' $@
+endif
 if !HAVE_SYSTEMD_PROTECT_CONTROL_GROUPS
 	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectControlGroups/' $@
 endif
 if !HAVE_SYSTEMD_PROTECT_HOME
 	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHome/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_HOSTNAME
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHostname/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_LOGS
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelLogs/' $@
 endif
 if !HAVE_SYSTEMD_PROTECT_KERNEL_MODULES
 	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelModules/' $@
@@ -1613,6 +1581,9 @@ if !HAVE_SYSTEMD_RESTRICT_NAMESPACES
 endif
 if !HAVE_SYSTEMD_RESTRICT_REALTIME
 	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictRealtime/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_SUIDSGID
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictSUIDSGID/' $@
 endif
 if !HAVE_SYSTEMD_SYSTEM_CALL_ARCHITECTURES
 	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallArchitectures/' $@
@@ -1641,6 +1612,60 @@ CLEANFILES += \
 if IXFRDIST
 ixfrdist.service: ixfrdist.service.in
 	$(AM_V_GEN)sed -e 's![@]bindir[@]!$(bindir)!' < $< > $@
+if !HAVE_SYSTEMD_LOCK_PERSONALITY
+	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_DEVICES
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateDevices/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_TMP
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateTmp/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_USERS
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateUsers/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_CLOCK
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectClock/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_CONTROL_GROUPS
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectControlGroups/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_HOME
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHome/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_HOSTNAME
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHostname/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_LOGS
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelLogs/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_MODULES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelModules/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_TUNABLES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelTunables/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_SYSTEM
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectSystem/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_ADDRESS_FAMILIES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictAddressFamilies/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_NAMESPACES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictNamespaces/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_REALTIME
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictRealtime/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_SUIDSGID
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictSUIDSGID/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_ARCHITECTURES
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallArchitectures/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_FILTER
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallFilter/' $@
+endif
 
 ixfrdist@.service: ixfrdist.service
 	$(AM_V_GEN)sed -e 's!/ixfrdist!& --config $(sysconfdir)/ixfrdist-%i.yml!' \

@@ -615,27 +615,54 @@ static void throwUnableToSecure(const DNSName& zonename) {
       + "capable backends are loaded, or because the backends have DNSSEC disabled. Check your configuration.");
 }
 
-static void updateDomainSettingsFromDocument(UeberBackend& B, const DomainInfo& di, const DNSName& zonename, const Json document, bool rectifyTransaction=true) {
-  vector<string> zonemaster;
-  bool shouldRectify = false;
-  for(auto value : document["masters"].array_items()) {
-    string master = value.string_value();
-    if (master.empty())
-      throw ApiException("Master can not be an empty string");
-    try {
-      ComboAddress m(master);
-    } catch (const PDNSException &e) {
-      throw ApiException("Master (" + master + ") is not an IP address: " + e.reason);
-    }
-    zonemaster.push_back(master);
+
+static void extractDomainInfoFromDocument(const Json document, boost::optional<DomainInfo::DomainKind>& kind, boost::optional<vector<ComboAddress>>& masters, boost::optional<string>& account) {
+  if (document["kind"].is_string()) {
+    kind = DomainInfo::stringToKind(stringFromJson(document, "kind"));
+  } else {
+    kind = boost::none;
   }
 
-  if (zonemaster.size()) {
-    di.backend->setMaster(zonename, boost::join(zonemaster, ","));
+  if (document["masters"].is_array()) {
+    masters = vector<ComboAddress>();
+    for(auto value : document["masters"].array_items()) {
+      string master = value.string_value();
+      if (master.empty())
+        throw ApiException("Master can not be an empty string");
+      try {
+        masters->emplace_back(master, 53);
+      } catch (const PDNSException &e) {
+        throw ApiException("Master (" + master + ") is not an IP address: " + e.reason);
+      }
+    }
+  } else {
+    masters = boost::none;
   }
-  if (document["kind"].is_string()) {
-    di.backend->setKind(zonename, DomainInfo::stringToKind(stringFromJson(document, "kind")));
+
+  if (document["account"].is_string()) {
+    account = document["account"].string_value();
+  } else {
+    account = boost::none;
   }
+}
+
+static void updateDomainSettingsFromDocument(UeberBackend& B, const DomainInfo& di, const DNSName& zonename, const Json document, bool rectifyTransaction=true) {
+  boost::optional<DomainInfo::DomainKind> kind;
+  boost::optional<vector<ComboAddress>> masters;
+  boost::optional<string> account;
+
+  extractDomainInfoFromDocument(document, kind, masters, account);
+
+  if (kind) {
+    di.backend->setKind(zonename, *kind);
+  }
+  if (masters) {
+    di.backend->setMasters(zonename, *masters);
+  }
+  if (account) {
+    di.backend->setAccount(zonename, *account);
+  }
+
   if (document["soa_edit_api"].is_string()) {
     di.backend->setDomainMetadataOne(zonename, "SOA-EDIT-API", document["soa_edit_api"].string_value());
   }
@@ -648,19 +675,26 @@ static void updateDomainSettingsFromDocument(UeberBackend& B, const DomainInfo& 
   }
   catch (const JsonException&) {}
 
-  if (document["account"].is_string()) {
-    di.backend->setAccount(zonename, document["account"].string_value());
-  }
 
   DNSSECKeeper dk(&B);
+  bool shouldRectify = false;
   bool dnssecInJSON = false;
   bool dnssecDocVal = false;
+  bool nsec3paramInJSON = false;
+  string nsec3paramDocVal;
 
   try {
     dnssecDocVal = boolFromJson(document, "dnssec");
     dnssecInJSON = true;
   }
   catch (const JsonException&) {}
+
+  try {
+    nsec3paramDocVal = stringFromJson(document, "nsec3param");
+    nsec3paramInJSON = true;
+  }
+  catch (const JsonException&) {}
+
 
   bool isDNSSECZone = dk.isSecuredZone(zonename);
 
@@ -712,19 +746,30 @@ static void updateDomainSettingsFromDocument(UeberBackend& B, const DomainInfo& 
     }
   }
 
-  if(document["nsec3param"].string_value().length() > 0) {
+  if (nsec3paramInJSON) {
     shouldRectify = true;
-    NSEC3PARAMRecordContent ns3pr(document["nsec3param"].string_value());
-    string error_msg = "";
     if (!isDNSSECZone) {
       throw ApiException("NSEC3PARAMs provided for zone '"+zonename.toString()+"', but zone is not DNSSEC secured.");
     }
-    if (!dk.checkNSEC3PARAM(ns3pr, error_msg)) {
-      throw ApiException("NSEC3PARAMs provided for zone '"+zonename.toString()+"' are invalid. " + error_msg);
+
+    if (nsec3paramDocVal.length() == 0) {
+      // Switch to NSEC
+      if (!dk.unsetNSEC3PARAM(zonename)) {
+        throw ApiException("Unable to remove NSEC3PARAMs from zone '" + zonename.toString());
+      }
     }
-    if (!dk.setNSEC3PARAM(zonename, ns3pr, boolFromJson(document, "nsec3narrow", false))) {
-      throw ApiException("NSEC3PARAMs provided for zone '" + zonename.toString() +
-          "' passed our basic sanity checks, but cannot be used with the current backend.");
+
+    if (nsec3paramDocVal.length() > 0) {
+      // Set the NSEC3PARAMs
+      NSEC3PARAMRecordContent ns3pr(nsec3paramDocVal);
+      string error_msg = "";
+      if (!dk.checkNSEC3PARAM(ns3pr, error_msg)) {
+        throw ApiException("NSEC3PARAMs provided for zone '"+zonename.toString()+"' are invalid. " + error_msg);
+      }
+      if (!dk.setNSEC3PARAM(zonename, ns3pr, boolFromJson(document, "nsec3narrow", false))) {
+        throw ApiException("NSEC3PARAMs provided for zone '" + zonename.toString() +
+            "' passed our basic sanity checks, but cannot be used with the current backend.");
+      }
     }
   }
 
@@ -810,8 +855,6 @@ static bool isValidMetadataKind(const string& kind, bool readonly) {
     "NOTIFY-DNSUPDATE",
     "ALSO-NOTIFY",
     "AXFR-MASTER-TSIG",
-    "GSS-ALLOW-AXFR-PRINCIPAL",
-    "GSS-ACCEPTOR-PRINCIPAL",
     "IXFR",
     "LUA-AXFR-SCRIPT",
     "NSEC3NARROW",
@@ -1650,8 +1693,13 @@ static void apiServerZones(HttpRequest* req, HttpResponse* resp) {
       }
     }
 
+    boost::optional<DomainInfo::DomainKind> kind;
+    boost::optional<vector<ComboAddress>> masters;
+    boost::optional<string> account;
+    extractDomainInfoFromDocument(document, kind, masters, account);
+
     // no going back after this
-    if(!B.createDomain(zonename))
+    if(!B.createDomain(zonename, kind.get_value_or(DomainInfo::Native), masters.get_value_or(vector<ComboAddress>()), account.get_value_or("")))
       throw ApiException("Creating domain '"+zonename.toString()+"' failed");
 
     if(!B.getDomainInfo(zonename, di))
@@ -1967,7 +2015,7 @@ static void patchZone(UeberBackend& B, HttpRequest* req, HttpResponse* resp) {
     di.backend->getDomainMetadataOne(zonename, "SOA-EDIT", soa_edit_kind);
     bool soa_edit_done = false;
 
-    set<pair<DNSName, QType>> seen;
+    set<tuple<DNSName, QType, string>> seen;
 
     for (const auto& rrset : rrsets.array_items()) {
       string changetype = toUpper(stringFromJson(rrset, "changetype"));
@@ -1979,11 +2027,11 @@ static void patchZone(UeberBackend& B, HttpRequest* req, HttpResponse* resp) {
         throw ApiException("RRset "+qname.toString()+" IN "+stringFromJson(rrset, "type")+": unknown type given");
       }
 
-      if(seen.count({qname, qtype}))
+      if(seen.count({qname, qtype, changetype}))
       {
-        throw ApiException("Duplicate RRset "+qname.toString()+" IN "+qtype.getName());
+        throw ApiException("Duplicate RRset "+qname.toString()+" IN "+qtype.getName()+" with changetype: "+changetype);
       }
-      seen.insert({qname, qtype});
+      seen.insert({qname, qtype, changetype});
 
       if (changetype == "DELETE") {
         // delete all matching qname/qtype RRs (and, implicitly comments).

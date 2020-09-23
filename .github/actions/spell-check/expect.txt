@@ -35,6 +35,8 @@ aee
 aeefcf
 aef
 afdf
+afdlength
+afe
 Afek
 afl
 afnic
@@ -662,6 +664,7 @@ fcgi
 fcontext
 fd
 fda
+fdc
 fdce
 fdd
 fdde
@@ -879,6 +882,7 @@ ifdef
 ifportup
 ifurlup
 IFV
+ihsinme
 IJajghd
 IKOYz
 illumos
@@ -982,6 +986,7 @@ keyfile
 keygen
 keyname
 keypair
+keypairgen
 keyroll
 keysearch
 keysize
@@ -1330,6 +1335,7 @@ nsspeeds
 NSTTL
 nsupdate
 nta
+ntei
 ntlworld
 nullptr
 NULs
@@ -1468,8 +1474,10 @@ Poelov
 pointsize
 polarssl
 policyactions
+policyevent
 policykinds
 policyname
+policytypes
 pollmplexer
 Ponomarev
 poolers
@@ -1956,6 +1964,7 @@ toc
 toctree
 todo
 toint
+tokenuser
 tolower
 Tolstov
 Toshifumi

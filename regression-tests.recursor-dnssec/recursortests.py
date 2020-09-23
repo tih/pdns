@@ -15,6 +15,21 @@ import dns.message
 
 from eqdnsmessage import AssertEqualDNSMessageMixin
 
+
+def have_ipv6():
+    """
+    Try to make an IPv6 socket and bind it, if it fails, no ipv6...
+    """
+    try:
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        sock.bind(('::1', 56581))
+        sock.close()
+        return True
+    except:
+        return False
+    return False
+
+
 class RecursorTest(AssertEqualDNSMessageMixin, unittest.TestCase):
     """
     Setup all recursors and auths required for the tests
@@ -50,6 +65,7 @@ log-common-errors=yes
     _roothints = """
 .                        3600 IN NS  ns.root.
 ns.root.                 3600 IN A   %s.8
+ns.root.                 3600 IN AAAA ::1
 """ % _PREFIX
     _root_DS = "63149 13 1 a59da3f5c1b97fcd5fa2b3b2b0ac91d38a60d33a"
 
@@ -125,6 +141,13 @@ delay1.example.                     3600 IN DS 42043 13 2 7319fa605cf117f36e3de0
 delay2.example.                     3600 IN NS   ns1.delay2.example.
 ns1.delay2.example.                 3600 IN A    {prefix}.17
 delay2.example.                     3600 IN DS 42043 13 2 60a047b87740c8564c21d5fd34626c10a77a6c41e3b34564230119c2f13937b8
+
+cname-nxd.example.                  3600 IN CNAME cname-nxd-target.example.
+cname-nxd-target.example.           3600 IN A 192.0.2.100
+cname-nodata.example.               3600 IN CNAME cname-nodata-target.example.
+cname-nodata-target.example.        3600 IN A 192.0.2.101
+cname-custom-a.example.             3600 IN CNAME cname-custom-a-target.example.
+cname-custom-a-target.example.      3600 IN A 192.0.2.102
         """,
         'secure.example': """
 secure.example.          3600 IN SOA  {soa}
@@ -498,7 +521,10 @@ distributor-threads={threads}""".format(confdir=confdir,
         authcmd = list(cls._auth_cmd)
         authcmd.append('--config-dir=%s' % confdir)
         authcmd.append('--local-address=%s' % ipaddress)
-        authcmd.append('--local-ipv6=')
+        if (confdir[-4:] == "ROOT") and have_ipv6():
+            authcmd.append('--local-ipv6=::1')
+        else:
+            authcmd.append('--local-ipv6=')
         print(' '.join(authcmd))
 
         logFile = os.path.join(confdir, 'pdns.log')

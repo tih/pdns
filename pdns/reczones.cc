@@ -42,10 +42,10 @@ static void insertIntoRootNSZones(const DNSName &name) {
   }
 }
 
-void primeHints(void)
+bool primeHints(void)
 {
   // prime root cache
-  const vState validationState = Insecure;
+  const vState validationState = vState::Insecure;
   vector<DNSRecord> nsset;
   t_rootNSZones.clear();
 
@@ -68,13 +68,13 @@ void primeHints(void)
       arr.d_content=std::make_shared<ARecordContent>(ComboAddress(rootIps4[c-'a']));
       vector<DNSRecord> aset;
       aset.push_back(arr);
-      s_RC->replace(time(0), DNSName(templ), QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState); // auth, nuke it all
+      g_recCache->replace(time(0), DNSName(templ), QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState); // auth, nuke it all
       if (rootIps6[c-'a'] != NULL) {
         aaaarr.d_content=std::make_shared<AAAARecordContent>(ComboAddress(rootIps6[c-'a']));
 
         vector<DNSRecord> aaaaset;
         aaaaset.push_back(aaaarr);
-        s_RC->replace(time(0), DNSName(templ), QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState);
+        g_recCache->replace(time(0), DNSName(templ), QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState);
       }
       
       nsset.push_back(nsrr);
@@ -84,26 +84,59 @@ void primeHints(void)
     ZoneParserTNG zpt(::arg()["hint-file"]);
     zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
     DNSResourceRecord rr;
+    set<DNSName> seenNS;
+    set<DNSName> seenA;
+    set<DNSName> seenAAAA;
 
     while(zpt.get(rr)) {
       rr.ttl+=time(0);
       if(rr.qtype.getCode()==QType::A) {
+        seenA.insert(rr.qname);
         vector<DNSRecord> aset;
         aset.push_back(DNSRecord(rr));
-        s_RC->replace(time(0), rr.qname, QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState); // auth, etc see above
+        g_recCache->replace(time(0), rr.qname, QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState); // auth, etc see above
       } else if(rr.qtype.getCode()==QType::AAAA) {
+        seenAAAA.insert(rr.qname);
         vector<DNSRecord> aaaaset;
         aaaaset.push_back(DNSRecord(rr));
-        s_RC->replace(time(0), rr.qname, QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState);
+        g_recCache->replace(time(0), rr.qname, QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true, boost::none, boost::none, validationState);
       } else if(rr.qtype.getCode()==QType::NS) {
+        seenNS.insert(DNSName(rr.content));
         rr.content=toLower(rr.content);
         nsset.push_back(DNSRecord(rr));
       }
       insertIntoRootNSZones(rr.qname.getLastLabel());
     }
+
+    // Check reachability of A and AAAA records
+    bool reachableA = false, reachableAAAA = false;
+    for (auto const& r: seenA) {
+      if (seenNS.count(r)) {
+        reachableA = true;
+      }
+    }
+    for (auto const& r: seenAAAA) {
+      if (seenNS.count(r)) {
+        reachableAAAA = true;
+      }
+    }
+    if (SyncRes::s_doIPv4 && !SyncRes::s_doIPv6 && !reachableA) {
+      g_log<<Logger::Error<<"Running IPv4 only but no IPv4 root hints"<<endl;
+      return false;
+    }
+    if (!SyncRes::s_doIPv4 && SyncRes::s_doIPv6 && !reachableAAAA) {
+      g_log<<Logger::Error<<"Running IPv6 only but no IPv6 root hints"<<endl;
+      return false;
+    }
+    if (SyncRes::s_doIPv4 && SyncRes::s_doIPv6 && !reachableA && !reachableAAAA) {
+      g_log<<Logger::Error<<"No valid root hints"<<endl;
+      return false;
+    }
   }
-  s_RC->doWipeCache(g_rootdnsname, false, QType::NS);
-  s_RC->replace(time(0), g_rootdnsname, QType(QType::NS), nsset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false, boost::none, boost::none, validationState); // and stuff in the cache
+
+  g_recCache->doWipeCache(g_rootdnsname, false, QType::NS);
+  g_recCache->replace(time(0), g_rootdnsname, QType(QType::NS), nsset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false, boost::none, boost::none, validationState); // and stuff in the cache
+  return true;
 }
 
 
@@ -130,7 +163,7 @@ void primeRootNSZones(bool dnssecmode, unsigned int depth)
   // so make a local copy
   set<DNSName> copy(t_rootNSZones);  
   for (const auto & qname: copy) {
-    s_RC->doWipeCache(qname, false, QType::NS);
+    g_recCache->doWipeCache(qname, false, QType::NS);
     vector<DNSRecord> ret;
     sr.beginResolve(qname, QType(QType::NS), QClass::IN, ret, depth + 1);
   }
@@ -333,12 +366,12 @@ string reloadAuthAndForwards()
     }
 
     for(const auto& i : oldAndNewDomains) {
-      broadcastAccFunction<uint64_t>(boost::bind(pleaseWipeCache, i, true, 0xffff));
-      broadcastAccFunction<uint64_t>(boost::bind(pleaseWipePacketCache, i, true, 0xffff));
-      broadcastAccFunction<uint64_t>(boost::bind(pleaseWipeAndCountNegCache, i, true));
+      broadcastAccFunction<uint64_t>([&]{return pleaseWipeCache(i, true, 0xffff);});
+      broadcastAccFunction<uint64_t>([&]{return pleaseWipePacketCache(i, true, 0xffff);});
+      broadcastAccFunction<uint64_t>([&]{return pleaseWipeAndCountNegCache(i, true);});
     }
 
-    broadcastFunction(boost::bind(pleaseUseNewSDomainsMap, newDomainMap));
+    broadcastFunction([=]{return pleaseUseNewSDomainsMap(newDomainMap);});
     return "ok\n";
   }
   catch(std::exception& e) {

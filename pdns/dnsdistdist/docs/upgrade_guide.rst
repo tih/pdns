@@ -1,11 +1,23 @@
 Upgrade Guide
 =============
 
-1.4.0 to 1.5.x
+1.5.x to 1.6.0
 --------------
 
-DOH endpoints specified in the fourth parameter of :func:`addDOHLocal` are now specified as exact URLs instead of path prefixes. The default endpoint also switched from ``/`` to ``/dns-query``.
+The packet cache no longer hashes EDNS Cookies by default, which means that two queries that are identical except for the content of their cookie will now be served the same answer. This only works if the backend is not returning any answer containing EDNS Cookies, otherwise the wrong cookie might be returned to a client. To prevent this, the ``cookieHashing=true`` parameter might be passed to :func:`newPacketCache` so that cookies are hashed, resulting in separate entries in the packet cache.
+
+1.4.x to 1.5.0
+--------------
+
+DOH endpoints specified in the fourth parameter of :func:`addDOHLocal` are now specified as exact paths instead of path prefixes. The default endpoint also switched from ``/`` to ``/dns-query``.
 For example, ``addDOHLocal('2001:db8:1:f00::1', '/etc/ssl/certs/example.com.pem', '/etc/ssl/private/example.com.key', { "/dns-query" })`` will now only accept queries for ``/dns-query`` and no longer for ``/dns-query/foo/bar``.
+This change also impacts the HTTP response rules set via :meth:`DOHFrontend.setResponsesMap`, since queries whose paths are not allowed will be discarded before the rules are evaluated.
+If you want to accept DoH queries on ``/dns-query`` and redirect ``/rfc`` to the DoH RFC, you need to list ``/rfc`` in the list of paths:
+
+  addDOHLocal('2001:db8:1:f00::1', '/etc/ssl/certs/example.com.pem', '/etc/ssl/private/example.com.key', { '/dns-query', '/rfc'})
+  map = { newDOHResponseMapEntry("^/rfc$", 307, "https://www.rfc-editor.org/info/rfc8484") }
+  dohFE = getDOHFrontend(0)
+  dohFE:setResponsesMap(map)
 
 The systemd service-file that is installed no longer uses the ``root`` user to start. It uses the user and group set with the ``--with-service-user`` and ``--with-service-group`` switches during
 configuration, "dnsdist" by default.
@@ -17,6 +29,8 @@ Packages provided on `the PowerDNS Repository <https://repo.powerdns.com>`__ wil
 
 This might not be sufficient if the dnsdist configuration refers to files outside of the /etc/dnsdist directory, like DoT or DoH certificates and private keys.
 Many ACME clients used to get and renew certificates, like CertBot, set permissions assuming that services are started as root. For that particular case, making a copy of the necessary files in the /etc/dnsdist directory is advised, using for example CertBot's ``--deploy-hook`` feature to copy the files with the right permissions after a renewal.
+
+The :func:`webserver` configuration now has an optional ACL parameter, that defaults to "127.0.0.1, ::1".
 
 1.3.x to 1.4.0
 --------------

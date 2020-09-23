@@ -24,18 +24,13 @@
 #include <map>
 #include <string>
 #include <algorithm>
-#include <semaphore.h>
 #include <mutex>
 #include <condition_variable>
 
-#include <unistd.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <boost/utility.hpp>
+
 #include "dnspacket.hh"
 #include "dnsbackend.hh"
-
 #include "namespaces.hh"
 
 /** This is a very magic backend that allows us to load modules dynamically,
@@ -52,6 +47,8 @@ public:
   ~UeberBackend();
 
   bool superMasterBackend(const string &ip, const DNSName &domain, const vector<DNSResourceRecord>&nsset, string *nameserver, string *account, DNSBackend **db);
+
+  bool superMasterAdd(const string &ip, const string &nameserver, const string &account); 
 
   /** Tracks all created UeberBackend instances for us. We use this vector to notify
       existing threads of new modules 
@@ -109,7 +106,7 @@ public:
   void getUnfreshSlaveInfos(vector<DomainInfo>* domains);
   void getUpdatedMasters(vector<DomainInfo>* domains);
   bool getDomainInfo(const DNSName &domain, DomainInfo &di, bool getSerial=true);
-  bool createDomain(const DNSName &domain);
+  bool createDomain(const DNSName &domain, const DomainInfo::DomainKind kind, const vector<ComboAddress> &masters, const string &account);
   
   bool doesDNSSEC();
   bool addDomainKey(const DNSName& name, const DNSBackend::KeyData& key, int64_t& id);

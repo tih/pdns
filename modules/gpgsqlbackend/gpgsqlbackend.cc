@@ -52,6 +52,7 @@ gPgSQLBackend::gPgSQLBackend(const string &mode, const string &suffix)  : GSQLBa
     g_log<<Logger::Error<<mode<<" Connection failed: "<<e.txtReason()<<endl;
     throw PDNSException("Unable to launch "+mode+" connection: "+e.txtReason());
   }
+  allocateStatements();
   g_log<<Logger::Info<<mode<<" Connection successful. Connected to database '"<<getArg("dbname")<<"' on '"<<getArg("host")<<"'."<<endl;
 }
 
@@ -80,7 +81,7 @@ class gPgSQLFactory : public BackendFactory
 public:
   gPgSQLFactory(const string &mode) : BackendFactory(mode),d_mode(mode) {}
 
-  void declareArguments(const string &suffix="")
+  void declareArguments(const string &suffix="") override
   {
     declare(suffix,"dbname","Backend database name to connect to","");
     declare(suffix,"user","Database backend user to connect as","");
@@ -110,6 +111,7 @@ public:
     declare(suffix,"info-all-slaves-query","","select id,name,master,last_check from domains where type='SLAVE'");
     declare(suffix,"supermaster-query","", "select account from supermasters where ip=$1 and nameserver=$2");
     declare(suffix,"supermaster-name-to-ips", "", "select ip,account from supermasters where nameserver=$1 and account=$2");
+    declare(suffix,"supermaster-add","", "insert into supermasters (ip, nameserver, account) values ($1,$2,$3)");
 
     declare(suffix,"insert-zone-query","", "insert into domains (type,name,master,account,last_check, notified_serial) values($1,$2,$3,$4,null,null)");
 
@@ -167,7 +169,7 @@ public:
 
   }
 
-  DNSBackend *make(const string &suffix="")
+  DNSBackend *make(const string &suffix="") override
   {
     return new gPgSQLBackend(d_mode,suffix);
   }
