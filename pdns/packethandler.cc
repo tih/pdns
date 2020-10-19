@@ -438,13 +438,53 @@ bool PacketHandler::getBestWildcard(DNSPacket& p, const SOAData& sd, const DNSNa
   return haveSomething;
 }
 
+DNSName PacketHandler::doAdditionalServiceProcessing(const DNSName &firstTarget, const uint16_t &qtype, const int domain_id, std::unique_ptr<DNSPacket>& r) {
+  DNSName ret = firstTarget;
+  size_t ctr = 5; // Max 5 SVCB Aliasforms per query
+  bool done = false;
+  while (!done && ctr > 0) {
+    DNSZoneRecord rr;
+    done = true;
+    B.lookup(QType(qtype), ret, domain_id);
+    while (B.get(rr)) {
+      rr.dr.d_place = DNSResourceRecord::ADDITIONAL;
+      switch (qtype) {
+        case QType::SVCB: {
+          auto rrc = getRR<SVCBRecordContent>(rr.dr);
+          r->addRecord(std::move(rr));
+          ret = rrc->getTarget().isRoot() ? ret : rrc->getTarget();
+          if (rrc->getPriority() == 0) {
+            done = false;
+          }
+          break;
+        }
+        case QType::HTTPS: {
+          auto rrc = getRR<HTTPSRecordContent>(rr.dr);
+          r->addRecord(std::move(rr));
+          ret = rrc->getTarget().isRoot() ? ret : rrc->getTarget();
+          if (rrc->getPriority() == 0) {
+            done = false;
+          }
+          break;
+        }
+        default:
+          while (B.get(rr)) ;              // don't leave DB handle in bad state
+
+          throw PDNSException("Unknown type (" + QType(qtype).getName() + ") for additional service processing");
+      }
+    }
+    ctr--;
+  }
+  return ret;
+}
+
 
 void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPacket>& r, const SOAData& soadata)
 {
   DNSName content;
   std::unordered_set<DNSName> lookup;
   const auto& rrs = r->getRRS();
- 
+
   lookup.reserve(rrs.size());
   for(auto& rr : rrs) {
     if(rr.dr.d_place != DNSResourceRecord::ADDITIONAL) {
@@ -458,6 +498,24 @@ void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPack
         case QType::SRV:
           content=std::move(getRR<SRVRecordContent>(rr.dr)->d_target);
           break;
+        case QType::SVCB: {
+          auto rrc = getRR<SVCBRecordContent>(rr.dr);
+          content = rrc->getTarget();
+          if (content.isRoot()) {
+            content = rr.dr.d_name;
+          }
+          content = doAdditionalServiceProcessing(content, rr.dr.d_type, soadata.domain_id, r);
+          break;
+        }
+        case QType::HTTPS: {
+          auto rrc = getRR<HTTPSRecordContent>(rr.dr);
+          content = rrc->getTarget();
+          if (content.isRoot()) {
+            content = rr.dr.d_name;
+          }
+          content = doAdditionalServiceProcessing(content, rr.dr.d_type, soadata.domain_id, r);
+          break;
+        }
         default:
           continue;
       }
@@ -1033,9 +1091,11 @@ void PacketHandler::completeANYRecords(DNSPacket& p, std::unique_ptr<DNSPacket>&
 {
   addNSECX(p, r, target, DNSName(), sd.qname, 5);
   if(sd.qname == p.qdomain) {
-    addDNSKEY(p, r, sd);
-    addCDNSKEY(p, r, sd);
-    addCDS(p, r, sd);
+    if(!d_dk.isPresigned(sd.qname)) {
+      addDNSKEY(p, r, sd);
+      addCDNSKEY(p, r, sd);
+      addCDS(p, r, sd);
+    }
     addNSEC3PARAM(p, r, sd);
   }
 }
@@ -1264,22 +1324,24 @@ std::unique_ptr<DNSPacket> PacketHandler::doQuestion(DNSPacket& p)
     if(!retargetcount) r->qdomainzone=sd.qname;
 
     if(sd.qname==p.qdomain) {
-      if(p.qtype.getCode() == QType::DNSKEY)
-      {
-        if(addDNSKEY(p, r, sd))
-          goto sendit;
+      if(!d_dk.isPresigned(sd.qname)) {
+        if(p.qtype.getCode() == QType::DNSKEY)
+        {
+          if(addDNSKEY(p, r, sd))
+            goto sendit;
+        }
+        else if(p.qtype.getCode() == QType::CDNSKEY)
+        {
+          if(addCDNSKEY(p,r, sd))
+            goto sendit;
+        }
+        else if(p.qtype.getCode() == QType::CDS)
+        {
+          if(addCDS(p,r, sd))
+            goto sendit;
+        }
       }
-      else if(p.qtype.getCode() == QType::CDNSKEY)
-      {
-        if(addCDNSKEY(p,r, sd))
-          goto sendit;
-      }
-      else if(p.qtype.getCode() == QType::CDS)
-      {
-        if(addCDS(p,r, sd))
-          goto sendit;
-      }
-      else if(d_dnssec && p.qtype.getCode() == QType::NSEC3PARAM)
+      if(d_dnssec && p.qtype.getCode() == QType::NSEC3PARAM)
       {
         if(addNSEC3PARAM(p,r, sd))
           goto sendit;

@@ -31,6 +31,7 @@
 #include <bitset>
 #include "namespaces.hh"
 #include "iputils.hh"
+#include "svc-records.hh"
 
 #define includeboilerplate(RNAME)   RNAME##RecordContent(const DNSRecord& dr, PacketReader& pr); \
   RNAME##RecordContent(const string& zoneData);                                                  \
@@ -496,6 +497,31 @@ private:
   string d_keyring;
 };
 
+class SVCBRecordContent : public DNSRecordContent
+{
+public:
+  includeboilerplate(SVCB)
+  const DNSName& getTarget() const {return d_target;}
+  uint16_t getPriority() const {return d_priority;}
+
+private:
+  uint16_t d_priority;
+  DNSName d_target;
+  set<SvcParam> d_params;
+};
+
+class HTTPSRecordContent : public DNSRecordContent
+{
+public:
+  includeboilerplate(HTTPS)
+  const DNSName& getTarget() const {return d_target;}
+  uint16_t getPriority() const {return d_priority;}
+
+private:
+  uint16_t d_priority;
+  DNSName d_target;
+  set<SvcParam> d_params;
+};
 
 class RRSIGRecordContent : public DNSRecordContent
 {
@@ -630,7 +656,7 @@ public:
   static void report(void);
   NSECRecordContent()
   {}
-  NSECRecordContent(const string& content, const string& zone=""); //FIXME400: DNSName& zone?
+  NSECRecordContent(const string& content, const DNSName& zone=DNSName());
 
   static std::shared_ptr<DNSRecordContent> make(const DNSRecord &dr, PacketReader& pr);
   static std::shared_ptr<DNSRecordContent> make(const string& content);
@@ -668,7 +694,7 @@ public:
   static void report(void);
   NSEC3RecordContent()
   {}
-  NSEC3RecordContent(const string& content, const string& zone=""); //FIXME400: DNSName& zone?
+  NSEC3RecordContent(const string& content, const DNSName& zone=DNSName());
 
   static std::shared_ptr<DNSRecordContent> make(const DNSRecord &dr, PacketReader& pr);
   static std::shared_ptr<DNSRecordContent> make(const string& content);
@@ -712,7 +738,7 @@ public:
   static void report(void);
   NSEC3PARAMRecordContent()
   {}
-  NSEC3PARAMRecordContent(const string& content, const string& zone=""); // FIXME400: DNSName& zone?
+  NSEC3PARAMRecordContent(const string& content, const DNSName& zone=DNSName());
 
   static std::shared_ptr<DNSRecordContent> make(const DNSRecord &dr, PacketReader& pr);
   static std::shared_ptr<DNSRecordContent> make(const string& content);

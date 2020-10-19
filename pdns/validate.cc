@@ -916,11 +916,6 @@ void validateDNSKeysAgainstDS(time_t now, const DNSName& zone, const dsmap_t& ds
     }
   }
 
-  vector<uint16_t> toSignTags;
-  for (const auto& key : tkeys) {
-    toSignTags.push_back(key->getTag());
-  }
-
   //    cerr<<"got "<<validkeys.size()<<"/"<<tkeys.size()<<" valid/tentative keys"<<endl;
   // these counts could be off if we somehow ended up with
   // duplicate keys. Should switch to a type that prevents that.
@@ -1156,4 +1151,25 @@ std::ostream& operator<<(std::ostream &os, const dState d)
   static const std::vector<std::string> dStates = {"no denial", "nxdomain", "nxqtype", "empty non-terminal", "insecure", "opt-out"};
   os<<dStates.at(static_cast<size_t>(d));
   return os;
+}
+
+void updateDNSSECValidationState(vState& state, const vState stateUpdate)
+{
+  if (stateUpdate == vState::TA) {
+    state = vState::Secure;
+  }
+  else if (stateUpdate == vState::NTA) {
+    state = vState::Insecure;
+  }
+  else if (stateUpdate == vState::Bogus) {
+    state = vState::Bogus;
+  }
+  else if (state == vState::Indeterminate) {
+    state = stateUpdate;
+  }
+  else if (stateUpdate == vState::Insecure) {
+    if (state != vState::Bogus) {
+      state = vState::Insecure;
+    }
+  }
 }

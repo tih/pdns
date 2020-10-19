@@ -47,6 +47,7 @@ using namespace boost::assign;
 
 DNSSECKeeper::keycache_t DNSSECKeeper::s_keycache;
 DNSSECKeeper::metacache_t DNSSECKeeper::s_metacache;
+int64_t DNSSECKeeper::s_metaCacheCleanActions = 0;
 ReadWriteLock DNSSECKeeper::s_metacachelock;
 ReadWriteLock DNSSECKeeper::s_keycachelock;
 AtomicCounter DNSSECKeeper::s_ops;
@@ -58,9 +59,9 @@ bool DNSSECKeeper::doesDNSSEC()
   return d_keymetadb->doesDNSSEC();
 }
 
-bool DNSSECKeeper::isSecuredZone(const DNSName& zone) 
+bool DNSSECKeeper::isSecuredZone(const DNSName& zone, bool useCache) 
 {
-  if(isPresigned(zone))
+  if(isPresigned(zone, useCache))
     return true;
 
   keyset_t keys = getKeys(zone); // does the cache
@@ -73,10 +74,15 @@ bool DNSSECKeeper::isSecuredZone(const DNSName& zone)
   return false;
 }
 
-bool DNSSECKeeper::isPresigned(const DNSName& name)
+bool DNSSECKeeper::isPresigned(const DNSName& name, bool useCache)
 {
   string meta;
-  getFromMeta(name, "PRESIGNED", meta);
+  if (useCache) {
+    getFromMeta(name, "PRESIGNED", meta);
+  }
+  else {
+    getFromMetaNoCache(name, "PRESIGNED", meta);
+  }
   return meta=="1";
 }
 
@@ -132,6 +138,7 @@ bool DNSSECKeeper::clearMetaCache(const DNSName& name)
 {
   WriteLock l(&s_metacachelock);
   s_metacache.erase(name);
+  ++s_metaCacheCleanActions;
   return true;
 }
 
@@ -234,6 +241,9 @@ bool DNSSECKeeper::getFromMeta(const DNSName& zname, const std::string& key, std
       meta = iter->d_value;
       fromCache = true;
     }
+    else {
+      d_metaCacheCleanAction = s_metaCacheCleanActions;
+    }
   }
 
   if (!fromCache) {
@@ -255,6 +265,9 @@ bool DNSSECKeeper::getFromMeta(const DNSName& zname, const std::string& key, std
     nce.d_value = std::move(meta);
     {
       WriteLock l(&s_metacachelock);
+      if(d_metaCacheCleanAction != s_metaCacheCleanActions) {
+        return false;
+      }
       lruReplacingInsert<SequencedTag>(s_metacache, nce);
     }
   }
@@ -262,12 +275,24 @@ bool DNSSECKeeper::getFromMeta(const DNSName& zname, const std::string& key, std
   return ret;
 }
 
-void DNSSECKeeper::getSoaEdit(const DNSName& zname, std::string& value)
+bool DNSSECKeeper::getFromMetaNoCache(const DNSName& name, const std::string& kind, std::string& value)
+{
+  std::vector<std::string> meta;
+  if (d_keymetadb->getDomainMetadata(name, kind, meta)) {
+    if(!meta.empty()) {
+      value = *meta.begin();
+      return true;
+    }
+  }
+  return false;
+}
+
+void DNSSECKeeper::getSoaEdit(const DNSName& zname, std::string& value, bool useCache)
 {
   static const string soaEdit(::arg()["default-soa-edit"]);
   static const string soaEditSigned(::arg()["default-soa-edit-signed"]);
 
-  if (isPresigned(zname)) {
+  if (isPresigned(zname, useCache)) {
     // SOA editing on a presigned zone never makes sense
     return;
   }
@@ -275,7 +300,7 @@ void DNSSECKeeper::getSoaEdit(const DNSName& zname, std::string& value)
   getFromMeta(zname, "SOA-EDIT", value);
 
   if ((!soaEdit.empty() || !soaEditSigned.empty()) && value.empty()) {
-    if (!soaEditSigned.empty() && isSecuredZone(zname))
+    if (!soaEditSigned.empty() && isSecuredZone(zname, useCache))
       value=soaEditSigned;
     if (value.empty())
       value=soaEdit;
@@ -297,10 +322,15 @@ uint64_t DNSSECKeeper::dbdnssecCacheSizes(const std::string& str)
   return (uint64_t)-1;
 }
 
-bool DNSSECKeeper::getNSEC3PARAM(const DNSName& zname, NSEC3PARAMRecordContent* ns3p, bool* narrow)
+bool DNSSECKeeper::getNSEC3PARAM(const DNSName& zname, NSEC3PARAMRecordContent* ns3p, bool* narrow, bool useCache)
 {
   string value;
-  getFromMeta(zname, "NSEC3PARAM", value);
+  if(useCache) {
+    getFromMeta(zname, "NSEC3PARAM", value);
+  }
+  else {
+    getFromMetaNoCache(zname, "NSEC3PARAM", value);
+  }
   if(value.empty()) { // "no NSEC3"
     return false;
   }
@@ -318,7 +348,12 @@ bool DNSSECKeeper::getNSEC3PARAM(const DNSName& zname, NSEC3PARAMRecordContent* 
     }
   }
   if(narrow) {
-    getFromMeta(zname, "NSEC3NARROW", value);
+    if(useCache) {
+      getFromMeta(zname, "NSEC3NARROW", value);
+    }
+    else {
+      getFromMetaNoCache(zname, "NSEC3NARROW", value);
+    }
     *narrow = (value=="1");
   }
   return true;
@@ -650,7 +685,7 @@ bool DNSSECKeeper::unSecureZone(const DNSName& zone, string& error, string& info
  * \param doTransaction Whether or not to wrap the rectify in a transaction
  */
 bool DNSSECKeeper::rectifyZone(const DNSName& zone, string& error, string& info, bool doTransaction) {
-  if (isPresigned(zone)) {
+  if (isPresigned(zone, doTransaction)) {
     error =  "Rectify presigned zone '"+zone.toLogString()+"' is not allowed/necessary.";
     return false;
   }
@@ -700,11 +735,11 @@ bool DNSSECKeeper::rectifyZone(const DNSName& zone, string& error, string& info,
   }
 
   NSEC3PARAMRecordContent ns3pr;
-  bool securedZone = isSecuredZone(zone);
+  bool securedZone = isSecuredZone(zone, doTransaction);
   bool haveNSEC3 = false, isOptOut = false, narrow = false;
 
   if(securedZone) {
-    haveNSEC3 = getNSEC3PARAM(zone, &ns3pr, &narrow);
+    haveNSEC3 = getNSEC3PARAM(zone, &ns3pr, &narrow, doTransaction);
     isOptOut = (haveNSEC3 && ns3pr.d_flags);
 
     if(!haveNSEC3) {

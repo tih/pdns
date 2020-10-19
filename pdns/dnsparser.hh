@@ -36,6 +36,7 @@
 #include "dnsname.hh"
 #include "pdnsexception.hh"
 #include "iputils.hh"
+#include "svc-records.hh"
 
 /** DNS records have three representations:
     1) in the packet
@@ -152,6 +153,7 @@ public:
   void xfrBlobNoSpaces(string& blob, int len);
   void xfrBlob(string& blob, int length);
   void xfrHexBlob(string& blob, bool keepReading=false);
+  void xfrSvcParamKeyVals(set<SvcParam> &kvs);
 
   void getDnsrecordheader(struct dnsrecordheader &ah);
   void copyRecord(vector<unsigned char>& dest, uint16_t len);
@@ -386,6 +388,9 @@ public:
   {
     return d_tsigPos;
   }
+
+  bool hasEDNS() const;
+
 private:
   void init(bool query, const std::string& packet);
   uint16_t d_tsigPos;

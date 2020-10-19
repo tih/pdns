@@ -1080,7 +1080,6 @@ extern bool g_lowercaseOutgoing;
 
 
 std::string reloadAuthAndForwards();
-ComboAddress parseIPAndPort(const std::string& input, uint16_t port);
 typedef boost::function<void*(void)> pipefunc_t;
 void broadcastFunction(const pipefunc_t& func);
 void distributeAsyncFunction(const std::string& question, const pipefunc_t& func);
@@ -1096,14 +1095,11 @@ std::shared_ptr<SyncRes::domainmap_t> parseAuthAndForwards();
 uint64_t* pleaseGetNsSpeedsSize();
 uint64_t* pleaseGetFailedServersSize();
 uint64_t* pleaseGetEDNSStatusesSize();
-uint64_t* pleaseGetNegCacheSize();
 uint64_t* pleaseGetConcurrentQueries();
 uint64_t* pleaseGetThrottleSize();
 uint64_t* pleaseGetPacketCacheHits();
 uint64_t* pleaseGetPacketCacheSize();
-uint64_t* pleaseWipeCache(const DNSName& canon, bool subtree=false, uint16_t qtype=0xffff);
 uint64_t* pleaseWipePacketCache(const DNSName& canon, bool subtree, uint16_t qtype=0xffff);
-uint64_t* pleaseWipeAndCountNegCache(const DNSName& canon, bool subtree=false);
 void doCarbonDump(void*);
 bool primeHints(void);
 void primeRootNSZones(bool, unsigned int depth);

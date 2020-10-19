@@ -676,7 +676,7 @@ int asendto(const char *data, size_t len, int flags,
 
 // -1 is error, 0 is timeout, 1 is success
 int arecvfrom(std::string& packet, int flags, const ComboAddress& fromaddr, size_t *d_len,
-              uint16_t id, const DNSName& domain, uint16_t qtype, int fd, struct timeval* now)
+              uint16_t id, const DNSName& domain, uint16_t qtype, int fd, const struct timeval* now)
 {
   static optional<unsigned int> nearMissLimit;
   if(!nearMissLimit)
@@ -751,6 +751,77 @@ TCPConnection::~TCPConnection()
 }
 
 AtomicCounter TCPConnection::s_currentConnections;
+
+static void terminateTCPConnection(int fd)
+{
+  try {
+    t_fdm->removeReadFD(fd);
+  }
+  catch (const FDMultiplexerException& fde)
+  {
+  }
+}
+
+static bool sendResponseOverTCP(const std::unique_ptr<DNSComboWriter>& dc, const std::vector<uint8_t>& packet)
+{
+  char buf[2];
+  buf[0] = packet.size() / 256;
+  buf[1] = packet.size() % 256;
+
+  Utility::iovec iov[2];
+  iov[0].iov_base=(void*)buf;              iov[0].iov_len=2;
+  iov[1].iov_base=(void*)&*packet.begin(); iov[1].iov_len = packet.size();
+
+  int wret = Utility::writev(dc->d_socket, iov, 2);
+  bool hadError = true;
+
+  if (wret == 0) {
+    g_log<<Logger::Warning<<"EOF writing TCP answer to "<<dc->getRemote()<<endl;
+  } else if (wret < 0 ) {
+    int err = errno;
+    g_log << Logger::Warning << "Error writing TCP answer to " << dc->getRemote() << ": " << strerror(err) << endl;
+  } else if ((unsigned int)wret != 2 + packet.size()) {
+    g_log<<Logger::Warning<<"Oops, partial answer sent to "<<dc->getRemote()<<" for "<<dc->d_mdp.d_qname<<" (size="<< (2 + packet.size()) <<", sent "<<wret<<")"<<endl;
+  } else {
+    hadError = false;
+  }
+
+  return hadError;
+}
+
+static void sendErrorOverTCP(std::unique_ptr<DNSComboWriter>& dc, int rcode)
+{
+  std::vector<uint8_t> packet;
+  if (dc->d_mdp.d_header.qdcount == 0) {
+    /* header-only */
+    packet.resize(sizeof(dnsheader));
+  }
+  else {
+    DNSPacketWriter pw(packet, dc->d_mdp.d_qname, dc->d_mdp.d_qtype, dc->d_mdp.d_qclass);
+    if (dc->d_mdp.hasEDNS()) {
+      /* we try to add the EDNS OPT RR even for truncated answers,
+         as rfc6891 states:
+         "The minimal response MUST be the DNS header, question section, and an
+         OPT record.  This MUST also occur when a truncated response (using
+         the DNS header's TC bit) is returned."
+      */
+      pw.addOpt(512, 0, 0);
+      pw.commit();
+    }
+  }
+
+  dnsheader& header = reinterpret_cast<dnsheader&>(packet.at(0));
+  header.aa = 0;
+  header.ra = 1;
+  header.qr = 1;
+  header.tc = 0;
+  header.id = dc->d_mdp.d_header.id;
+  header.rd = dc->d_mdp.d_header.rd;
+  header.cd = dc->d_mdp.d_header.cd;
+  header.rcode = rcode;
+
+  sendResponseOverTCP(dc, packet);
+}
 
 static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var);
 
@@ -1850,28 +1921,8 @@ static void startDoResolve(void *p)
       //      else cerr<<"Not putting in packet cache: "<<sr.wasVariable()<<endl;
     }
     else {
-      char buf[2];
-      buf[0]=packet.size()/256;
-      buf[1]=packet.size()%256;
+      bool hadError = sendResponseOverTCP(dc, packet);
 
-      Utility::iovec iov[2];
-
-      iov[0].iov_base=(void*)buf;              iov[0].iov_len=2;
-      iov[1].iov_base=(void*)&*packet.begin(); iov[1].iov_len = packet.size();
-
-      int wret=Utility::writev(dc->d_socket, iov, 2);
-      bool hadError=true;
-
-      if (wret == 0) {
-        g_log<<Logger::Warning<<"EOF writing TCP answer to "<<dc->getRemote()<<endl;
-      } else if (wret < 0 ) {
-        int err = errno;
-        g_log << Logger::Warning << "Error writing TCP answer to " << dc->getRemote() << ": " << strerror(err) << endl;
-      } else if ((unsigned int)wret != 2 + packet.size()) {
-        g_log<<Logger::Warning<<"Oops, partial answer sent to "<<dc->getRemote()<<" for "<<dc->d_mdp.d_qname<<" (size="<< (2 + packet.size()) <<", sent "<<wret<<")"<<endl;
-      } else {
-        hadError=false;
-      }
       // update tcp connection status, closing if needed and doing the fd multiplexer accounting
       if  (dc->d_tcpConnection->d_requestsInFlight > 0) {
         dc->d_tcpConnection->d_requestsInFlight--;
@@ -1882,11 +1933,7 @@ static void startDoResolve(void *p)
       // "Tried to remove unlisted fd" exception.  Not that an inflight < limit test
       // will not work since we do not know if the other mthread got an error or not.
       if(hadError) {
-        try {
-          t_fdm->removeReadFD(dc->d_socket);
-        }
-        catch (FDMultiplexerException &) {
-        }
+        terminateTCPConnection(dc->d_socket);
         dc->d_socket = -1;
       }
       else {
@@ -1910,11 +1957,15 @@ static void startDoResolve(void *p)
             ttd.tv_sec += g_tcpTimeout;
             t_fdm->addReadFD(dc->d_socket, handleRunningTCPQuestion, dc->d_tcpConnection, &ttd);
           } else {
-            // fd might have been removed by read error code, so expect an exception
+            // fd might have been removed by read error code, or a read timeout, so expect an exception
             try {
               t_fdm->setReadTTD(dc->d_socket, ttd, g_tcpTimeout);
             }
-            catch (FDMultiplexerException &) {
+            catch (const FDMultiplexerException &) {
+              // but if the FD was removed because of a timeout while we were sending a response,
+              // we need to re-arm it. If it was an error it will error again.
+              ttd.tv_sec += g_tcpTimeout;
+              t_fdm->addReadFD(dc->d_socket, handleRunningTCPQuestion, dc->d_tcpConnection, &ttd);
             }
           }
         }
@@ -2118,12 +2169,12 @@ static bool handleTCPReadResult(int fd, ssize_t bytes)
 {
   if (bytes == 0) {
     /* EOF */
-    t_fdm->removeReadFD(fd);
+    terminateTCPConnection(fd);
     return false;
   }
   else if (bytes < 0) {
     if (errno != EAGAIN && errno != EWOULDBLOCK) {
-      t_fdm->removeReadFD(fd);
+      terminateTCPConnection(fd);
       return false;
     }
   }
@@ -2150,7 +2201,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
         g_log<<Logger::Error<<"Unable to consume proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() <<endl;
       }
       ++g_stats.proxyProtocolInvalidCount;
-      t_fdm->removeReadFD(fd);
+      terminateTCPConnection(fd);
       return;
     }
     else if (remaining < 0) {
@@ -2170,7 +2221,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
           g_log<<Logger::Error<<"Unable to parse proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() <<endl;
         }
         ++g_stats.proxyProtocolInvalidCount;
-        t_fdm->removeReadFD(fd);
+        terminateTCPConnection(fd);
         return;
       }
       else if (static_cast<size_t>(used) > g_proxyProtocolMaximumSize) {
@@ -2178,7 +2229,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
           g_log<<Logger::Error<<"Proxy protocol header in packet from TCP client "<< conn->d_remote.toStringWithPort() << " is larger than proxy-protocol-maximum-size (" << used << "), dropping"<< endl;
         }
         ++g_stats.proxyProtocolInvalidCount;
-        t_fdm->removeReadFD(fd);
+        terminateTCPConnection(fd);
         return;
       }
 
@@ -2191,7 +2242,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
         }
 
         ++g_stats.unauthorizedTCP;
-        t_fdm->removeReadFD(fd);
+        terminateTCPConnection(fd);
         return;
       }
 
@@ -2248,7 +2299,7 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       if(g_logCommonErrors) {
         g_log<<Logger::Error<<"TCP client "<< conn->d_remote.toStringWithPort() <<" sent an invalid question size while reading question body"<<endl;
       }
-      t_fdm->removeReadFD(fd);
+      terminateTCPConnection(fd);
       return;
     }
     conn->bytesread+=(uint16_t)bytes;
@@ -2260,8 +2311,10 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
       }
       catch(const MOADNSException &mde) {
         g_stats.clientParseError++;
-        if(g_logCommonErrors)
+        if (g_logCommonErrors) {
           g_log<<Logger::Error<<"Unable to parse packet from TCP client "<< conn->d_remote.toStringWithPort() <<endl;
+        }
+        terminateTCPConnection(fd);
         return;
       }
       dc->d_tcpConnection = conn; // carry the torch
@@ -2322,15 +2375,17 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
               }
             }
             catch(const std::exception& e)  {
-              if(g_logCommonErrors)
+              if(g_logCommonErrors) {
                 g_log<<Logger::Warning<<"Error parsing a query packet qname='"<<qname<<"' for tag determination, setting tag=0: "<<e.what()<<endl;
+              }
             }
           }
         }
         catch(const std::exception& e)
         {
-          if(g_logCommonErrors)
+          if (g_logCommonErrors) {
             g_log<<Logger::Warning<<"Error parsing a query packet for tag determination, setting tag=0: "<<e.what()<<endl;
+          }
         }
       }
 
@@ -2351,40 +2406,46 @@ static void handleRunningTCPQuestion(int fd, FDMultiplexer::funcparam_t& var)
             protobufLogQuery(luaconfsLocal->protobufMaskV4, luaconfsLocal->protobufMaskV6, dc->d_uuid, dc->d_source, dc->d_destination, dc->d_ednssubnet.source, true, dh->id, conn->qlen, qname, qtype, qclass, dc->d_policyTags, dc->d_requestorId, dc->d_deviceId, dc->d_deviceName);
           }
         }
-        catch(std::exception& e) {
-          if(g_logCommonErrors)
+        catch (const std::exception& e) {
+          if (g_logCommonErrors) {
             g_log<<Logger::Warning<<"Error parsing a TCP query packet for edns subnet: "<<e.what()<<endl;
+          }
         }
       }
 #endif
-      if(t_pdl) {
-        if(t_pdl->ipfilter(dc->d_source, dc->d_destination, *dh)) {
-          if(!g_quiet)
+      if (t_pdl) {
+        if (t_pdl->ipfilter(dc->d_source, dc->d_destination, *dh)) {
+          if (!g_quiet) {
             g_log<<Logger::Notice<<t_id<<" ["<<MT->getTid()<<"/"<<MT->numProcesses()<<"] DROPPED TCP question from "<<dc->d_source.toStringWithPort()<<(dc->d_source != dc->d_remote ? " (via "+dc->d_remote.toStringWithPort()+")" : "")<<" based on policy"<<endl;
+          }
           g_stats.policyDrops++;
+          terminateTCPConnection(fd);
           return;
         }
       }
 
-      if(dc->d_mdp.d_header.qr) {
+      if (dc->d_mdp.d_header.qr) {
         g_stats.ignoredCount++;
-        if(g_logCommonErrors) {
+        if (g_logCommonErrors) {
           g_log<<Logger::Error<<"Ignoring answer from TCP client "<< dc->getRemote() <<" on server socket!"<<endl;
         }
+        terminateTCPConnection(fd);
         return;
       }
-      if(dc->d_mdp.d_header.opcode) {
+      if (dc->d_mdp.d_header.opcode) {
         g_stats.ignoredCount++;
-        if(g_logCommonErrors) {
+        if (g_logCommonErrors) {
           g_log<<Logger::Error<<"Ignoring non-query opcode from TCP client "<< dc->getRemote() <<" on server socket!"<<endl;
         }
+        sendErrorOverTCP(dc, RCode::NotImp);
         return;
       }
       else if (dh->qdcount == 0) {
         g_stats.emptyQueriesCount++;
-        if(g_logCommonErrors) {
+        if (g_logCommonErrors) {
           g_log<<Logger::Error<<"Ignoring empty (qdcount == 0) query from "<< dc->getRemote() <<" on server socket!"<<endl;
         }
+        sendErrorOverTCP(dc, RCode::NotImp);
         return;
       }
       else {
@@ -3150,11 +3211,12 @@ static void doStats(void)
   uint64_t cacheSize = g_recCache->size();
   auto rc_stats = g_recCache->stats();
   double r = rc_stats.second == 0 ? 0.0 : (100.0 * rc_stats.first / rc_stats.second);
-  
+  uint64_t negCacheSize = g_negCache->size();
+
   if(g_stats.qcounter && (cacheHits + cacheMisses) && SyncRes::s_queries && SyncRes::s_outqueries) {
     g_log<<Logger::Notice<<"stats: "<<g_stats.qcounter<<" questions, "<<
       cacheSize << " cache entries, "<<
-      broadcastAccFunction<uint64_t>(pleaseGetNegCacheSize)<<" negative entries, "<<
+      negCacheSize<<" negative entries, "<<
       (int)((cacheHits*100.0)/(cacheHits+cacheMisses))<<"% cache hits"<<endl;
     g_log << Logger::Notice<< "stats: cache contended/acquired " << rc_stats.first << '/' << rc_stats.second << " = " << r << '%' << endl;
 
@@ -4194,11 +4256,6 @@ static int serviceMain(int argc, char*argv[])
   checkLinuxIPv6Limits();
   try {
     pdns::parseQueryLocalAddress(::arg()["query-local-address"]);
-    if (!::arg()["query-local-address6"].empty()) {
-      // TODO remove in 4.5.0
-      g_log<<Logger::Warning<<"query-local-address6 is deprecated and will be removed in a future version. Please use query-local-address for IPv6 addresses as well"<<endl;
-      pdns::parseQueryLocalAddress(::arg()["query-local-address6"]);
-    }
   }
   catch(std::exception& e) {
     g_log<<Logger::Error<<"Assigning local query addresses: "<<e.what();
@@ -5064,7 +5121,6 @@ int main(int argc, char **argv)
 #endif
     ::arg().set("delegation-only","Which domains we only accept delegations from")="";
     ::arg().set("query-local-address","Source IP address for sending queries")="0.0.0.0";
-    ::arg().set("query-local-address6","DEPRECATED: Use query-local-address for IPv6 as well. Source IPv6 address for sending queries. IF UNSET, IPv6 WILL NOT BE USED FOR OUTGOING QUERIES")="";
     ::arg().set("client-tcp-timeout","Timeout in seconds when talking to TCP clients")="2";
     ::arg().set("max-mthreads", "Maximum number of simultaneous Mtasker threads")="2048";
     ::arg().set("max-tcp-clients","Maximum number of simultaneous TCP clients")="128";
@@ -5201,6 +5257,12 @@ int main(int argc, char **argv)
     g_log.toConsole(Logger::Info);
     ::arg().laxParse(argc,argv); // do a lax parse
 
+    if(::arg().mustDo("version")) {
+      showProductVersion();
+      showBuildConfiguration();
+      exit(0);
+    }
+
     string configname=::arg()["config-dir"]+"/recursor.conf";
     if(::arg()["config-name"]!="") {
       configname=::arg()["config-dir"]+"/recursor-"+::arg()["config-name"]+".conf";
@@ -5271,12 +5333,6 @@ int main(int argc, char **argv)
       cout<<::arg().helpstring(::arg()["help"])<<endl;
       exit(0);
     }
-    if(::arg().mustDo("version")) {
-      showProductVersion();
-      showBuildConfiguration();
-      exit(0);
-    }
-
     g_recCache = std::unique_ptr<MemRecursorCache>(new MemRecursorCache(::arg().asNum("record-cache-shards")));
     g_negCache = std::unique_ptr<NegCache>(new NegCache(::arg().asNum("record-cache-shards")));
 
