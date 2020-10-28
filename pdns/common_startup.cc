@@ -97,10 +97,12 @@ void declareArguments()
   ::arg().setSwitch("log-dns-details","If PDNS should log DNS non-erroneous details")="no";
   ::arg().setSwitch("log-dns-queries","If PDNS should log all incoming DNS queries")="no";
   ::arg().set("local-address","Local IP addresses to which we bind")="0.0.0.0, ::";
+  ::arg().set("local-ipv6","DEPRECATED, will be removed, move your IPs to local-address")="";
   ::arg().setSwitch("local-address-nonexist-fail","Fail to start if one or more of the local-address's do not exist on this server")="yes";
   ::arg().setSwitch("non-local-bind", "Enable binding to non-local addresses by using FREEBIND / BINDANY socket options")="no";
   ::arg().setSwitch("reuseport","Enable higher performance on compliant kernels by using SO_REUSEPORT allowing each receiver thread to open its own socket")="no";
   ::arg().set("query-local-address","Source IP addresses for sending queries")="0.0.0.0 ::";
+  ::arg().set("query-local-address6","DEPRECATED: Use query-local-address. Source IPv6 address for sending queries")="";
   ::arg().set("overload-queue-length","Maximum queuelength moving to packetcache only")="0";
   ::arg().set("max-queue-length","Maximum queuelength before considering situation lost")="5000";
 
@@ -121,8 +123,6 @@ void declareArguments()
   ::arg().set("loglevel","Amount of logging. Higher is more. Do not set below 3")="4";
   ::arg().set("disable-syslog","Disable logging to syslog, useful when running inside a supervisor that logs stdout")="no";
   ::arg().set("log-timestamp","Print timestamps in log lines")="yes";
-  ::arg().set("default-soa-name","name to insert in the SOA record if none set in the backend")="a.misconfigured.powerdns.server";
-  ::arg().set("default-soa-mail","mail address to insert in the SOA record if none set in the backend")="";
   ::arg().set("distributor-threads","Default number of Distributor (backend) threads to start")="3";
   ::arg().set("signing-threads","Default number of signer threads to start")="3";
   ::arg().set("receiver-threads","Default number of receiver threads to start")="1";
@@ -175,11 +175,8 @@ void declareArguments()
   ::arg().set("cache-ttl","Seconds to store packets in the PacketCache")="20";
   ::arg().set("negquery-cache-ttl","Seconds to store negative query results in the QueryCache")="60";
   ::arg().set("query-cache-ttl","Seconds to store query results in the QueryCache")="20";
-  ::arg().set("soa-minimum-ttl","Default SOA minimum ttl")="3600";
   ::arg().set("server-id", "Returned when queried for 'id.server' TXT or NSID, defaults to hostname - disabled or custom")="";
-  ::arg().set("soa-refresh-default","Default SOA refresh")="10800";
-  ::arg().set("soa-retry-default","Default SOA retry")="3600";
-  ::arg().set("soa-expire-default","Default SOA expire")="604800";
+  ::arg().set("default-soa-content","Default SOA content")="a.misconfigured.dns.server.invalid hostmaster.@ 0 10800 3600 604800 3600";
   ::arg().set("default-soa-edit","Default SOA-EDIT value")="";
   ::arg().set("default-soa-edit-signed","Default SOA-EDIT value for signed zones")="";
   ::arg().set("dnssec-key-cache-ttl","Seconds to cache DNSSEC keys from the database")="30";
@@ -241,6 +238,7 @@ void declareArguments()
   ::arg().set("tcp-fast-open", "Enable TCP Fast Open support on the listening sockets, using the supplied numerical value as the queue size")="0";
 
   ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
+  ::arg().setSwitch("upgrade-unknown-types","Transparently upgrade known TYPExxx records. Recommended to keep off, except for PowerDNS upgrades until data sources are cleaned up")="no";
 
   ::arg().set("rng", "Specify the random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
   ::arg().setDefaults();
@@ -632,6 +630,10 @@ void mainthread()
   }
 
   pdns::parseQueryLocalAddress(::arg()["query-local-address"]);
+  if (!::arg()["query-local-address6"].empty()) {
+    g_log<<Logger::Error<<"NOTE: query-local-address6 is deprecated and will be removed in a future version. Please use query-local-address for IPv6 addresses as well"<<endl;
+    pdns::parseQueryLocalAddress(::arg()["query-local-address6"]);
+  }
 
   // NOW SAFE TO CREATE THREADS!
   dl->go();

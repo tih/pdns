@@ -426,7 +426,6 @@ bool TCPNameserver::canDoAXFR(std::unique_ptr<DNSPacket>& q)
   SOAData sd;
   if(s_P->getBackend()->getSOAUncached(q->qdomain,sd)) {
     // cerr<<"got backend and SOA"<<endl;
-    DNSBackend *B=sd.db;
     vector<string> acl;
     s_P->getBackend()->getDomainMetadata(q->qdomain, "ALLOW-AXFR-FROM", acl);
     for (vector<string>::const_iterator i = acl.begin(); i != acl.end(); ++i) {
@@ -437,9 +436,10 @@ bool TCPNameserver::canDoAXFR(std::unique_ptr<DNSPacket>& q)
         DNSResourceRecord rr;
         set<DNSName> nsset;
 
-        B->lookup(QType(QType::NS),q->qdomain,sd.domain_id);
-        while(B->get(rr)) 
+        sd.db->lookup(QType(QType::NS), q->qdomain, sd.domain_id);
+        while (sd.db->get(rr)) {
           nsset.insert(DNSName(rr.content));
+        }
         for(const auto & j: nsset) {
           vector<string> nsips=fns.lookup(j, s_P->getBackend());
           for(vector<string>::const_iterator k=nsips.begin();k!=nsips.end();++k) {
@@ -643,19 +643,33 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
 
       // generate CDS and CDNSKEY records
       if(entryPointIds.count(value.second.id) > 0){
-        if(publishCDNSKEY == "1") {
+        if(!publishCDNSKEY.empty()) {
           zrr.dr.d_type=QType::CDNSKEY;
-          zrr.dr.d_content = std::make_shared<DNSKEYRecordContent>(value.first.getDNSKEY());
-          cdnskey.push_back(zrr);
+          if (publishCDNSKEY == "0") {
+            if (cdnskey.empty()) {
+              zrr.dr.d_content=PacketHandler::s_deleteCDNSKEYContent;
+              cdnskey.push_back(zrr);
+            }
+          } else {
+            zrr.dr.d_content = std::make_shared<DNSKEYRecordContent>(value.first.getDNSKEY());
+            cdnskey.push_back(zrr);
+          }
         }
 
         if(!publishCDS.empty()){
           zrr.dr.d_type=QType::CDS;
           vector<string> digestAlgos;
           stringtok(digestAlgos, publishCDS, ", ");
-          for(auto const &digestAlgo : digestAlgos) {
-            zrr.dr.d_content=std::make_shared<DSRecordContent>(makeDSFromDNSKey(target, value.first.getDNSKEY(), pdns_stou(digestAlgo)));
-            cds.push_back(zrr);
+          if(std::find(digestAlgos.begin(), digestAlgos.end(), "0") != digestAlgos.end()) {
+            if(cds.empty()) {
+              zrr.dr.d_content=PacketHandler::s_deleteCDSContent;
+              cds.push_back(zrr);
+            }
+          } else {
+            for(auto const &digestAlgo : digestAlgos) {
+              zrr.dr.d_content=std::make_shared<DSRecordContent>(makeDSFromDNSKey(target, value.first.getDNSKEY(), pdns_stou(digestAlgo)));
+              cds.push_back(zrr);
+            }
           }
         }
       }
@@ -1142,6 +1156,7 @@ TCPNameserver::TCPNameserver()
   d_maxTCPConnections = ::arg().asNum( "max-tcp-connections" );
 
   vector<string>locals;
+  stringtok(locals,::arg()["local-ipv6"]," ,");
   stringtok(locals,::arg()["local-address"]," ,");
   if(locals.empty())
     throw PDNSException("No local addresses specified");

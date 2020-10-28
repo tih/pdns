@@ -117,7 +117,7 @@ class AuthZones(ApiTestCase, AuthZonesHelperMixin):
             if k in payload:
                 self.assertEquals(data[k], payload[k])
         # validate generated SOA
-        expected_soa = "a.misconfigured.powerdns.server. hostmaster." + name + " " + \
+        expected_soa = "a.misconfigured.dns.server.invalid. hostmaster." + name + " " + \
                        str(payload['serial']) + " 10800 3600 604800 3600"
         self.assertEquals(
             get_first_rec(data, name, 'SOA')['content'],
@@ -930,7 +930,7 @@ $ORIGIN %NAME%
         self.assertIn('zone', data)
         expected_data = [name + '\t3600\tIN\tNS\tns1.foo.com.',
                          name + '\t3600\tIN\tNS\tns2.foo.com.',
-                         name + '\t3600\tIN\tSOA\ta.misconfigured.powerdns.server. hostmaster.' + name +
+                         name + '\t3600\tIN\tSOA\ta.misconfigured.dns.server.invalid. hostmaster.' + name +
                          ' 0 10800 3600 604800 3600']
         self.assertEquals(data['zone'].strip().split('\n'), expected_data)
 
@@ -944,7 +944,7 @@ $ORIGIN %NAME%
         data = r.text.strip().split("\n")
         expected_data = [name + '\t3600\tIN\tNS\tns1.foo.com.',
                          name + '\t3600\tIN\tNS\tns2.foo.com.',
-                         name + '\t3600\tIN\tSOA\ta.misconfigured.powerdns.server. hostmaster.' + name +
+                         name + '\t3600\tIN\tSOA\ta.misconfigured.dns.server.invalid. hostmaster.' + name +
                          ' 0 10800 3600 604800 3600']
         self.assertEquals(data, expected_data)
 
@@ -1725,118 +1725,6 @@ $ORIGIN %NAME%
         self.assertEquals(serverset['records'], rrset2['records'])
         self.assertEquals(serverset['comments'], rrset['comments'])
 
-    def test_zone_auto_ptr_ipv4_create(self):
-        revzone = '4.2.192.in-addr.arpa.'
-        _, _, revzonedata = self.create_zone(name=revzone)
-        name = unique_zone_name()
-        rrset = {
-            "name": name,
-            "type": "A",
-            "ttl": 3600,
-            "records": [{
-                "content": "192.2.4.44",
-                "disabled": False,
-                "set-ptr": True,
-            }],
-        }
-        name, payload, data = self.create_zone(name=name, rrsets=[rrset])
-        del rrset['records'][0]['set-ptr']
-        self.assertEquals(get_rrset(data, name, 'A')['records'], rrset['records'])
-        r = self.session.get(self.url("/api/v1/servers/localhost/zones/" + revzone)).json()
-        revsets = [s for s in r['rrsets'] if s['type'] == 'PTR']
-        print(revsets)
-        self.assertEquals(revsets, [{
-            u'name': u'44.4.2.192.in-addr.arpa.',
-            u'ttl': 3600,
-            u'type': u'PTR',
-            u'comments': [],
-            u'records': [{
-                u'content': name,
-                u'disabled': False,
-            }],
-        }])
-        # with SOA-EDIT-API DEFAULT on the revzone, the serial should now be higher.
-        self.assertGreater(r['serial'], revzonedata['serial'])
-
-    def test_zone_auto_ptr_ipv4_update(self):
-        revzone = '0.2.192.in-addr.arpa.'
-        _, _, revzonedata = self.create_zone(name=revzone)
-        name, payload, zone = self.create_zone()
-        rrset = {
-            'changetype': 'replace',
-            'name': name,
-            'type': 'A',
-            'ttl': 3600,
-            'records': [
-                {
-                    "content": '192.2.0.2',
-                    "disabled": False,
-                    "set-ptr": True
-                }
-            ]
-        }
-        payload = {'rrsets': [rrset]}
-        r = self.session.patch(
-            self.url("/api/v1/servers/localhost/zones/" + name),
-            data=json.dumps(payload),
-            headers={'content-type': 'application/json'})
-        self.assert_success(r)
-        r = self.session.get(self.url("/api/v1/servers/localhost/zones/" + revzone)).json()
-        revsets = [s for s in r['rrsets'] if s['type'] == 'PTR']
-        print(revsets)
-        self.assertEquals(revsets, [{
-            u'name': u'2.0.2.192.in-addr.arpa.',
-            u'ttl': 3600,
-            u'type': u'PTR',
-            u'comments': [],
-            u'records': [{
-                u'content': name,
-                u'disabled': False,
-            }],
-        }])
-        # with SOA-EDIT-API DEFAULT on the revzone, the serial should now be higher.
-        self.assertGreater(r['serial'], revzonedata['serial'])
-
-    def test_zone_auto_ptr_ipv6_update(self):
-        # 2001:DB8::bb:aa
-        revzone = '8.b.d.0.1.0.0.2.ip6.arpa.'
-        _, _, revzonedata = self.create_zone(name=revzone)
-        name, payload, zone = self.create_zone()
-        rrset = {
-            'changetype': 'replace',
-            'name': name,
-            'type': 'AAAA',
-            'ttl': 3600,
-            'records': [
-                {
-                    "content": '2001:DB8::bb:aa',
-                    "disabled": False,
-                    "set-ptr": True
-                }
-            ]
-        }
-        payload = {'rrsets': [rrset]}
-        r = self.session.patch(
-            self.url("/api/v1/servers/localhost/zones/" + name),
-            data=json.dumps(payload),
-            headers={'content-type': 'application/json'})
-        self.assert_success(r)
-        r = self.session.get(self.url("/api/v1/servers/localhost/zones/" + revzone)).json()
-        revsets = [s for s in r['rrsets'] if s['type'] == 'PTR']
-        print(revsets)
-        self.assertEquals(revsets, [{
-            u'name': u'a.a.0.0.b.b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.',
-            u'ttl': 3600,
-            u'type': u'PTR',
-            u'comments': [],
-            u'records': [{
-                u'content': name,
-                u'disabled': False,
-            }],
-        }])
-        # with SOA-EDIT-API DEFAULT on the revzone, the serial should now be higher.
-        self.assertGreater(r['serial'], revzonedata['serial'])
-
     def test_search_rr_exact_zone(self):
         name = unique_zone_name()
         self.create_zone(name=name, serial=22, soa_edit_api='')
@@ -1851,7 +1739,7 @@ $ORIGIN %NAME%
             {u'content': u'ns2.example.com.',
              u'zone_id': name, u'zone': name, u'object_type': u'record', u'disabled': False,
              u'ttl': 3600, u'type': u'NS', u'name': name},
-            {u'content': u'a.misconfigured.powerdns.server. hostmaster.'+name+' 22 10800 3600 604800 3600',
+            {u'content': u'a.misconfigured.dns.server.invalid. hostmaster.'+name+' 22 10800 3600 604800 3600',
              u'zone_id': name, u'zone': name, u'object_type': u'record', u'disabled': False,
              u'ttl': 3600, u'type': u'SOA', u'name': name},
         ])
@@ -1881,7 +1769,7 @@ $ORIGIN %NAME%
             {u'content': u'ns2.example.com.',
              u'zone_id': name, u'zone': name, u'object_type': u'record', u'disabled': False,
              u'ttl': 3600, u'type': u'NS', u'name': name},
-            {u'content': u'a.misconfigured.powerdns.server. hostmaster.'+name+' 22 10800 3600 604800 3600',
+            {u'content': u'a.misconfigured.dns.server.invalid. hostmaster.'+name+' 22 10800 3600 604800 3600',
              u'zone_id': name, u'zone': name, u'object_type': u'record', u'disabled': False,
              u'ttl': 3600, u'type': u'SOA', u'name': name},
         ])
@@ -2119,7 +2007,7 @@ class AuthRootZone(ApiTestCase, AuthZonesHelperMixin):
         rec = get_first_rec(data, '.', 'SOA')
         self.assertEquals(
             rec['content'],
-            "a.misconfigured.powerdns.server. hostmaster. " + str(payload['serial']) +
+            "a.misconfigured.dns.server.invalid. hostmaster. " + str(payload['serial']) +
             " 10800 3600 604800 3600"
         )
         # Regression test: verify zone list works

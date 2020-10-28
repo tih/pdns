@@ -403,6 +403,18 @@ See the :ref:`metadata-publish-cdnskey-publish-cds` docs for more information.
 The default PUBLISH-CDS value for zones that do not have one individually specified.
 See the :ref:`metadata-publish-cdnskey-publish-cds` docs for more information.
 
+.. _setting-default-soa-content:
+
+``default-soa-content``
+-----------------------
+
+-  String
+-  Default: a.misconfigured.dns.server.invalid hostmaster.@ 0 10800 3600 604800 3600
+
+.. versionadded:: 4.4.0
+
+This value is used when a zone is created without providing a SOA record. @ is replaced by the zone name.
+
 .. _setting-default-soa-edit:
 
 ``default-soa-edit``
@@ -434,7 +446,7 @@ Overrides :ref:`setting-default-soa-edit`
 -  String
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Mail address to insert in the SOA record if none set in the backend.
 
@@ -444,10 +456,10 @@ Mail address to insert in the SOA record if none set in the backend.
 --------------------
 
 -  String
--  Default: a.misconfigured.powerdns.server
+-  Default: a.misconfigured.dns.server.invalid
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Name to insert in the SOA record if none set in the backend.
 
@@ -815,9 +827,6 @@ Fail to start if one or more of the
 
 ``local-ipv6``
 --------------
-.. versionchanged:: 4.4.0
-  removed, use :ref:`setting-local-address`
-
 .. deprecated:: 4.3.0
   This setting has been deprecated, use :ref:`setting-local-address`
 
@@ -1309,7 +1318,8 @@ the network).
 ``query-local-address6``
 ------------------------
 .. deprecated:: 4.4.0
-  Removed. Use :ref:`setting-query-local-address`.
+  Use :ref:`setting-query-local-address`. The default has been changed
+  from '::' to unset.
 
 -  IPv6 Address
 -  Default: unset
@@ -1544,7 +1554,7 @@ See :ref:`metadata-slave-renotify` to set this per-zone.
 -  Default: 604800
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Default :ref:`types-soa` expire.
 
@@ -1557,7 +1567,7 @@ Default :ref:`types-soa` expire.
 -  Default: 3600
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Default :ref:`types-soa` minimum ttl.
 
@@ -1570,7 +1580,7 @@ Default :ref:`types-soa` minimum ttl.
 -  Default: 10800
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Default :ref:`types-soa` refresh.
 
@@ -1583,7 +1593,7 @@ Default :ref:`types-soa` refresh.
 -  Default: 3600
 
 .. deprecated:: 4.2.0
-  This setting has been deprecated and will be removed in 4.4.0
+  This setting has been removed in 4.4.0
 
 Default :ref:`types-soa` retry.
 
@@ -1720,6 +1730,25 @@ of reflection attacks. Maximum value is 65535, but values above
 
   1232 is the largest number of payload bytes that can fit in the smallest IPv6 packet.
   IPv6 has a minimum MTU of 1280 bytes (:rfc:`RFC 8200, section 5 <8200#section-5>`), minus 40 bytes for the IPv6 header, minus 8 bytes for the UDP header gives 1232, the maximum payload size for the DNS response.
+
+.. _setting-upgrade-unknown-types:
+
+``upgrade-unknown-types``
+-------------------------
+
+-  Boolean
+-  Default: no
+
+.. versionadded:: 4.4.0
+
+Transparently upgrade records stored as `TYPE#xxx` and RFC 3597 (hex format)
+contents, if the type is natively supported.
+When this is disabled, records stored in this format cannot be served.
+
+Recommendation: keep disabled for better performance.
+Enable for testing PowerDNS upgrades, without changing stored records.
+
+This option is supported by the bind and Generic SQL backends. 
 
 .. _setting-version-string:
 

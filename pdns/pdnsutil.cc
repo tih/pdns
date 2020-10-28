@@ -102,6 +102,7 @@ static void loadMainConfig(const std::string& configdir)
   ::arg().set("max-signature-cache-entries", "Maximum number of signatures cache entries")="";
   ::arg().set("rng", "Specify random number generator to use. Valid values are auto,sodium,openssl,getrandom,arc4random,urandom.")="auto";
   ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
+  ::arg().setSwitch("upgrade-unknown-types","Transparently upgrade known TYPExxx records. Recommended to keep off, except for PowerDNS upgrades until data sources are cleaned up")="no";
   ::arg().laxFile(configname.c_str());
 
   if(!::arg()["load-modules"].empty()) {
@@ -126,12 +127,7 @@ static void loadMainConfig(const std::string& configdir)
   ::arg().set("cache-ttl","Seconds to store packets in the PacketCache")="20";
   ::arg().set("negquery-cache-ttl","Seconds to store negative query results in the QueryCache")="60";
   ::arg().set("query-cache-ttl","Seconds to store query results in the QueryCache")="20";
-  ::arg().set("default-soa-name","name to insert in the SOA record if none set in the backend")="a.misconfigured.powerdns.server";
-  ::arg().set("default-soa-mail","mail address to insert in the SOA record if none set in the backend")="";
-  ::arg().set("soa-refresh-default","Default SOA refresh")="10800";
-  ::arg().set("soa-retry-default","Default SOA retry")="3600";
-  ::arg().set("soa-expire-default","Default SOA expire")="604800";
-  ::arg().set("soa-minimum-ttl","Default SOA minimum ttl")="3600";
+  ::arg().set("default-soa-content","Default SOA content")="a.misconfigured.dns.server.invalid hostmaster.@ 0 10800 3600 604800 3600";
   ::arg().set("chroot","Switch to this chroot jail")="";
   ::arg().set("dnssec-key-cache-ttl","Seconds to cache DNSSEC keys from the database")="30";
   ::arg().set("domain-metadata-cache-ttl","Seconds to cache domain metadata from the database")="60";
@@ -1236,12 +1232,10 @@ static int createZone(const DNSName &zone, const DNSName& nsname) {
   rr.ttl = ::arg().asNum("default-ttl");
   rr.qtype = "SOA";
 
-  string soa = (boost::format("%s %s 1")
-                % (nsname.empty() ? ::arg()["default-soa-name"] : nsname.toString())
-                % (::arg().isEmpty("default-soa-mail") ? (DNSName("hostmaster.") + zone).toString() : ::arg()["default-soa-mail"])
-  ).str();
+  string soa = ::arg()["default-soa-content"];
+  boost::replace_all(soa, "@", zone.toStringNoDot());
   SOAData sd;
-  fillSOAData(soa, sd);  // fills out default values for us
+  fillSOAData(soa, sd);
   rr.content = makeSOAContent(sd)->getZoneRepresentation(true);
   rr.domain_id = di.id;
   di.backend->startTransaction(zone, di.id);
@@ -2176,7 +2170,8 @@ try
     cout<<"set-account ZONE ACCOUNT           Change the account (owner) of ZONE to ACCOUNT"<<endl;
     cout<<"set-nsec3 ZONE ['PARAMS' [narrow]] Enable NSEC3 with PARAMS. Optionally narrow"<<endl;
     cout<<"set-presigned ZONE                 Use presigned RRSIGs from storage"<<endl;
-    cout<<"set-publish-cdnskey ZONE           Enable sending CDNSKEY responses for ZONE"<<endl;
+    cout<<"set-publish-cdnskey ZONE [delete]  Enable sending CDNSKEY responses for ZONE. Add 'delete' to publish a CDNSKEY with a"<<endl;
+    cout<<"                                   DNSSEC delete algorithm"<<endl;
     cout<<"set-publish-cds ZONE [DIGESTALGOS] Enable sending CDS responses for ZONE, using DIGESTALGOS as signature algorithms"<<endl;
     cout<<"                                   DIGESTALGOS should be a comma separated list of numbers, it is '2' by default"<<endl;
     cout<<"add-meta ZONE KIND VALUE           Add zone metadata, this adds to the existing KIND"<<endl;
@@ -2767,11 +2762,11 @@ try
     return 0;
   }
   else if(cmds[0]=="set-publish-cdnskey") {
-    if(cmds.size() < 2) {
-      cerr<<"Syntax: pdnsutil set-publish-cdnskey ZONE"<<endl;
+    if(cmds.size() < 2 || (cmds.size() == 3 && cmds[2] != "delete")) {
+      cerr<<"Syntax: pdnsutil set-publish-cdnskey ZONE [delete]"<<endl;
       return 0;
     }
-    if (! dk.setPublishCDNSKEY(DNSName(cmds[1]))) {
+    if (! dk.setPublishCDNSKEY(DNSName(cmds[1]), (cmds.size() == 3 && cmds[2] == "delete"))) {
       cerr << "Could not set publishing for CDNSKEY records for "<< cmds[1]<<endl;
       return 1;
     }

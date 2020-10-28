@@ -389,8 +389,7 @@ static bool isHandlerThread()
 
 static void handleTCPClientWritable(int fd, FDMultiplexer::funcparam_t& var);
 
-// -1 is error, 0 is timeout, 1 is success
-int asendtcp(const string& data, Socket* sock)
+LWResult::Result asendtcp(const string& data, Socket* sock)
 {
   PacketID pident;
   pident.sock=sock;
@@ -399,21 +398,25 @@ int asendtcp(const string& data, Socket* sock)
   t_fdm->addWriteFD(sock->getHandle(), handleTCPClientWritable, pident);
   string packet;
 
-  int ret=MT->waitEvent(pident, &packet, g_networkTimeoutMsec);
-
-  if(!ret || ret==-1) { // timeout
+  int ret = MT->waitEvent(pident, &packet, g_networkTimeoutMsec);
+  if (ret == 0) { //timeout
     t_fdm->removeWriteFD(sock->getHandle());
+    return LWResult::Result::Timeout;
   }
-  else if(packet.size() !=data.size()) { // main loop tells us what it sent out, or empty in case of an error
-    return -1;
+  else if (ret == -1) { // error
+    t_fdm->removeWriteFD(sock->getHandle());
+    return LWResult::Result::PermanentError;
   }
-  return ret;
+  else if (packet.size() != data.size()) { // main loop tells us what it sent out, or empty in case of an error
+    return LWResult::Result::PermanentError;
+  }
+
+  return LWResult::Result::Success;
 }
 
 static void handleTCPClientReadable(int fd, FDMultiplexer::funcparam_t& var);
 
-// -1 is error, 0 is timeout, 1 is success
-int arecvtcp(string& data, size_t len, Socket* sock, bool incompleteOkay)
+LWResult::Result arecvtcp(string& data, const size_t len, Socket* sock, const bool incompleteOkay)
 {
   data.clear();
   PacketID pident;
@@ -422,15 +425,20 @@ int arecvtcp(string& data, size_t len, Socket* sock, bool incompleteOkay)
   pident.inIncompleteOkay=incompleteOkay;
   t_fdm->addReadFD(sock->getHandle(), handleTCPClientReadable, pident);
 
-  int ret=MT->waitEvent(pident,&data, g_networkTimeoutMsec);
-  if(!ret || ret==-1) { // timeout
+  int ret = MT->waitEvent(pident,&data, g_networkTimeoutMsec);
+  if (ret == 0) {
     t_fdm->removeReadFD(sock->getHandle());
+    return LWResult::Result::Timeout;
   }
-  else if(data.empty()) {// error, EOF or other
-    return -1;
+  else if (ret == -1) {
+    t_fdm->removeWriteFD(sock->getHandle());
+    return LWResult::Result::PermanentError;
+  }
+  else if (data.empty()) {// error, EOF or other
+    return LWResult::Result::PermanentError;
   }
 
-  return ret;
+  return LWResult::Result::Success;
 }
 
 static void handleGenUDPQueryResponse(int fd, FDMultiplexer::funcparam_t& var)
@@ -528,12 +536,12 @@ public:
   {
   }
 
-  // returning -2 means: temporary OS error (ie, out of files), -1 means error related to remote
-  int getSocket(const ComboAddress& toaddr, int* fd)
+  LWResult::Result getSocket(const ComboAddress& toaddr, int* fd)
   {
-    *fd=makeClientSocket(toaddr.sin4.sin_family);
-    if(*fd < 0) // temporary error - receive exception otherwise
-      return -2;
+    *fd = makeClientSocket(toaddr.sin4.sin_family);
+    if(*fd < 0) { // temporary error - receive exception otherwise
+      return LWResult::Result::OSLimitError;
+    }
 
     if(connect(*fd, (struct sockaddr*)(&toaddr), toaddr.getSocklen()) < 0) {
       int err = errno;
@@ -544,13 +552,15 @@ public:
         g_log<<Logger::Error<<"Error closing UDP socket after connect() failed: "<<e.reason<<endl;
       }
 
-      if(err==ENETUNREACH) // Seth "My Interfaces Are Like A Yo Yo" Arnold special
-        return -2;
-      return -1;
+      if (err == ENETUNREACH) { // Seth "My Interfaces Are Like A Yo Yo" Arnold special
+        return LWResult::Result::OSLimitError;
+      }
+
+      return LWResult::Result::PermanentError;
     }
 
     d_numsocks++;
-    return 0;
+    return LWResult::Result::Success;
   }
 
   // return a socket to the pool, or simply erase it
@@ -629,9 +639,8 @@ private:
 static thread_local std::unique_ptr<UDPClientSocks> t_udpclientsocks;
 
 /* these two functions are used by LWRes */
-// -2 is OS error, -1 is error that depends on the remote, > 0 is success
-int asendto(const char *data, size_t len, int flags,
-            const ComboAddress& toaddr, uint16_t id, const DNSName& domain, uint16_t qtype, int* fd)
+LWResult::Result asendto(const char *data, size_t len, int flags,
+                         const ComboAddress& toaddr, uint16_t id, const DNSName& domain, uint16_t qtype, int* fd)
 {
 
   PacketID pident;
@@ -651,32 +660,34 @@ int asendto(const char *data, size_t len, int flags,
       */
       chain.first->key.chain.insert(id); // we can chain
       *fd=-1;                            // gets used in waitEvent / sendEvent later on
-      return 1;
+      return LWResult::Result::Success;
     }
   }
 
-  int ret=t_udpclientsocks->getSocket(toaddr, fd);
-  if(ret < 0)
+  auto ret = t_udpclientsocks->getSocket(toaddr, fd);
+  if (ret != LWResult::Result::Success) {
     return ret;
+  }
 
   pident.fd=*fd;
   pident.id=id;
 
   t_fdm->addReadFD(*fd, handleUDPServerResponse, pident);
-  ret = send(*fd, data, len, 0);
+  ssize_t sent = send(*fd, data, len, 0);
 
   int tmp = errno;
 
-  if(ret < 0)
+  if (sent < 0) {
     t_udpclientsocks->returnSocket(*fd);
+    errno = tmp; // this is for logging purposes only
+    return LWResult::Result::PermanentError;
+  }
 
-  errno = tmp; // this is for logging purposes only
-  return ret;
+  return LWResult::Result::Success;
 }
 
-// -1 is error, 0 is timeout, 1 is success
-int arecvfrom(std::string& packet, int flags, const ComboAddress& fromaddr, size_t *d_len,
-              uint16_t id, const DNSName& domain, uint16_t qtype, int fd, const struct timeval* now)
+LWResult::Result arecvfrom(std::string& packet, int flags, const ComboAddress& fromaddr, size_t *d_len,
+                           uint16_t id, const DNSName& domain, uint16_t qtype, int fd, const struct timeval* now)
 {
   static optional<unsigned int> nearMissLimit;
   if(!nearMissLimit)
@@ -692,25 +703,30 @@ int arecvfrom(std::string& packet, int flags, const ComboAddress& fromaddr, size
   int ret=MT->waitEvent(pident, &packet, g_networkTimeoutMsec, now);
 
   /* -1 means error, 0 means timeout, 1 means a result from handleUDPServerResponse() which might still be an error */
-  if(ret > 0) {
+  if (ret > 0) {
     /* handleUDPServerResponse() will close the socket for us no matter what */
-    if(packet.empty()) // means "error"
-      return -1;
+    if (packet.empty()) { // means "error"
+      return LWResult::Result::PermanentError;
+    }
 
     *d_len=packet.size();
 
-    if(*nearMissLimit && pident.nearMisses > *nearMissLimit) {
+    if (*nearMissLimit && pident.nearMisses > *nearMissLimit) {
       g_log<<Logger::Error<<"Too many ("<<pident.nearMisses<<" > "<<*nearMissLimit<<") bogus answers for '"<<domain<<"' from "<<fromaddr.toString()<<", assuming spoof attempt."<<endl;
       g_stats.spoofCount++;
-      return -1;
+      return LWResult::Result::PermanentError;
     }
+
+    return LWResult::Result::Success;
   }
   else {
     /* getting there means error or timeout, it's up to us to close the socket */
-    if(fd >= 0)
+    if (fd >= 0) {
       t_udpclientsocks->returnSocket(fd);
+    }
   }
-  return ret;
+
+  return ret == 0 ? LWResult::Result::Timeout : LWResult::Result::PermanentError;
 }
 
 static void writePid(void)
@@ -3201,6 +3217,14 @@ static void usr2Handler(int)
   ::arg().set("quiet")=g_quiet ? "" : "no";
 }
 
+static int ratePercentage(uint64_t nom, uint64_t denom)
+{
+  if (denom == 0) {
+    return 0;
+  }
+  return round(100.0 * nom / denom);
+}
+
 static void doStats(void)
 {
   static time_t lastOutputTime;
@@ -3217,7 +3241,7 @@ static void doStats(void)
     g_log<<Logger::Notice<<"stats: "<<g_stats.qcounter<<" questions, "<<
       cacheSize << " cache entries, "<<
       negCacheSize<<" negative entries, "<<
-      (int)((cacheHits*100.0)/(cacheHits+cacheMisses))<<"% cache hits"<<endl;
+      ratePercentage(cacheHits, cacheHits + cacheMisses)<<"% cache hits"<<endl;
     g_log << Logger::Notice<< "stats: cache contended/acquired " << rc_stats.first << '/' << rc_stats.second << " = " << r << '%' << endl;
 
     g_log<<Logger::Notice<<"stats: throttle map: "
@@ -3225,17 +3249,16 @@ static void doStats(void)
       << broadcastAccFunction<uint64_t>(pleaseGetNsSpeedsSize)<<", failed ns: "
       << broadcastAccFunction<uint64_t>(pleaseGetFailedServersSize)<<", ednsmap: "
       <<broadcastAccFunction<uint64_t>(pleaseGetEDNSStatusesSize)<<endl;
-    g_log<<Logger::Notice<<"stats: outpacket/query ratio "<<(int)(SyncRes::s_outqueries*100.0/SyncRes::s_queries)<<"%";
-    g_log<<Logger::Notice<<", "<<(int)(SyncRes::s_throttledqueries*100.0/(SyncRes::s_outqueries+SyncRes::s_throttledqueries))<<"% throttled, "
+    g_log<<Logger::Notice<<"stats: outpacket/query ratio "<<ratePercentage(SyncRes::s_outqueries, SyncRes::s_queries)<<"%";
+    g_log<<Logger::Notice<<", "<<ratePercentage(SyncRes::s_throttledqueries, SyncRes::s_outqueries+SyncRes::s_throttledqueries)<<"% throttled, "
      <<SyncRes::s_nodelegated<<" no-delegation drops"<<endl;
     g_log<<Logger::Notice<<"stats: "<<SyncRes::s_tcpoutqueries<<" outgoing tcp connections, "<<
       broadcastAccFunction<uint64_t>(pleaseGetConcurrentQueries)<<" queries running, "<<SyncRes::s_outgoingtimeouts<<" outgoing timeouts"<<endl;
 
-    //g_log<<Logger::Notice<<"stats: "<<g_stats.ednsPingMatches<<" ping matches, "<<g_stats.ednsPingMismatches<<" mismatches, "<<
-      //g_stats.noPingOutQueries<<" outqueries w/o ping, "<< g_stats.noEdnsOutQueries<<" w/o EDNS"<<endl;
-
-    g_log<<Logger::Notice<<"stats: " <<  broadcastAccFunction<uint64_t>(pleaseGetPacketCacheSize) <<
-    " packet cache entries, "<<(int)(100.0*broadcastAccFunction<uint64_t>(pleaseGetPacketCacheHits)/SyncRes::s_queries) << "% packet cache hits"<<endl;
+    uint64_t pcSize = broadcastAccFunction<uint64_t>(pleaseGetPacketCacheSize);
+    uint64_t pcHits = broadcastAccFunction<uint64_t>(pleaseGetPacketCacheHits);
+    g_log<<Logger::Notice<<"stats: " <<  pcSize <<
+      " packet cache entries, "<< ratePercentage(pcHits, SyncRes::s_queries) << "% packet cache hits"<<endl;
 
     size_t idx = 0;
     for (const auto& threadInfo : s_threadInfos) {
