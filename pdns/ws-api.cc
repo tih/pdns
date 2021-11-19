@@ -114,7 +114,21 @@ void apiDiscovery(HttpRequest* req, HttpResponse* resp) {
   };
   Json doc = Json::array { version1 };
 
-  resp->setBody(doc);
+  resp->setJsonBody(doc);
+}
+
+void apiDiscoveryV1(HttpRequest* req, HttpResponse* resp) {
+  if(req->method != "GET")
+    throw HttpMethodNotAllowedException();
+
+  Json version1 = Json::object {
+    { "server_url", "/api/v1/servers{/server}" },
+    { "api_features", Json::array {} }
+  };
+  Json doc = Json::array { version1 };
+
+  resp->setJsonBody(doc);
+
 }
 
 void apiServer(HttpRequest* req, HttpResponse* resp) {
@@ -122,14 +136,14 @@ void apiServer(HttpRequest* req, HttpResponse* resp) {
     throw HttpMethodNotAllowedException();
 
   Json doc = Json::array {getServerDetail()};
-  resp->setBody(doc);
+  resp->setJsonBody(doc);
 }
 
 void apiServerDetail(HttpRequest* req, HttpResponse* resp) {
   if(req->method != "GET")
     throw HttpMethodNotAllowedException();
 
-  resp->setBody(getServerDetail());
+  resp->setJsonBody(getServerDetail());
 }
 
 void apiServerConfig(HttpRequest* req, HttpResponse* resp) {
@@ -151,7 +165,7 @@ void apiServerConfig(HttpRequest* req, HttpResponse* resp) {
       { "value", value },
     });
   }
-  resp->setBody(doc);
+  resp->setJsonBody(doc);
 }
 
 void apiServerStatistics(HttpRequest* req, HttpResponse* resp) {
@@ -172,7 +186,7 @@ void apiServerStatistics(HttpRequest* req, HttpResponse* resp) {
       { "value", std::to_string(*stat) },
     });
 
-    resp->setBody(doc);
+    resp->setJsonBody(doc);
 
     return;
   }
@@ -273,7 +287,7 @@ void apiServerStatistics(HttpRequest* req, HttpResponse* resp) {
   }
 #endif
 
-  resp->setBody(doc);
+  resp->setJsonBody(doc);
 }
 
 DNSName apiNameToDNSName(const string& name) {
@@ -338,14 +352,14 @@ string apiZoneNameToId(const DNSName& dname) {
   string name=dname.toString();
   ostringstream ss;
 
-  for(string::const_iterator iter = name.begin(); iter != name.end(); ++iter) {
-    if ((*iter >= 'A' && *iter <= 'Z') ||
-        (*iter >= 'a' && *iter <= 'z') ||
-        (*iter >= '0' && *iter <= '9') ||
-        (*iter == '.') || (*iter == '-')) {
-      ss << *iter;
+  for(char iter : name) {
+    if ((iter >= 'A' && iter <= 'Z') ||
+        (iter >= 'a' && iter <= 'z') ||
+        (iter >= '0' && iter <= '9') ||
+        (iter == '.') || (iter == '-')) {
+      ss << iter;
     } else {
-      ss << (boost::format("=%02X") % (int)(*iter));
+      ss << (boost::format("=%02X") % (int)iter);
     }
   }
 

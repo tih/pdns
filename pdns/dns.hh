@@ -76,9 +76,6 @@ public:
   static std::string to_s(uint8_t opcode);
 };
 
-// enum for policy decisions, used by both auth and recursor. Not all values supported everywhere.
-namespace PolicyDecision { enum returnTypes { PASS=-1, DROP=-2, TRUNCATE=-3 }; };
-
 //! This class represents a resource record
 class DNSResourceRecord
 {
@@ -93,6 +90,7 @@ public:
 
   // data
   DNSName qname; //!< the name of this record, for example: www.powerdns.com
+  DNSName ordername;
   DNSName wildcardname;
   string content; //!< what this record points to. Example: 10.1.2.3
 
@@ -238,12 +236,10 @@ inline uint16_t * getFlagsFromDNSHeader(struct dnsheader * dh)
 
 extern time_t s_starttime;
 
-uint32_t hashQuestion(const char* packet, uint16_t len, uint32_t init);
+uint32_t hashQuestion(const uint8_t* packet, uint16_t len, uint32_t init);
 
 struct TSIGTriplet
 {
   DNSName name, algo;
   string secret;
 };
-
-string &attodot(string &str);  //!< for when you need to insert an email address in the SOA

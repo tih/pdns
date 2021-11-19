@@ -80,7 +80,7 @@ struct ServiceTuple
 };
 void parseService(const string &descr, ServiceTuple &st);
 
-template <typename Container>
+template<typename Container>
 void
 stringtok (Container &container, string const &in,
            const char * const delimiters = " \t\n")
@@ -136,10 +136,10 @@ vstringtok (Container &container, string const &in,
 
     // push token
     if (j == string::npos) {
-      container.push_back (make_pair(i, len));
+      container.emplace_back(i, len);
       return;
     } else
-      container.push_back (make_pair(i, j));
+      container.emplace_back(i, j);
 
     // set up for next loop
     i = j + 1;
@@ -149,8 +149,8 @@ vstringtok (Container &container, string const &in,
 size_t writen2(int fd, const void *buf, size_t count);
 inline size_t writen2(int fd, const std::string &s) { return writen2(fd, s.data(), s.size()); }
 size_t readn2(int fd, void* buffer, size_t len);
-size_t readn2WithTimeout(int fd, void* buffer, size_t len, int idleTimeout, int totalTimeout=0);
-size_t writen2WithTimeout(int fd, const void * buffer, size_t len, int timeout);
+size_t readn2WithTimeout(int fd, void* buffer, size_t len, const struct timeval& idleTimeout, const struct timeval& totalTimeout={0,0}, bool allowIncomplete=false);
+size_t writen2WithTimeout(int fd, const void * buffer, size_t len, const struct timeval& timeout);
 
 void toLowerInPlace(string& str);
 const string toLower(const string &upper);
@@ -304,6 +304,8 @@ inline void unixDie(const string &why)
 }
 
 string makeHexDump(const string& str);
+//! Convert the hexstring in to a byte string
+string makeBytesFromHex(const string &in);
 
 void normalizeTV(struct timeval& tv);
 const struct timeval operator+(const struct timeval& lhs, const struct timeval& rhs);
@@ -312,10 +314,18 @@ inline float makeFloat(const struct timeval& tv)
 {
   return tv.tv_sec + tv.tv_usec/1000000.0f;
 }
+inline uint64_t uSec(const struct timeval& tv)
+{
+  return tv.tv_sec * 1000000 + tv.tv_usec;
+}
 
 inline bool operator<(const struct timeval& lhs, const struct timeval& rhs)
 {
-  return make_pair(lhs.tv_sec, lhs.tv_usec) < make_pair(rhs.tv_sec, rhs.tv_usec);
+  return tie(lhs.tv_sec, lhs.tv_usec) < tie(rhs.tv_sec, rhs.tv_usec);
+}
+inline bool operator<=(const struct timeval& lhs, const struct timeval& rhs)
+{
+  return tie(lhs.tv_sec, lhs.tv_usec) <= tie(rhs.tv_sec, rhs.tv_usec);
 }
 
 inline bool operator<(const struct timespec& lhs, const struct timespec& rhs)
@@ -485,7 +495,7 @@ public:
   {
   }
  
-  bool match(string::const_iterator mi, string::const_iterator mend, string::const_iterator vi, string::const_iterator vend)
+  bool match(string::const_iterator mi, string::const_iterator mend, string::const_iterator vi, string::const_iterator vend) const
   {
     for(;;++mi) {
       if (mi == mend) {
@@ -494,8 +504,8 @@ public:
         if (vi == vend) return false;
         ++vi;
       } else if (*mi == '*') {
-        while(*mi == '*') ++mi;
-        if (mi == d_mask.end()) return true;
+        while(mi != mend && *mi == '*') ++mi;
+        if (mi == mend) return true;
         while(vi != vend) {
           if (match(mi,mend,vi,vend)) return true;
           ++vi;
@@ -514,17 +524,17 @@ public:
     }
   }
 
-  bool match(const string& value) {
+  bool match(const string& value) const {
     return match(d_mask.begin(), d_mask.end(), value.begin(), value.end());
   }
 
-  bool match(const DNSName& name) {
+  bool match(const DNSName& name) const {
     return match(name.toStringNoDot());
   }
 
 private:
-  string d_mask;
-  bool d_fold;
+  const string d_mask;
+  const bool d_fold;
 };
 
 union ComboAddress;
@@ -557,6 +567,8 @@ size_t getPipeBufferSize(int fd);
 bool setPipeBufferSize(int fd, size_t size);
 
 uint64_t udpErrorStats(const std::string& str);
+uint64_t udp6ErrorStats(const std::string& str);
+uint64_t tcpErrorStats(const std::string& str);
 uint64_t getRealMemoryUsage(const std::string&);
 uint64_t getSpecialMemoryUsage(const std::string&);
 uint64_t getOpenFileDescriptors(const std::string&);
@@ -565,12 +577,6 @@ uint64_t getCPUTimeSystem(const std::string&);
 uint64_t getCPUIOWait(const std::string&);
 uint64_t getCPUSteal(const std::string&);
 std::string getMACAddress(const ComboAddress& ca);
-template<typename T, typename... Args>
-std::unique_ptr<T> make_unique(Args&&... args)
-{
-    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-}
-
 
 template<typename T>
 const T& defTer(const T& a, const T& b)
@@ -586,18 +592,21 @@ T valueOrEmpty(const P val) {
 
 
 // I'm not very OCD, but I appreciate loglines like "processing 1 delta", "processing 2 deltas" :-)
-template <typename Integer>
-const char* addS(Integer siz, typename std::enable_if<std::is_integral<Integer>::value>::type*P=0)
+template <typename Integer,
+typename std::enable_if_t<std::is_integral<Integer>::value, bool> = true>
+const char* addS(Integer siz, const char* singular = "", const char *plural = "s")
 {
-  if(!siz || siz > 1)
-    return "s";
-  else return "";
+  if (siz == 1) {
+    return singular;
+  }
+  return plural;
 }
 
-template<typename C>
-const char* addS(const C& c, typename std::enable_if<std::is_class<C>::value>::type*P=0)
+template <typename C,
+typename std::enable_if_t<std::is_class<C>::value, bool> = true>
+const char* addS(const C& c, const char* singular = "", const char *plural = "s")
 {
-  return addS(c.size());
+  return addS(c.size(), singular, plural);
 }
 
 template<typename C>
@@ -624,3 +633,60 @@ std::vector<ComboAddress> getResolvers(const std::string& resolvConfPath);
 DNSName reverseNameFromIP(const ComboAddress& ip);
 
 std::string getCarbonHostName();
+size_t parseRFC1035CharString(const std::string &in, std::string &val); // from ragel
+size_t parseSVCBValueListFromParsedRFC1035CharString(const std::string &in, vector<std::string> &val); // from ragel
+size_t parseSVCBValueList(const std::string &in, vector<std::string> &val);
+
+std::string makeLuaString(const std::string& in);
+
+bool constantTimeStringEquals(const std::string& a, const std::string& b);
+
+// Used in NID and L64 records
+struct NodeOrLocatorID { uint8_t content[8]; };
+
+struct FDWrapper
+{
+  FDWrapper()
+  {
+  }
+
+  FDWrapper(int desc): d_fd(desc)
+  {
+  }
+
+  ~FDWrapper()
+  {
+    if (d_fd != -1) {
+      close(d_fd);
+      d_fd = -1;
+    }
+  }
+
+  FDWrapper(FDWrapper&& rhs): d_fd(rhs.d_fd)
+  {
+    rhs.d_fd = -1;
+  }
+
+  FDWrapper& operator=(FDWrapper&& rhs)
+  {
+    if (d_fd != -1) {
+      close(d_fd);
+    }
+    d_fd = rhs.d_fd;
+    rhs.d_fd = -1;
+    return *this;
+  }
+
+  int getHandle() const
+  {
+    return d_fd;
+  }
+
+  operator int() const
+  {
+    return d_fd;
+  }
+
+private:
+  int d_fd{-1};
+};

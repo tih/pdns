@@ -76,7 +76,7 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_UpdateMasterOfZoneQuery=getArg("update-master-query");
   d_UpdateKindOfZoneQuery=getArg("update-kind-query");
   d_UpdateSerialOfZoneQuery=getArg("update-serial-query");
-  d_UpdateLastCheckofZoneQuery=getArg("update-lastcheck-query");
+  d_UpdateLastCheckOfZoneQuery=getArg("update-lastcheck-query");
   d_UpdateAccountOfZoneQuery=getArg("update-account-query");
   d_InfoOfAllMasterDomainsQuery=getArg("info-all-master-query");
   d_DeleteDomainQuery=getArg("delete-domain-query");
@@ -129,66 +129,66 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_SearchRecordsQuery = getArg("search-records-query");
   d_SearchCommentsQuery = getArg("search-comments-query");
 
-  d_query_stmt = NULL;
-  d_NoIdQuery_stmt = NULL;
-  d_IdQuery_stmt = NULL;
-  d_ANYNoIdQuery_stmt = NULL;
-  d_ANYIdQuery_stmt = NULL;
-  d_listQuery_stmt = NULL;
-  d_listSubZoneQuery_stmt = NULL;
-  d_InfoOfDomainsZoneQuery_stmt = NULL;
-  d_InfoOfAllSlaveDomainsQuery_stmt = NULL;
-  d_SuperMasterInfoQuery_stmt = NULL;
-  d_GetSuperMasterIPs_stmt = NULL;
-  d_AddSuperMaster_stmt = NULL;
-  d_InsertZoneQuery_stmt = NULL;
-  d_InsertRecordQuery_stmt = NULL;
-  d_InsertEmptyNonTerminalOrderQuery_stmt = NULL;
-  d_UpdateMasterOfZoneQuery_stmt = NULL;
-  d_UpdateKindOfZoneQuery_stmt = NULL;
-  d_UpdateSerialOfZoneQuery_stmt = NULL;
-  d_UpdateLastCheckofZoneQuery_stmt = NULL;
-  d_UpdateAccountOfZoneQuery_stmt = NULL;
-  d_InfoOfAllMasterDomainsQuery_stmt = NULL;
-  d_DeleteDomainQuery_stmt = NULL;
-  d_DeleteZoneQuery_stmt = NULL;
-  d_DeleteRRSetQuery_stmt = NULL;
-  d_DeleteNamesQuery_stmt = NULL;
-  d_firstOrderQuery_stmt = NULL;
-  d_beforeOrderQuery_stmt = NULL;
-  d_afterOrderQuery_stmt = NULL;
-  d_lastOrderQuery_stmt = NULL;
-  d_updateOrderNameAndAuthQuery_stmt = NULL;
-  d_updateOrderNameAndAuthTypeQuery_stmt = NULL;
-  d_nullifyOrderNameAndUpdateAuthQuery_stmt = NULL;
-  d_nullifyOrderNameAndUpdateAuthTypeQuery_stmt = NULL;
-  d_RemoveEmptyNonTerminalsFromZoneQuery_stmt = NULL;
-  d_DeleteEmptyNonTerminalQuery_stmt = NULL;
-  d_AddDomainKeyQuery_stmt = NULL;
-  d_GetLastInsertedKeyIdQuery_stmt = NULL;
-  d_ListDomainKeysQuery_stmt = NULL;
-  d_GetAllDomainMetadataQuery_stmt = NULL;
-  d_GetDomainMetadataQuery_stmt = NULL;
-  d_ClearDomainMetadataQuery_stmt = NULL;
-  d_ClearDomainAllMetadataQuery_stmt = NULL;
-  d_SetDomainMetadataQuery_stmt = NULL;
-  d_RemoveDomainKeyQuery_stmt = NULL;
-  d_ActivateDomainKeyQuery_stmt = NULL;
-  d_DeactivateDomainKeyQuery_stmt = NULL;
-  d_PublishDomainKeyQuery_stmt = NULL;
-  d_UnpublishDomainKeyQuery_stmt = NULL;
-  d_ClearDomainAllKeysQuery_stmt = NULL;
-  d_getTSIGKeyQuery_stmt = NULL;
-  d_setTSIGKeyQuery_stmt = NULL;
-  d_deleteTSIGKeyQuery_stmt = NULL;
-  d_getTSIGKeysQuery_stmt = NULL;
-  d_getAllDomainsQuery_stmt = NULL;
-  d_ListCommentsQuery_stmt = NULL;
-  d_InsertCommentQuery_stmt = NULL;
-  d_DeleteCommentRRsetQuery_stmt = NULL;
-  d_DeleteCommentsQuery_stmt = NULL;
-  d_SearchRecordsQuery_stmt = NULL;
-  d_SearchCommentsQuery_stmt = NULL;
+  d_query_stmt = nullptr;
+  d_NoIdQuery_stmt = nullptr;
+  d_IdQuery_stmt = nullptr;
+  d_ANYNoIdQuery_stmt = nullptr;
+  d_ANYIdQuery_stmt = nullptr;
+  d_listQuery_stmt = nullptr;
+  d_listSubZoneQuery_stmt = nullptr;
+  d_InfoOfDomainsZoneQuery_stmt = nullptr;
+  d_InfoOfAllSlaveDomainsQuery_stmt = nullptr;
+  d_SuperMasterInfoQuery_stmt = nullptr;
+  d_GetSuperMasterIPs_stmt = nullptr;
+  d_AddSuperMaster_stmt = nullptr;
+  d_InsertZoneQuery_stmt = nullptr;
+  d_InsertRecordQuery_stmt = nullptr;
+  d_InsertEmptyNonTerminalOrderQuery_stmt = nullptr;
+  d_UpdateMasterOfZoneQuery_stmt = nullptr;
+  d_UpdateKindOfZoneQuery_stmt = nullptr;
+  d_UpdateSerialOfZoneQuery_stmt = nullptr;
+  d_UpdateLastCheckOfZoneQuery_stmt = nullptr;
+  d_UpdateAccountOfZoneQuery_stmt = nullptr;
+  d_InfoOfAllMasterDomainsQuery_stmt = nullptr;
+  d_DeleteDomainQuery_stmt = nullptr;
+  d_DeleteZoneQuery_stmt = nullptr;
+  d_DeleteRRSetQuery_stmt = nullptr;
+  d_DeleteNamesQuery_stmt = nullptr;
+  d_firstOrderQuery_stmt = nullptr;
+  d_beforeOrderQuery_stmt = nullptr;
+  d_afterOrderQuery_stmt = nullptr;
+  d_lastOrderQuery_stmt = nullptr;
+  d_updateOrderNameAndAuthQuery_stmt = nullptr;
+  d_updateOrderNameAndAuthTypeQuery_stmt = nullptr;
+  d_nullifyOrderNameAndUpdateAuthQuery_stmt = nullptr;
+  d_nullifyOrderNameAndUpdateAuthTypeQuery_stmt = nullptr;
+  d_RemoveEmptyNonTerminalsFromZoneQuery_stmt = nullptr;
+  d_DeleteEmptyNonTerminalQuery_stmt = nullptr;
+  d_AddDomainKeyQuery_stmt = nullptr;
+  d_GetLastInsertedKeyIdQuery_stmt = nullptr;
+  d_ListDomainKeysQuery_stmt = nullptr;
+  d_GetAllDomainMetadataQuery_stmt = nullptr;
+  d_GetDomainMetadataQuery_stmt = nullptr;
+  d_ClearDomainMetadataQuery_stmt = nullptr;
+  d_ClearDomainAllMetadataQuery_stmt = nullptr;
+  d_SetDomainMetadataQuery_stmt = nullptr;
+  d_RemoveDomainKeyQuery_stmt = nullptr;
+  d_ActivateDomainKeyQuery_stmt = nullptr;
+  d_DeactivateDomainKeyQuery_stmt = nullptr;
+  d_PublishDomainKeyQuery_stmt = nullptr;
+  d_UnpublishDomainKeyQuery_stmt = nullptr;
+  d_ClearDomainAllKeysQuery_stmt = nullptr;
+  d_getTSIGKeyQuery_stmt = nullptr;
+  d_setTSIGKeyQuery_stmt = nullptr;
+  d_deleteTSIGKeyQuery_stmt = nullptr;
+  d_getTSIGKeysQuery_stmt = nullptr;
+  d_getAllDomainsQuery_stmt = nullptr;
+  d_ListCommentsQuery_stmt = nullptr;
+  d_InsertCommentQuery_stmt = nullptr;
+  d_DeleteCommentRRsetQuery_stmt = nullptr;
+  d_DeleteCommentsQuery_stmt = nullptr;
+  d_SearchRecordsQuery_stmt = nullptr;
+  d_SearchCommentsQuery_stmt = nullptr;
 }
 
 void GSQLBackend::setNotified(uint32_t domain_id, uint32_t serial)
@@ -207,25 +207,32 @@ void GSQLBackend::setNotified(uint32_t domain_id, uint32_t serial)
   }
 }
 
-void GSQLBackend::setFresh(uint32_t domain_id)
+void GSQLBackend::setLastCheck(uint32_t domain_id, time_t lastcheck)
 {
   try {
     reconnectIfNeeded();
 
-    d_UpdateLastCheckofZoneQuery_stmt->
-      bind("last_check", time(0))->
-      bind("domain_id", domain_id)->
-      execute()->
-      reset();
+    d_UpdateLastCheckOfZoneQuery_stmt->bind("last_check", lastcheck)->bind("domain_id", domain_id)->execute()->reset();
   }
   catch (SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to refresh domain_id "+itoa(domain_id)+": "+e.txtReason());
+    throw PDNSException("GSQLBackend unable to update last_check for domain_id " + itoa(domain_id) + ": " + e.txtReason());
   }
+}
+
+void GSQLBackend::setStale(uint32_t domain_id)
+{
+  setLastCheck(domain_id, 0);
+}
+
+void GSQLBackend::setFresh(uint32_t domain_id)
+{
+  setLastCheck(domain_id, time(nullptr));
 }
 
 bool GSQLBackend::setMasters(const DNSName &domain, const vector<ComboAddress> &masters)
 {
   vector<string> masters_s;
+  masters_s.reserve(masters.size());
   for (const auto& master : masters) {
     masters_s.push_back(master.toStringWithPortExcept(53));
   }
@@ -509,12 +516,12 @@ bool GSQLBackend::updateDNSSECOrderNameAndAuth(uint32_t domain_id, const DNSName
           bind("auth", auth)->
           bind("domain_id", domain_id)->
           bind("qname", qname)->
-          bind("qtype", QType(qtype).getName())->
+          bind("qtype", QType(qtype).toString())->
           execute()->
           reset();
       }
       catch(SSqlException &e) {
-        throw PDNSException("GSQLBackend unable to update ordername and auth for " + qname.toLogString() + "|" + QType(qtype).getName() + " for domain_id "+itoa(domain_id)+": "+e.txtReason());
+        throw PDNSException("GSQLBackend unable to update ordername and auth for " + qname.toLogString() + "|" + QType(qtype).toString() + " for domain_id "+itoa(domain_id)+": "+e.txtReason());
       }
     }
   } else {
@@ -540,12 +547,12 @@ bool GSQLBackend::updateDNSSECOrderNameAndAuth(uint32_t domain_id, const DNSName
           bind("auth", auth)->
           bind("domain_id", domain_id)->
           bind("qname", qname)->
-          bind("qtype", QType(qtype).getName())->
+          bind("qtype", QType(qtype).toString())->
           execute()->
           reset();
       }
       catch(SSqlException &e) {
-        throw PDNSException("GSQLBackend unable to nullify ordername and update auth for " + qname.toLogString() + "|" + QType(qtype).getName() + " for domain_id "+itoa(domain_id)+": "+e.txtReason());
+        throw PDNSException("GSQLBackend unable to nullify ordername and update auth for " + qname.toLogString() + "|" + QType(qtype).toString() + " for domain_id "+itoa(domain_id)+": "+e.txtReason());
       }
     }
   }
@@ -733,8 +740,17 @@ bool GSQLBackend::addDomainKey(const DNSName& name, const KeyData& key, int64_t&
       bind("published", key.published)->
       bind("content", key.content)->
       bind("domain", name)->
-      execute()->
-      reset();
+      execute();
+
+    if (d_AddDomainKeyQuery_stmt->hasNextRow()) {
+      SSqlStatement::row_t row;
+      d_AddDomainKeyQuery_stmt->nextRow(row);
+      id = std::stoi(row[0]);
+      d_AddDomainKeyQuery_stmt->reset();
+      return true;
+    } else {
+      d_AddDomainKeyQuery_stmt->reset();
+    }
   }
   catch (SSqlException &e) {
     throw PDNSException("GSQLBackend unable to store key for domain '"+ name.toLogString() + "': "+e.txtReason());
@@ -1110,13 +1126,13 @@ void GSQLBackend::lookup(const QType &qtype,const DNSName &qname, int domain_id,
         d_query_name = "basic-query";
         d_query_stmt = &d_NoIdQuery_stmt;
         (*d_query_stmt)->
-          bind("qtype", qtype.getName())->
+          bind("qtype", qtype.toString())->
           bind("qname", qname);
       } else {
         d_query_name = "id-query";
         d_query_stmt = &d_IdQuery_stmt;
         (*d_query_stmt)->
-          bind("qtype", qtype.getName())->
+          bind("qtype", qtype.toString())->
           bind("qname", qname)->
           bind("domain_id", domain_id);
       }
@@ -1140,9 +1156,10 @@ void GSQLBackend::lookup(const QType &qtype,const DNSName &qname, int domain_id,
       execute();
   }
   catch(SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to lookup '" + qname.toLogString() + "|" + qtype.getName() + "':"+e.txtReason());
+    throw PDNSException("GSQLBackend unable to lookup '" + qname.toLogString() + "|" + qtype.toString() + "':"+e.txtReason());
   }
 
+  d_list=false;
   d_qname=qname;
 }
 
@@ -1164,7 +1181,9 @@ bool GSQLBackend::list(const DNSName &target, int domain_id, bool include_disabl
     throw PDNSException("GSQLBackend unable to list domain '" + target.toLogString() + "': "+e.txtReason());
   }
 
+  d_list=true;
   d_qname.clear();
+
   return true;
 }
 
@@ -1186,20 +1205,28 @@ bool GSQLBackend::listSubZone(const DNSName &zone, int domain_id) {
   catch(SSqlException &e) {
     throw PDNSException("GSQLBackend unable to list SubZones for domain '" + zone.toLogString() + "': "+e.txtReason());
   }
+
+  d_list=false;
   d_qname.clear();
+
   return true;
 }
 
 bool GSQLBackend::get(DNSResourceRecord &r)
 {
-  // g_log << "GSQLBackend get() was called for "<<qtype.getName() << " record: ";
+  // g_log << "GSQLBackend get() was called for "<<qtype.toString() << " record: ";
   SSqlStatement::row_t row;
 
 skiprow:
   if((*d_query_stmt)->hasNextRow()) {
     try {
       (*d_query_stmt)->nextRow(row);
-      ASSERT_ROW_COLUMNS(d_query_name, row, 8);
+      if (!d_list) {
+        ASSERT_ROW_COLUMNS(d_query_name, row, 8); // lookup(), listSubZone()
+      }
+      else {
+        ASSERT_ROW_COLUMNS(d_query_name, row, 9); // list()
+      }
     } catch (SSqlException &e) {
       throw PDNSException("GSQLBackend get: "+e.txtReason());
     }
@@ -1216,7 +1243,7 @@ skiprow:
   } catch (SSqlException &e) {
       throw PDNSException("GSQLBackend get: "+e.txtReason());
   }
-  d_query_stmt = NULL;
+  d_query_stmt = nullptr;
   return false;
 }
 
@@ -1243,23 +1270,23 @@ bool GSQLBackend::superMasterAdd(const string &ip, const string &nameserver, con
 bool GSQLBackend::superMasterBackend(const string &ip, const DNSName &domain, const vector<DNSResourceRecord>&nsset, string *nameserver, string *account, DNSBackend **ddb)
 {
   // check if we know the ip/ns couple in the database
-  for(vector<DNSResourceRecord>::const_iterator i=nsset.begin();i!=nsset.end();++i) {
+  for(const auto & i : nsset) {
     try {
       reconnectIfNeeded();
 
       d_SuperMasterInfoQuery_stmt->
         bind("ip", ip)->
-        bind("nameserver", i->content)->
+        bind("nameserver", i.content)->
         execute()->
         getResult(d_result)->
         reset();
     }
     catch (SSqlException &e) {
-      throw PDNSException("GSQLBackend unable to search for a supermaster with IP " + ip + " and nameserver name '" + i->content + "' for domain '" + domain.toLogString() + "': "+e.txtReason());
+      throw PDNSException("GSQLBackend unable to search for a supermaster with IP " + ip + " and nameserver name '" + i.content + "' for domain '" + domain.toLogString() + "': "+e.txtReason());
     }
     if(!d_result.empty()) {
       ASSERT_ROW_COLUMNS("supermaster-query", d_result[0], 1);
-      *nameserver=i->content;
+      *nameserver=i.content;
       *account=d_result[0][0];
       *ddb=this;
       return true;
@@ -1268,9 +1295,10 @@ bool GSQLBackend::superMasterBackend(const string &ip, const DNSName &domain, co
   return false;
 }
 
-bool GSQLBackend::createDomain(const DNSName &domain, const DomainInfo::DomainKind kind, const vector<ComboAddress> &masters, const string &account)
+bool GSQLBackend::createDomain(const DNSName& domain, const DomainInfo::DomainKind kind, const vector<ComboAddress>& masters, const string& account)
 {
   vector<string> masters_s;
+  masters_s.reserve(masters.size());
   for (const auto& master : masters) {
     masters_s.push_back(master.toStringWithPortExcept(53));
   }
@@ -1278,6 +1306,7 @@ bool GSQLBackend::createDomain(const DNSName &domain, const DomainInfo::DomainKi
   try {
     reconnectIfNeeded();
 
+    // clang-format off
     d_InsertZoneQuery_stmt->
       bind("type", toUpper(DomainInfo::getKindString(kind)))->
       bind("domain", domain)->
@@ -1285,6 +1314,7 @@ bool GSQLBackend::createDomain(const DNSName &domain, const DomainInfo::DomainKi
       bind("account", account)->
       execute()->
       reset();
+    // clang-format on
   }
   catch(SSqlException &e) {
     throw PDNSException("Database error trying to insert new domain '"+domain.toLogString()+"': "+ e.txtReason());
@@ -1292,7 +1322,7 @@ bool GSQLBackend::createDomain(const DNSName &domain, const DomainInfo::DomainKi
   return true;
 }
 
-bool GSQLBackend::createSlaveDomain(const string &ip, const DNSName &domain, const string &nameserver, const string &account)
+bool GSQLBackend::createSlaveDomain(const string& ip, const DNSName& domain, const string& nameserver, const string& account)
 {
   string name;
   vector<ComboAddress> masters({ComboAddress(ip, 53)});
@@ -1328,6 +1358,10 @@ bool GSQLBackend::createSlaveDomain(const string &ip, const DNSName &domain, con
 
 bool GSQLBackend::deleteDomain(const DNSName &domain)
 {
+  if (!d_inTransaction) {
+    throw PDNSException("deleteDomain called outside of transaction");
+  }
+
   DomainInfo di;
   if (!getDomainInfo(domain, di)) {
     return false;
@@ -1363,7 +1397,7 @@ bool GSQLBackend::deleteDomain(const DNSName &domain)
   return true;
 }
 
-void GSQLBackend::getAllDomains(vector<DomainInfo> *domains, bool include_disabled)
+void GSQLBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool include_disabled)
 {
   DLOG(g_log<<"GSQLBackend retrieving all domains."<<endl);
 
@@ -1409,21 +1443,28 @@ void GSQLBackend::getAllDomains(vector<DomainInfo> *domains, bool include_disabl
         }
       }
 
-      if(!row[2].empty()) {
+      if (getSerial && !row[2].empty()) {
         SOAData sd;
-        fillSOAData(row[2], sd);
-        di.serial = sd.serial;
+        try {
+          fillSOAData(row[2], sd);
+          di.serial = sd.serial;
+        }
+        catch (...) {
+          di.serial = 0;
+        }
       }
+
       try {
         di.notified_serial = pdns_stou(row[5]);
         di.last_check = pdns_stou(row[6]);
       } catch(...) {
         continue;
       }
+
       di.account = row[7];
 
       di.backend = this;
-  
+
       domains->push_back(di);
     }
     d_getAllDomainsQuery_stmt->reset();
@@ -1443,10 +1484,18 @@ bool GSQLBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const Q
     }
 
     if (qt != QType::ANY) {
+      if (d_upgradeContent) {
+        d_DeleteRRSetQuery_stmt->
+          bind("domain_id", domain_id)->
+          bind("qname", qname)->
+          bind("qtype", "TYPE"+itoa(qt.getCode()))->
+          execute()->
+          reset();
+      }
       d_DeleteRRSetQuery_stmt->
         bind("domain_id", domain_id)->
         bind("qname", qname)->
-        bind("qtype", qt.getName())->
+        bind("qtype", qt.toString())->
         execute()->
         reset();
     } else {
@@ -1458,7 +1507,7 @@ bool GSQLBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const Q
     }
   }
   catch (SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to delete RRSet " + qname.toLogString() + "|" + qt.getName() + ": "+e.txtReason());
+    throw PDNSException("GSQLBackend unable to delete RRSet " + qname.toLogString() + "|" + qt.toString() + ": "+e.txtReason());
   }
 
   if (rrset.empty()) {
@@ -1468,12 +1517,12 @@ bool GSQLBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const Q
       d_DeleteCommentRRsetQuery_stmt->
         bind("domain_id", domain_id)->
         bind("qname", qname)->
-        bind("qtype", qt.getName())->
+        bind("qtype", qt.toString())->
         execute()->
         reset();
     }
     catch (SSqlException &e) {
-      throw PDNSException("GSQLBackend unable to delete comment for RRSet " + qname.toLogString() + "|" + qt.getName() + ": "+e.txtReason());
+      throw PDNSException("GSQLBackend unable to delete comment for RRSet " + qname.toLogString() + "|" + qt.toString() + ": "+e.txtReason());
     }
   }
   for(const auto& rr: rrset) {
@@ -1493,7 +1542,7 @@ bool GSQLBackend::feedRecord(const DNSResourceRecord &r, const DNSName &ordernam
       prio=pdns_stou(content.substr(0,pos));
       boost::erase_head(content, pos);
     }
-    trim_left(content);
+    boost::trim_left(content);
   }
 
   try {
@@ -1503,7 +1552,7 @@ bool GSQLBackend::feedRecord(const DNSResourceRecord &r, const DNSName &ordernam
       bind("content",content)->
       bind("ttl",r.ttl)->
       bind("priority",prio)->
-      bind("qtype",r.qtype.getName())->
+      bind("qtype",r.qtype.toString())->
       bind("domain_id",r.domain_id)->
       bind("disabled",r.disabled)->
       bind("qname",r.qname);
@@ -1523,7 +1572,7 @@ bool GSQLBackend::feedRecord(const DNSResourceRecord &r, const DNSName &ordernam
       reset();
   }
   catch (SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to feed record " + r.qname.toLogString() + "|" + r.qtype.getName() + ": "+e.txtReason());
+    throw PDNSException("GSQLBackend unable to feed record " + r.qname.toLogString() + "|" + r.qtype.toString() + ": "+e.txtReason());
   }
   return true; // XXX FIXME this API should not return 'true' I think -ahu 
 }
@@ -1663,7 +1712,7 @@ bool GSQLBackend::getComment(Comment& comment)
       } catch(SSqlException &e) {
         throw PDNSException("GSQLBackend comment get: "+e.txtReason());
       }
-      d_query_stmt = NULL;
+      d_query_stmt = nullptr;
       return false;
     }
 
@@ -1690,7 +1739,7 @@ void GSQLBackend::feedComment(const Comment& comment)
     d_InsertCommentQuery_stmt->
       bind("domain_id",comment.domain_id)->
       bind("qname",comment.qname)->
-      bind("qtype",comment.qtype.getName())->
+      bind("qtype",comment.qtype.toString())->
       bind("modified_at",comment.modified_at)->
       bind("account",comment.account)->
       bind("content",comment.content)->
@@ -1698,7 +1747,7 @@ void GSQLBackend::feedComment(const Comment& comment)
       reset();
   }
   catch (SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to feed comment for RRSet '" + comment.qname.toLogString() + "|" + comment.qtype.getName() + "': "+e.txtReason());
+    throw PDNSException("GSQLBackend unable to feed comment for RRSet '" + comment.qname.toLogString() + "|" + comment.qtype.toString() + "': "+e.txtReason());
   }
 }
 
@@ -1714,12 +1763,12 @@ bool GSQLBackend::replaceComments(const uint32_t domain_id, const DNSName& qname
     d_DeleteCommentRRsetQuery_stmt->
       bind("domain_id",domain_id)->
       bind("qname", qname)->
-      bind("qtype",qt.getName())->
+      bind("qtype",qt.toString())->
       execute()->
       reset();
   }
   catch (SSqlException &e) {
-    throw PDNSException("GSQLBackend unable to delete comment for RRSet '" + qname.toLogString() + "|" + qt.getName() + "': "+e.txtReason());
+    throw PDNSException("GSQLBackend unable to delete comment for RRSet '" + qname.toLogString() + "|" + qt.toString() + "': "+e.txtReason());
   }
 
   for(const auto& comment: comments) {
@@ -1853,7 +1902,7 @@ void GSQLBackend::extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& r)
 
   r.qtype=row[3];
 
-  if (d_upgradeContent && DNSRecordContent::isUnknownType(row[3])) {
+  if (d_upgradeContent && DNSRecordContent::isUnknownType(row[3]) && r.qtype.isSupportedType()) {
     r.content = DNSRecordContent::upgradeContent(r.qname, r.qtype, row[0]);
   }
   else if (r.qtype==QType::MX || r.qtype==QType::SRV) {
@@ -1869,11 +1918,23 @@ void GSQLBackend::extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& r)
   if(d_dnssecQueries)
     r.auth = !row[7].empty() && row[7][0]=='1';
   else
-    r.auth = 1;
+    r.auth = true;
 
   r.disabled = !row[5].empty() && row[5][0]=='1';
 
   r.domain_id=pdns_stou(row[4]);
+
+  if (row.size() > 8) {   // if column 8 exists, it holds an ordername
+    if (!row.at(8).empty()) {
+      r.ordername=DNSName(boost::replace_all_copy(row.at(8), " ", ".")).labelReverse();
+    }
+    else {
+      r.ordername.clear();
+    }
+  }
+  else {
+    r.ordername.clear();
+  }
 }
 
 void GSQLBackend::extractComment(SSqlStatement::row_t& row, Comment& comment)

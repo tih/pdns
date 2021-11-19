@@ -24,22 +24,22 @@
 #include "dnscrypt.hh"
 
 #ifdef HAVE_DNSCRYPT
-int handleDNSCryptQuery(char* packet, uint16_t len, std::shared_ptr<DNSCryptQuery> query, uint16_t* decryptedQueryLen, bool tcp, time_t now, std::vector<uint8_t>& response)
+int handleDNSCryptQuery(PacketBuffer& packet, DNSCryptQuery& query, bool tcp, time_t now, PacketBuffer& response)
 {
-  query->parsePacket(packet, len, tcp, decryptedQueryLen, now);
+  query.parsePacket(packet, tcp, now);
 
-  if (query->isValid() == false) {
+  if (query.isValid() == false) {
     vinfolog("Dropping DNSCrypt invalid query");
     return false;
   }
 
-  if (query->isEncrypted() == false) {
-    query->getCertificateResponse(now, response);
+  if (query.isEncrypted() == false) {
+    query.getCertificateResponse(now, response);
 
     return false;
   }
 
-  if(*decryptedQueryLen < static_cast<uint16_t>(sizeof(struct dnsheader))) {
+  if (packet.size() < static_cast<uint16_t>(sizeof(struct dnsheader))) {
     ++g_stats.nonCompliantQueries;
     return false;
   }

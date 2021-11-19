@@ -24,23 +24,27 @@ static void test_ring(size_t maxEntries, size_t numberOfShards, size_t nbLockTri
   }
 
   dnsheader dh;
+  memset(&dh, 0, sizeof(dh));
   DNSName qname("rings.powerdns.com.");
   ComboAddress requestor1("192.0.2.1");
   ComboAddress requestor2("192.0.2.2");
   uint16_t qtype = QType::AAAA;
   uint16_t size = 42;
+  dnsdist::Protocol protocol = dnsdist::Protocol::DoUDP;
+  dnsdist::Protocol outgoingProtocol = dnsdist::Protocol::DoUDP;
   struct timespec now;
   gettime(&now);
 
   /* fill the query ring */
   for (size_t idx = 0; idx < maxEntries; idx++) {
-    rings.insertQuery(now, requestor1, qname, qtype, size, dh);
+    rings.insertQuery(now, requestor1, qname, qtype, size, dh, protocol);
   }
   BOOST_CHECK_EQUAL(rings.getNumberOfQueryEntries(), maxEntries);
   BOOST_CHECK_EQUAL(rings.getNumberOfResponseEntries(), 0U);
   for (const auto& shard : rings.d_shards) {
-    BOOST_CHECK_EQUAL(shard->queryRing.size(), entriesPerShard);
-    for (const auto& entry : shard->queryRing) {
+    auto ring = shard->queryRing.lock();
+    BOOST_CHECK_EQUAL(ring->size(), entriesPerShard);
+    for (const auto& entry : *ring) {
       BOOST_CHECK_EQUAL(entry.name, qname);
       BOOST_CHECK_EQUAL(entry.qtype, qtype);
       BOOST_CHECK_EQUAL(entry.size, size);
@@ -51,13 +55,14 @@ static void test_ring(size_t maxEntries, size_t numberOfShards, size_t nbLockTri
 
   /* push enough queries to get rid of the existing ones */
   for (size_t idx = 0; idx < maxEntries; idx++) {
-    rings.insertQuery(now, requestor2, qname, qtype, size, dh);
+    rings.insertQuery(now, requestor2, qname, qtype, size, dh, protocol);
   }
   BOOST_CHECK_EQUAL(rings.getNumberOfQueryEntries(), maxEntries);
   BOOST_CHECK_EQUAL(rings.getNumberOfResponseEntries(), 0U);
   for (const auto& shard : rings.d_shards) {
-    BOOST_CHECK_EQUAL(shard->queryRing.size(), entriesPerShard);
-    for (const auto& entry : shard->queryRing) {
+    auto ring = shard->queryRing.lock();
+    BOOST_CHECK_EQUAL(ring->size(), entriesPerShard);
+    for (const auto& entry : *ring) {
       BOOST_CHECK_EQUAL(entry.name, qname);
       BOOST_CHECK_EQUAL(entry.qtype, qtype);
       BOOST_CHECK_EQUAL(entry.size, size);
@@ -71,13 +76,14 @@ static void test_ring(size_t maxEntries, size_t numberOfShards, size_t nbLockTri
 
   /* fill the response ring */
   for (size_t idx = 0; idx < maxEntries; idx++) {
-    rings.insertResponse(now, requestor1, qname, qtype, latency, size, dh, server);
+    rings.insertResponse(now, requestor1, qname, qtype, latency, size, dh, server, outgoingProtocol);
   }
   BOOST_CHECK_EQUAL(rings.getNumberOfQueryEntries(), maxEntries);
   BOOST_CHECK_EQUAL(rings.getNumberOfResponseEntries(), maxEntries);
   for (const auto& shard : rings.d_shards) {
-    BOOST_CHECK_EQUAL(shard->respRing.size(), entriesPerShard);
-    for (const auto& entry : shard->respRing) {
+    auto ring = shard->respRing.lock();
+    BOOST_CHECK_EQUAL(ring->size(), entriesPerShard);
+    for (const auto& entry : *ring) {
       BOOST_CHECK_EQUAL(entry.name, qname);
       BOOST_CHECK_EQUAL(entry.qtype, qtype);
       BOOST_CHECK_EQUAL(entry.size, size);
@@ -90,13 +96,14 @@ static void test_ring(size_t maxEntries, size_t numberOfShards, size_t nbLockTri
 
   /* push enough responses to get rid of the existing ones */
   for (size_t idx = 0; idx < maxEntries; idx++) {
-    rings.insertResponse(now, requestor2, qname, qtype, latency, size, dh, server);
+    rings.insertResponse(now, requestor2, qname, qtype, latency, size, dh, server, outgoingProtocol);
   }
   BOOST_CHECK_EQUAL(rings.getNumberOfQueryEntries(), maxEntries);
   BOOST_CHECK_EQUAL(rings.getNumberOfResponseEntries(), maxEntries);
   for (const auto& shard : rings.d_shards) {
-    BOOST_CHECK_EQUAL(shard->respRing.size(), entriesPerShard);
-    for (const auto& entry : shard->respRing) {
+    auto ring = shard->respRing.lock();
+    BOOST_CHECK_EQUAL(ring->size(), entriesPerShard);
+    for (const auto& entry : *ring) {
       BOOST_CHECK_EQUAL(entry.name, qname);
       BOOST_CHECK_EQUAL(entry.qtype, qtype);
       BOOST_CHECK_EQUAL(entry.size, size);
@@ -129,8 +136,8 @@ static void ringReaderThread(Rings& rings, std::atomic<bool>& done, size_t numbe
 
     for (const auto& shard : rings.d_shards) {
       {
-        std::lock_guard<std::mutex> rl(shard->queryLock);
-        for(const auto& c : shard->queryRing) {
+        auto rl = shard->queryRing.lock();
+        for(const auto& c : *rl) {
           numberOfQueries++;
           // BOOST_CHECK* is slow as hell..
           if(c.qtype != qtype) {
@@ -140,8 +147,8 @@ static void ringReaderThread(Rings& rings, std::atomic<bool>& done, size_t numbe
         }
       }
       {
-        std::lock_guard<std::mutex> rl(shard->respLock);
-        for(const auto& c : shard->respRing) {
+        auto rl = shard->respRing.lock();
+        for(const auto& c : *rl) {
           if(c.qtype != qtype) {
             cerr<<"Invalid response QType!"<<endl;
             return;
@@ -163,11 +170,11 @@ static void ringReaderThread(Rings& rings, std::atomic<bool>& done, size_t numbe
 #endif
 }
 
-static void ringWriterThread(Rings& rings, size_t numberOfEntries, const Rings::Query query, const Rings::Response response)
+static void ringWriterThread(Rings& rings, size_t numberOfEntries, const Rings::Query& query, const Rings::Response& response)
 {
   for (size_t idx = 0; idx < numberOfEntries; idx++) {
-    rings.insertQuery(query.when, query.requestor, query.name, query.qtype, query.size, query.dh);
-    rings.insertResponse(response.when, response.requestor, response.name, response.qtype, response.usec, response.size, response.dh, response.ds);
+    rings.insertQuery(query.when, query.requestor, query.name, query.qtype, query.size, query.dh, query.protocol);
+    rings.insertResponse(response.when, response.requestor, response.name, response.qtype, response.usec, response.size, response.dh, response.ds, response.protocol);
   }
 }
 
@@ -181,6 +188,7 @@ BOOST_AUTO_TEST_CASE(test_Rings_Threaded) {
   struct timespec now;
   gettime(&now);
   dnsheader dh;
+  memset(&dh, 0, sizeof(dh));
   dh.id = htons(4242);
   dh.qr = 0;
   dh.tc = 0;
@@ -193,10 +201,12 @@ BOOST_AUTO_TEST_CASE(test_Rings_Threaded) {
   unsigned int latency = 100;
   uint16_t qtype = QType::AAAA;
   uint16_t size = 42;
+  dnsdist::Protocol protocol = dnsdist::Protocol::DoUDP;
+  dnsdist::Protocol outgoingProtocol = dnsdist::Protocol::DoUDP;
 
   Rings rings(numberOfEntries, numberOfShards, lockAttempts, true);
-  Rings::Query query({now, requestor, qname, size, qtype, dh});
-  Rings::Response response({now, requestor, qname, qtype, latency, size, dh, server});
+  Rings::Query query({requestor, qname, now, dh, size, qtype, protocol});
+  Rings::Response response({requestor, server, qname, now, dh, latency, size, qtype, outgoingProtocol});
 
   std::atomic<bool> done(false);
   std::vector<std::thread> writerThreads;
@@ -231,33 +241,39 @@ BOOST_AUTO_TEST_CASE(test_Rings_Threaded) {
   size_t totalQueries = 0;
   size_t totalResponses = 0;
   for (const auto& shard : rings.d_shards) {
-    BOOST_CHECK_LE(shard->queryRing.size(), entriesPerShard);
-    // verify that the shard is not empty
-    BOOST_CHECK_GT(shard->queryRing.size(), (entriesPerShard * 0.5) + 1);
-    // this would be optimal
-    BOOST_WARN_GT(shard->queryRing.size(), entriesPerShard * 0.95);
-    totalQueries += shard->queryRing.size();
-    for (const auto& entry : shard->queryRing) {
-      BOOST_CHECK_EQUAL(entry.name, qname);
-      BOOST_CHECK_EQUAL(entry.qtype, qtype);
-      BOOST_CHECK_EQUAL(entry.size, size);
-      BOOST_CHECK_EQUAL(entry.when.tv_sec, now.tv_sec);
-      BOOST_CHECK_EQUAL(entry.requestor.toStringWithPort(), requestor.toStringWithPort());
+    {
+      auto ring = shard->queryRing.lock();
+      BOOST_CHECK_LE(ring->size(), entriesPerShard);
+      // verify that the shard is not empty
+      BOOST_CHECK_GT(ring->size(), (entriesPerShard * 0.5) + 1);
+      // this would be optimal
+      BOOST_WARN_GT(ring->size(), entriesPerShard * 0.95);
+      totalQueries += ring->size();
+      for (const auto& entry : *ring) {
+        BOOST_CHECK_EQUAL(entry.name, qname);
+        BOOST_CHECK_EQUAL(entry.qtype, qtype);
+        BOOST_CHECK_EQUAL(entry.size, size);
+        BOOST_CHECK_EQUAL(entry.when.tv_sec, now.tv_sec);
+        BOOST_CHECK_EQUAL(entry.requestor.toStringWithPort(), requestor.toStringWithPort());
+      }
     }
-    BOOST_CHECK_LE(shard->respRing.size(), entriesPerShard);
-    // verify that the shard is not empty
-    BOOST_CHECK_GT(shard->queryRing.size(), (entriesPerShard * 0.5) + 1);
-    // this would be optimal
-    BOOST_WARN_GT(shard->respRing.size(), entriesPerShard * 0.95);
-    totalResponses += shard->respRing.size();
-    for (const auto& entry : shard->respRing) {
-      BOOST_CHECK_EQUAL(entry.name, qname);
-      BOOST_CHECK_EQUAL(entry.qtype, qtype);
-      BOOST_CHECK_EQUAL(entry.size, size);
-      BOOST_CHECK_EQUAL(entry.when.tv_sec, now.tv_sec);
-      BOOST_CHECK_EQUAL(entry.requestor.toStringWithPort(), requestor.toStringWithPort());
-      BOOST_CHECK_EQUAL(entry.usec, latency);
-      BOOST_CHECK_EQUAL(entry.ds.toStringWithPort(), server.toStringWithPort());
+    {
+      auto ring = shard->respRing.lock();
+      BOOST_CHECK_LE(ring->size(), entriesPerShard);
+      // verify that the shard is not empty
+      BOOST_CHECK_GT(ring->size(), (entriesPerShard * 0.5) + 1);
+      // this would be optimal
+      BOOST_WARN_GT(ring->size(), entriesPerShard * 0.95);
+      totalResponses += ring->size();
+      for (const auto& entry : *ring) {
+        BOOST_CHECK_EQUAL(entry.name, qname);
+        BOOST_CHECK_EQUAL(entry.qtype, qtype);
+        BOOST_CHECK_EQUAL(entry.size, size);
+        BOOST_CHECK_EQUAL(entry.when.tv_sec, now.tv_sec);
+        BOOST_CHECK_EQUAL(entry.requestor.toStringWithPort(), requestor.toStringWithPort());
+        BOOST_CHECK_EQUAL(entry.usec, latency);
+        BOOST_CHECK_EQUAL(entry.ds.toStringWithPort(), server.toStringWithPort());
+      }
     }
   }
   BOOST_CHECK_EQUAL(rings.getNumberOfQueryEntries(), totalQueries);

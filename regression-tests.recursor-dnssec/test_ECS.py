@@ -32,7 +32,7 @@ loglevel=9
 disable-syslog=yes
 """
 
-    def sendECSQuery(self, query, expected, expectedFirstTTL=None):
+    def sendECSQuery(self, query, expected, expectedFirstTTL=None, scopeZeroResponse=None):
         res = self.sendUDPQuery(query)
 
         self.assertRcodeEqual(res, dns.rcode.NOERROR)
@@ -42,6 +42,18 @@ disable-syslog=yes
             self.assertEqual(res.answer[0].ttl, expectedFirstTTL)
         else:
             expectedFirstTTL = res.answer[0].ttl
+        self.assertEqual(res.edns, query.edns)
+
+        if scopeZeroResponse is not None:
+            self.assertEqual(res.edns, 0)
+            if scopeZeroResponse:
+                self.assertEqual(len(res.options), 1)
+                self.assertEqual(res.options[0].otype, 8)
+                self.assertEqual(res.options[0].scope, 0)
+            else:
+                self.assertEqual(len(res.options), 1)
+                self.assertEqual(res.options[0].otype, 8)
+                self.assertNotEqual(res.options[0].scope, 0)
 
         # wait one second, check that the TTL has been
         # decreased indicating a cache hit
@@ -52,6 +64,7 @@ disable-syslog=yes
         self.assertRcodeEqual(res, dns.rcode.NOERROR)
         self.assertRRsetInAnswer(res, expected)
         self.assertLess(res.answer[0].ttl, expectedFirstTTL)
+        self.assertEqual(res.edns, query.edns)
 
     def checkECSQueryHit(self, query, expected):
         res = self.sendUDPQuery(query)
@@ -104,7 +117,7 @@ disable-syslog=yes
 class testNoECS(ECSTest):
     _confdir = 'NoECS'
 
-    _config_template = """edns-subnet-whitelist=
+    _config_template = """edns-subnet-allow-list=
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
 
@@ -129,7 +142,7 @@ forward-zones=ecs-echo.example=%s.21
 class testIncomingNoECS(ECSTest):
     _confdir = 'IncomingNoECS'
 
-    _config_template = """edns-subnet-whitelist=
+    _config_template = """edns-subnet-allow-list=
 use-incoming-edns-subnet=yes
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
@@ -139,7 +152,7 @@ forward-zones=ecs-echo.example=%s.21
 
         ecso = clientsubnetoption.ClientSubnetOption('192.0.2.1', 32)
         query = dns.message.make_query(nameECS, 'TXT', 'IN', use_edns=True, options=[ecso], payload=512)
-        self.sendECSQuery(query, expected)
+        self.sendECSQuery(query, expected, scopeZeroResponse=True)
 
     def testNoECS(self):
         expected = dns.rrset.from_text(nameECS, ttlECS, dns.rdataclass.IN, 'TXT', emptyECSText)
@@ -152,12 +165,12 @@ forward-zones=ecs-echo.example=%s.21
 
         ecso = clientsubnetoption.ClientSubnetOption('0.0.0.0', 0)
         query = dns.message.make_query(nameECS, 'TXT', 'IN', use_edns=True, options=[ecso], payload=512)
-        self.sendECSQuery(query, expected)
+        self.sendECSQuery(query, expected, scopeZeroResponse=True)
 
 class testECSByName(ECSTest):
     _confdir = 'ECSByName'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
 
@@ -188,7 +201,7 @@ forward-zones=ecs-echo.example=%s.21
 class testECSByNameLarger(ECSTest):
     _confdir = 'ECSByNameLarger'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 ecs-ipv4-bits=32
 forward-zones=ecs-echo.example=%s.21
 ecs-ipv4-cache-bits=32
@@ -222,7 +235,7 @@ ecs-ipv6-cache-bits=128
 class testECSByNameSmaller(ECSTest):
     _confdir = 'ECSByNameLarger'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 ecs-ipv4-bits=16
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
@@ -249,7 +262,7 @@ forward-zones=ecs-echo.example=%s.21
 class testIncomingECSByName(ECSTest):
     _confdir = 'ECSIncomingByName'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 use-incoming-edns-subnet=yes
 forward-zones=ecs-echo.example=%s.21
 ecs-scope-zero-address=2001:db8::42
@@ -289,7 +302,7 @@ ecs-ipv6-cache-bits=128
 class testIncomingECSByNameLarger(ECSTest):
     _confdir = 'ECSIncomingByNameLarger'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 use-incoming-edns-subnet=yes
 ecs-ipv4-bits=32
 forward-zones=ecs-echo.example=%s.21
@@ -321,7 +334,7 @@ ecs-ipv6-cache-bits=128
 class testIncomingECSByNameSmaller(ECSTest):
     _confdir = 'ECSIncomingByNameSmaller'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 use-incoming-edns-subnet=yes
 ecs-ipv4-bits=16
 forward-zones=ecs-echo.example=%s.21
@@ -352,7 +365,7 @@ ecs-ipv6-cache-bits=128
 class testIncomingECSByNameV6(ECSTest):
     _confdir = 'ECSIncomingByNameV6'
 
-    _config_template = """edns-subnet-whitelist=ecs-echo.example.
+    _config_template = """edns-subnet-allow-list=ecs-echo.example.
 use-incoming-edns-subnet=yes
 ecs-ipv6-bits=128
 ecs-ipv4-cache-bits=32
@@ -385,7 +398,7 @@ forward-zones=ecs-echo.example=[::1]:53000
 class testECSNameMismatch(ECSTest):
     _confdir = 'ECSNameMismatch'
 
-    _config_template = """edns-subnet-whitelist=not-the-right-name.example.
+    _config_template = """edns-subnet-allow-list=not-the-right-name.example.
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
 
@@ -410,7 +423,7 @@ forward-zones=ecs-echo.example=%s.21
 class testECSByIP(ECSTest):
     _confdir = 'ECSByIP'
 
-    _config_template = """edns-subnet-whitelist=%s.21
+    _config_template = """edns-subnet-allow-list=%s.21
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'], os.environ['PREFIX'])
 
@@ -436,7 +449,7 @@ forward-zones=ecs-echo.example=%s.21
 class testIncomingECSByIP(ECSTest):
     _confdir = 'ECSIncomingByIP'
 
-    _config_template = """edns-subnet-whitelist=%s.21
+    _config_template = """edns-subnet-allow-list=%s.21
 use-incoming-edns-subnet=yes
 forward-zones=ecs-echo.example=%s.21
 ecs-scope-zero-address=::1
@@ -476,7 +489,7 @@ ecs-ipv6-cache-bits=128
 class testECSIPMismatch(ECSTest):
     _confdir = 'ECSIPMismatch'
 
-    _config_template = """edns-subnet-whitelist=192.0.2.1
+    _config_template = """edns-subnet-allow-list=192.0.2.1
 forward-zones=ecs-echo.example=%s.21
     """ % (os.environ['PREFIX'])
 
@@ -498,6 +511,98 @@ forward-zones=ecs-echo.example=%s.21
         ecso = clientsubnetoption.ClientSubnetOption('0.0.0.0', 0)
         query = dns.message.make_query(nameECS, 'TXT', 'IN', use_edns=True, options=[ecso], payload=512)
         self.sendECSQuery(query, expected)
+
+class testECSWithProxyProtocoldRecursorTest(ECSTest):
+    _confdir = 'ECSWithProxyProtocol'
+    _config_template = """
+    ecs-add-for=2001:db8::1/128
+    edns-subnet-allow-list=ecs-echo.example.
+    forward-zones=ecs-echo.example=%s.21
+    proxy-protocol-from=127.0.0.1/32
+    allow-from=2001:db8::1/128
+""" % (os.environ['PREFIX'])
+
+    def testProxyProtocolPlusECS(self):
+        qname = nameECS
+        expected = dns.rrset.from_text(qname, 0, dns.rdataclass.IN, 'TXT', '2001:db8::/56')
+
+        query = dns.message.make_query(qname, 'TXT', use_edns=True)
+        for method in ("sendUDPQueryWithProxyProtocol", "sendTCPQueryWithProxyProtocol"):
+            sender = getattr(self, method)
+            res = sender(query, True, '2001:db8::1', '2001:db8::2', 0, 65535)
+            self.assertRcodeEqual(res, dns.rcode.NOERROR)
+            self.assertRRsetInAnswer(res, expected)
+
+class testTooLargeToAddZeroScope(RecursorTest):
+
+    _confdir = 'TooLargeToAddZeroScope'
+    _config_template_default = """
+use-incoming-edns-subnet=yes
+dnssec=validate
+daemon=no
+trace=yes
+packetcache-ttl=0
+packetcache-servfail-ttl=0
+max-cache-ttl=15
+threads=1
+loglevel=9
+disable-syslog=yes
+log-common-errors=yes
+"""
+    _config_template = """
+    """
+    _lua_dns_script_file = """
+    function preresolve(dq)
+      if dq.qname == newDN('toolarge.ecs.') then
+        dq:addRecord(pdns.TXT, '%s', pdns.place.ANSWER)
+        return true
+      end
+      return false
+    end
+    """ % ('A'*447)
+
+    _roothints = None
+
+    @classmethod
+    def setUpClass(cls):
+
+        # we don't need all the auth stuff
+        cls.setUpSockets()
+        cls.startResponders()
+
+        confdir = os.path.join('configs', cls._confdir)
+        cls.createConfigDir(confdir)
+
+        cls.generateRecursorConfig(confdir)
+        cls.startRecursor(confdir, cls._recursorPort)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tearDownRecursor()
+
+    @classmethod
+    def generateRecursorConfig(cls, confdir):
+        super(testTooLargeToAddZeroScope, cls).generateRecursorConfig(confdir)
+
+    def testTooLarge(self):
+        qname = 'toolarge.ecs.'
+        ecso = clientsubnetoption.ClientSubnetOption('192.0.2.1', 24)
+        query = dns.message.make_query(qname, 'TXT', 'IN', use_edns=True, options=[ecso], payload=512)
+
+        # should not have an ECS Option since the packet is too large already
+        res = self.sendUDPQuery(query, timeout=5.0)
+        self.assertRcodeEqual(res, dns.rcode.NOERROR)
+        self.assertEqual(len(res.answer), 1)
+        self.assertEqual(res.edns, 0)
+        self.assertEqual(len(res.options), 0)
+
+        res = self.sendTCPQuery(query, timeout=5.0)
+        self.assertRcodeEqual(res, dns.rcode.NOERROR)
+        self.assertEqual(len(res.answer), 1)
+        self.assertEqual(res.edns, 0)
+        self.assertEqual(len(res.options), 1)
+        self.assertEqual(res.options[0].otype, 8)
+        self.assertEqual(res.options[0].scope, 0)
 
 class UDPECSResponder(DatagramProtocol):
     @staticmethod
@@ -541,6 +646,6 @@ class UDPECSResponder(DatagramProtocol):
             response.additional.append(additional)
 
         if ecso:
-            response.options = [ecso]
+            response.use_edns(options = [ecso])
 
         self.transport.write(response.to_wire(), address)

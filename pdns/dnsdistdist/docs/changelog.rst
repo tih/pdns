@@ -2,6 +2,1118 @@ Changelog
 =========
 
 .. changelog::
+  :version: 1.7.0-beta1
+  :released: 16th of November 2021
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10646
+
+    Convert make_pair to emplace (Rosen Penev)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10795
+    :tickets: 10651
+
+    Add syslog identifier to service file
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10815
+    :tickets: 4993
+
+    Add range support for dynamic blocks
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 10845
+
+    Keep watching idle DoH backend connections
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 10862
+
+    Use the same outgoing TCP connection for different clients
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10868
+
+    Get rid of make_pair (Rosen Penev)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10870
+
+    Use make_unique instead of new (Rosen Penev)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10874
+
+    Properly handle I/O exceptions in the health checker
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, Performance
+    :pullreq: 10875
+
+    Read as many DoH responses as possible before yielding
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, Performance
+    :pullreq: 10876
+
+    Stop over-allocating for DoH queries
+
+  .. change::
+    :tags: Improvements, Protobuf, DNSTAP
+    :pullreq: 10879
+    :tickets: 9103
+
+    Support DoT, DoH and DNSCrypt transports for protobuf and dnstap
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10900
+
+    NetmaskTree: Drop the 'noexcept' qualifier on the TreeNode ctor
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10907
+    :tickets: 4670
+
+    Handle existing EDNS content for SetMacAddrAction/SetEDNSOptionAction
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, DNS over TLS
+    :pullreq: 10920
+
+    Fix the cleaning of TCP, DoT and DoH connections to the backend
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10922
+
+    Fix build without nghttp2
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10923
+
+    Add the ability to retain select capabilities at runtime
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10935
+
+    Remove debug print line flooding logs (Eugen Mayer)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10943
+    :tickets: 10938
+
+    Credentials: EVP_PKEY_CTX_set1_scrypt_salt() takes an `unsigned char*`
+
+  .. change::
+    :tags: New Features, Performance
+    :pullreq: 10883, 10498
+
+    Implement filesystem pinning for eBPF maps, drop and truncate via XDP (Pierre Grié)
+
+.. changelog::
+  :version: 1.7.0-alpha2
+  :released: 19th of October 2021
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10760
+
+    Don't create SSLKEYLOGFILE files with wide permissions
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10767
+
+    Update existing tags when calling setTagAction and setTagResponseAction
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 10772
+    :tickets: 10771
+
+    Better handling of outgoing DoH workers
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10775
+    :tickets: 10403
+
+    Fix the unit tests to handle v4-only or v6-only connectivity
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10782
+
+    Improve the coverage of the outgoing DoH code
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10787
+
+    Properly cache UDP queries passed to a TCP/DoT/DoH backend
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10791
+
+    Allow skipping arbitrary EDNS options when computing packet hash
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10814
+
+    Add lua support for SetEDNSOptionAction
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 10823
+
+    Disable TLS renegotiation, release buffers for outgoing TLS
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10832
+
+    Rule for basing decisions on outstanding queries in a pool (phonedph1)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10833
+
+    Add incoming and outgoing protocols to grepq
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10835
+    :tickets: 10559
+
+    Allow setting the block reason from the SMT callback
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10841
+
+    Use per-thread credentials for GnuTLS client connections
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10844
+
+    Clear the UDP states of TCP-only backends
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10846
+
+    Replace shared by unique ptrs, reduce structs size
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10848
+
+    Only set recursion protection once we know we do not return
+
+.. changelog::
+  :version: 1.7.0-alpha1
+  :released: 23rd of September 2021
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10157
+    :tickets: 7937
+
+    Move to hashed passwords for the web interface
+
+ .. change::
+    :tags: Improvements
+    :pullreq: 10381
+
+    Reorganize the IDState and Rings fields to reduce memory usage
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10429
+
+    Fix 'temporary used in loop' warnings reported by g++ 11.1.0
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10441
+
+    Skip some memory allocations in client mode to reduce memory usage
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10414
+
+    Support multiple ip addresses for dnsdist-resolver lua script (Wim)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10489
+    :tickets: 10436
+
+    Make DNSDist XFR aware when transfer is finished (Dimitrios Mavrommatis)
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10532
+    :tickets: 10456
+
+    Add FFI functions to spoof multiple raw values
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10508
+    :tickets: 10500
+
+    Do not report latency metrics of down upstream servers (Holger Hoffstätte)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10537
+    :tickets: 10338
+
+    Carry the exact incoming protocol (Do53, DNSCrypt, DoT, DoH) in DQ
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10527
+    :tickets: 10502
+
+    Implement 'reload()' to rotate Log(Response)Action's log file
+
+  .. change::
+    :tags: New Features, Performance
+    :pullreq: 10501
+
+    Add support for Lua per-thread FFI rules and actions
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 10520
+
+    Don't look up the LMDB dbi by name for every query
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10525
+    :tickets: 10520
+
+    Add support for range-based lookups into a Key-Value store
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10626
+
+    Document that setECSOverride has its drawbacks (Andreas Jakum)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10649
+
+    Convert dnsdist and the recursor to LockGuarded
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10631
+
+    Handle waiting for a descriptor to become readable OR writable
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10656
+
+    Catch FDMultiplexerException in IOStateHandler's destructor
+
+  .. change::
+    :tags: New Features, DNS over TLS
+    :pullreq: 10338
+
+    Implement cross-protocol queries, including outgoing DNS over TLS
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10672
+
+    Resizing LMDB map size while there might be open transactions is unsafe
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10597
+    :tickets: 10367
+
+    Implement SpoofSVCAction to return SVC responses
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10695
+    :tickets: 10693
+
+    Ignore TCAction over TCP
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10687
+
+    Clean up a bit of "cast from type [...] casts away qualifiers" warnings
+
+  .. change::
+    :tags: New Features, DNS over HTTPS
+    :pullreq: 10635
+
+    Implementation of DoH between dnsdist and the backend
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10704
+
+    Stop raising the number of TCP workers to the number of TCP binds
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10724
+
+    Handle exception raised in IOStateGuard's destructor
+
+.. changelog::
+  :version: 1.6.1
+  :released: 15th of September 2021
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10438
+
+    Backport a missing mutex header
+
+  .. change::
+    :tags: Bug Fixes, DNSTAP
+    :pullreq: 10538
+    :tickets: 10497
+
+    Set the dnstap/protobuf transport to TCP for DoH queries
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10550
+    :tickets: 10418
+
+    Add the missing DOHFronted::loadNewCertificatesAndKeys()
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10560
+    :tickets: 10482
+
+    Implement a web endpoint to get metrics for only one pool
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10619
+    :tickets: 10419
+
+    Properly handle ECS for queries with ancount or nscount > 0
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10656
+
+    Catch FDMultiplexerException in IOStateHandler's destructor
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10706
+    :tickets: 10705
+
+    Fix outstanding counter issue on TCP error
+
+.. changelog::
+  :version: 1.6.0
+  :released: 11th of May 2021
+
+.. changelog::
+  :version: 1.5.2
+  :released: 10th of May 2021
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9583
+
+    Make: two fixes
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9717
+    :tickets: 9689
+
+    Fix eBPF filtering of long qnames
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 9729
+    :tickets: 9728
+
+    Fix a typo in prometheus metrics dnsdist_frontend_tlshandshakefailures #9728 (AppliedPrivacy)
+
+  .. change::
+    :tags: Bug Fixes, Performance
+    :pullreq: 9749
+
+    Fix the DNSName move assignment operator
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9900
+
+    Fix a hang when removing a server with more than one socket
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, DNS over TLS
+    :pullreq: 9922
+    :tickets: 9921
+
+    Fix SNI on resumed sessions by acknowledging the name sent by the client
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 9936
+    :tickets: 9934
+
+    Fix a crash when a DoH responses map is updated at runtime
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9980
+    :tickets: 9756
+
+    Fix Dynamic Block RCode rules messing up the queries count
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10012
+    :tickets: 10006
+
+    Fix EDNS in ServFail generated when no server is available
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10095
+    :tickets: 10090
+
+    Prevent a crash with DynBPF objects in client mode
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10355
+
+    Add missing getEDNSOptions and getDO bindings for DNSResponse
+
+.. changelog::
+  :version: 1.6.0-rc2
+  :released: 4th of May 2021
+
+  .. change::
+    :tags: Improvements, Metrics
+    :pullreq: 10323
+
+    Make the backend queryLoad and dropRate values atomic
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10327
+    :tickets: 10324
+
+    Only use eBPF for "drop" actions, clean up more often
+
+  .. change::
+    :tags: Bug Fixes, DNSCrypt
+    :pullreq: 10346
+
+    Fix missing locks in DNSCrypt certificates management
+
+.. changelog::
+  :version: 1.6.0-rc1
+  :released: 20th of April 2021
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10171
+
+    Lua: don't destroy keys during table iteration
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10216
+    :tickets: 10209
+
+    Replace pthread_rwlock with std::shared_mutex
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10264
+
+    Also disable PMTU for v6
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10267
+    :tickets: 10262
+
+    Add missing getEDNSOptions and getDO bindings for DNSResponse
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10274
+
+    Fix some issues reported by Thread Sanitizer
+
+.. changelog::
+  :version: 1.6.0-alpha3
+  :released: 29th of March 2021
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10156
+
+    Improve TCP connection reuse, add metrics
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10161
+    :tickets: 7591
+
+    Using DATA to report memory usage is unreliable, start using RES instead, as it seems reliable and relevant
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 10179
+
+    Set OpenSSL to release buffers when idle, saves 35 kB per connection
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10184
+
+    Add a metric for TCP listen queue full events
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10201
+
+    Fix the TCP connect timeout, add metrics
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10204
+
+    Enable sharding by default, greater pipe buffer sizes
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10207
+
+    Add limits for cached TCP connections, metrics
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 10208
+
+    Fix the handling of DoH queries with a non-zero ID
+
+  .. change::
+    :tags: Improvements, DNSCrypt, DNS over HTTPS, DNS over TLS
+    :pullreq: 10214
+
+    Unify certificate reloading syntaxes
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 10218
+
+    Disable TLS renegotiation by default
+
+.. changelog::
+  :version: 1.6.0-alpha2
+  :released: 4th of March 2021
+
+ .. change::
+    :tags: Improvements
+    :pullreq: 9361
+
+    Bind __tostring instead of toString for Lua, so that conversion to string works automatically (Aki Tuomi)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10046
+    :tickets: 10035
+
+    Make NetmaskTree::fork() a bit easier to understand
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10050
+    :tickets: 10049
+
+    Remove forgotten debug line in the web server
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10063
+
+    Add option to spoofRawAction to spoof multiple answers (Sander Hoentjen)
+
+  .. change::
+    :tags: New Features
+    :pullreq: 10073
+
+    Add 'spoof' and 'spoofRaw' Lua bindings
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10088
+
+    Create TCP worker threads before acceptors ones
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10095
+    :tickets: 10090
+
+    Prevent a crash with DynBPF objects in client mode
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10108
+
+    Fix several bugs in the TCP code path, add unit tests
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10131
+
+    Do not update the TCP error counters on idle states
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10139
+
+    Fix size check during trailing data addition, regression tests
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10133
+
+    Clean up expired entries from all the packet cache's shards
+
+.. changelog::
+  :version: 1.6.0-alpha1
+  :released: 2nd of February 2021
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9273
+
+    Add Lua bindings to get a server's latency
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9225
+
+    Wrap more FILE objects in smart pointers
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9222
+    :tickets: 9075
+
+    Use toStringWithPort instead of manual addr/port concat (Mischan Toosarani-Hausberger)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9275
+
+    Force a reconnection when a downstream transitions to the UP state (Nuitari, Stephane Bakhos)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9049
+
+    Set the default EDNS buffer size on generated answers to 1232
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9157
+    :tickets: 9156
+
+    Add support for FreeBSD's SO_REUSEPORT_LB
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9382
+
+    Speed up the round robin policy
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9381
+
+    Handle EINTR in DelayPipe
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9424
+
+    Avoid unnecessary allocations and copies with DNSName::toDNSString()
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9420
+    :tickets: 8993
+
+    Get rid of allocations in the packet cache's fast path
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9428
+
+    Accept string in DNSDistPacketCache:expungeByName
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9431
+
+    Handle empty DNSNames in grepq()
+
+  .. change::
+    :tags: New Features
+    :pullreq: 9175
+
+    Add per-thread Lua FFI load-balancing policies
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9466
+
+    DNSName: add toDNSString convenience function
+
+  .. change::
+    :tags: Improvements, Security
+    :pullreq: 8969
+
+    Use more of systemd's sandboxing options when available
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 8993
+    :tickets: 5131
+
+    Skip EDNS Cookies in the packet cache
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 9510
+
+    Prioritize ChaCha20-Poly1305 when client does (Sukhbir Singh)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9583
+
+    Make: two fixes
+
+  .. change::
+    :tags: Removals
+    :pullreq: 9532
+
+    Rename topRule() and friends
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9677
+
+    Add the query payload size to the verbose log over TCP
+
+  .. change::
+    :tags: New Features, webserver
+    :pullreq: 9676
+    :tickets: 9120
+
+    Implement Lua custom web endpoints
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9689
+    :tickets: 9626
+
+    Fix eBPF filtering of long qnames
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9721
+
+    Improve const-correctness of Lua bindings (Georgeto)
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9737
+    :tickets: 9274
+
+    Add the response code in the packet cache dump
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9749
+
+    Fix the DNSName move assignment operator
+
+  .. change::
+    :tags: New Features
+    :pullreq: 9582
+
+    Implement TCP out-of-order
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9746
+
+    Add an optional name to rules
+
+  .. change::
+    :tags: Removals
+    :pullreq: 9784
+    :tickets: 9783
+
+    Remove useless second argument for `SpoofAction`
+
+  .. change::
+    :tags: Improvements, Metrics
+    :pullreq: 9756
+
+    Add prometheus metrics for top Dynamic Blocks entries
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9822
+
+    Add the ability to set ACL from a file (Matti Hiljanen)
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9850
+
+    Don't copy the policy for every query
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9832
+
+    UUID: Use the non-cryptographic variant of the boost::uuid
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9862
+    :tickets: 9861
+
+    Add a Lua binding for the number of queries dropped by a server
+
+  .. change::
+    :tags: Improvements, Metrics, DNS over HTTPS
+    :pullreq: 9738
+
+    Add per connection queries count and duration stats for DoH
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9900
+
+    Fix a hang when removing a server with more than one socket
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 9782
+    :tickets: 9756, 9756, 6763
+
+    Use an eBPF filter for Dynamic blocks when available
+
+  .. change::
+    :tags: Improvements, Performance, Protobuf, DNSTAP
+    :pullreq: 9843
+    :tickets: 9780, 9781
+
+    Use protozero for Protocol Buffer operations
+
+  .. change::
+    :tags: Bug Fixes, DNS over TLS
+    :pullreq: 9921
+
+    Fix SNI on resumed sessions by acknowledging the name sent by the client
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9925
+
+    Appease clang++ 12 ASAN on MacOS
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9913
+
+    Move to c++17
+
+  .. change::
+    :tags: New Features
+    :pullreq: 9616
+
+    Add support for incoming Proxy Protocol
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9937
+
+    Bunch of signed vs unsigned warnings
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9920
+    :tickets: 9918
+
+    Fix warnings on autoconf 2.70
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 9934
+    :tickets: 9927
+
+    Fix a crash when a DoH responses map is updated at runtime
+
+  .. change::
+    :tags: Improvements, webserver
+    :pullreq: 9955
+
+    Reduce diff to upstream yahttp, fixing a few CodeQL reports
+
+  .. change::
+    :tags: New Features
+    :pullreq: 9960
+    :tickets: 9536
+
+    Add SkipCacheResponseAction
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS
+    :pullreq: 9962
+
+    Add an option to allow sub-paths for DoH
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9989
+    :tickets: 9383
+
+    Handle syslog facility as string, document the numerical one
+
+  .. change::
+    :tags: Improvements, webserver
+    :pullreq: 9972
+    :tickets: 8710, 9311
+
+    Deprecate parameters to webserver(), add 'statsRequireAuthentication' parameter
+
+  .. change::
+    :tags: Improvements, DNS over TLS
+    :pullreq: 9957
+
+    Start all TCP worker threads on startup
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9992
+    :tickets: 9357
+
+    Add a counter for queries truncated because of a rule
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9991
+    :tickets: 9961
+
+    Send a NotImp answer on empty (qdcount=0) queries
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9993
+
+    Replace offensive terms in our code and documentation
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 9999
+    :tickets: 7038
+
+    Don't apply QPS to backend server on cache hits
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10012
+    :tickets: 10006
+
+    Fix EDNS in ServFail generated when no server is available
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 9998
+    :tickets: 9455
+
+    Use aligned atomics to prevent false sharing
+
+  .. change::
+    :tags: Improvements, Removals
+    :pullreq: 9974
+    :tickets: 8118
+
+    Unify non-terminal actions as SetXXXAction()
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10015
+    :tickets: 9545
+
+    Accept a NMG to fill DynBlockRulesGroup ranges
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10023
+
+    Silence clang 12 warning
+
+  .. change::
+    :tags: Improvements, Webserver
+    :pullreq: 9997
+    :tickets: 4978
+
+    Limit the number of concurrent console and web connections
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10035
+
+    Fix a few warnings reported by clang's static analyzer and cppcheck
+
+.. changelog::
   :version: 1.5.1
   :released: 1st of October 2020
 
@@ -390,7 +1502,7 @@ Changelog
     :tags: New Features
     :pullreq: 8654
 
-    Dnsdist: LogResponseAction (phonedph1)
+    LogResponseAction (phonedph1)
 
   .. change::
     :tags: Improvements
@@ -1453,7 +2565,7 @@ Changelog
     :pullreq: 7481
     :tickets: 6242
 
-    Add support for encrypting ip addresses #gdpr 
+    Add support for encrypting ip addresses #gdpr
 
   .. change::
     :tags: Improvements
@@ -2045,7 +3157,7 @@ Changelog
     :pullreq: 5328
     :tickets: 5327
 
-    Handle SNMP alarms so we can reconnect to the master.
+    Handle SNMP alarms so we can reconnect to the daemon.
 
   .. change::
     :tags: New Features
@@ -3156,7 +4268,7 @@ Bug fixes
    (`#3290 <https://github.com/PowerDNS/pdns/issues/3290>`__)
 -  Outstanding TCP queries count was not always correct
    (`#3288 <https://github.com/PowerDNS/pdns/issues/3288>`__)
--  A locking issue in exceedRespGen() might have caused crashs
+-  A locking issue in exceedRespGen() might have caused crashes
    (`#3277 <https://github.com/PowerDNS/pdns/issues/3277>`__)
 -  Useless sockets were created in client mode
    (`#3257 <https://github.com/PowerDNS/pdns/issues/3257>`__)

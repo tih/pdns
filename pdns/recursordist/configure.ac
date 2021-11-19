@@ -1,4 +1,4 @@
-AC_PREREQ([2.61])
+AC_PREREQ([2.69])
 
 AC_INIT([pdns-recursor], m4_esyscmd(build-aux/gen-version))
 AC_CONFIG_AUX_DIR([build-aux])
@@ -7,12 +7,13 @@ AM_SILENT_RULES([yes])
 AC_CONFIG_SRCDIR([pdns_recursor.cc])
 AC_CONFIG_MACRO_DIR([m4])
 
+AC_USE_SYSTEM_EXTENSIONS
 AC_CONFIG_HEADERS([config.h])
 
 AC_CANONICAL_HOST
 # Add some default CFLAGS and CXXFLAGS, can be appended to using the environment variables
 CFLAGS="-Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls -g -O2 $CFLAGS"
-CXXFLAGS="-std=c++11 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls -g -O2 $CXXFLAGS"
+CXXFLAGS="-Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls -g -O2 $CXXFLAGS"
 
 AC_SUBST([pdns_configure_args],["$ac_configure_args"])
 AC_DEFINE_UNQUOTED([PDNS_CONFIG_ARGS],
@@ -24,7 +25,7 @@ AC_PROG_CC
 AC_PROG_CXX
 AC_LANG([C++])
 
-AC_GNU_SOURCE
+PDNS_CHECK_TIME_T
 
 AC_DEFINE([RECURSOR], [1],
   [This is the PowerDNS Recursor]
@@ -33,16 +34,14 @@ AC_DEFINE([RECURSOR], [1],
 # Warn when pkg.m4 is missing
 m4_pattern_forbid([^_?PKG_[A-Z_]+$], [*** pkg.m4 missing, please install pkg-config])
 
-AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
-AC_PROG_LIBTOOL
+AX_CXX_COMPILE_STDCXX_17([noext], [mandatory])
+LT_INIT()
 
 PDNS_CHECK_OS
 PDNS_CHECK_NETWORK_LIBS
 PTHREAD_SET_NAME
 
 PDNS_CHECK_CLOCK_GETTIME
-
-PDNS_WITH_PROTOBUF
 
 BOOST_REQUIRE([1.42])
 
@@ -86,8 +85,25 @@ PDNS_CHECK_LIBCRYPTO_EDDSA
 PDNS_WITH_LIBSODIUM
 PDNS_WITH_LIBDECAF
 PDNS_WITH_LIBCAP
+PDNS_CHECK_LIBCURL
 
 PDNS_WITH_NET_SNMP
+
+# not runtime selectable at the moment
+#AM_CONDITIONAL([HAVE_GNUTLS], [false])
+AM_CONDITIONAL([HAVE_LIBSSL], [false])
+
+PDNS_ENABLE_DNS_OVER_TLS
+
+AS_IF([test "x$enable_dns_over_tls" != "xno"], [
+  PDNS_WITH_LIBSSL
+  # not runtime selectable at the moment
+  # PDNS_WITH_GNUTLS 
+
+  AS_IF([test "x$HAVE_LIBSSL" != "x1"], [
+    AC_MSG_ERROR([DNS over TLS support requested but no OpenSSL available])
+  ])
+])
 
 # check for tools we might need
 PDNS_CHECK_RAGEL([pdns/dnslabeltext.cc], [www.powerdns.com])
@@ -140,7 +156,15 @@ AX_AVAILABLE_SYSTEMD
 AX_CHECK_SYSTEMD_FEATURES
 AM_CONDITIONAL([HAVE_SYSTEMD], [ test x"$systemd" = "xy" ])
 PDNS_WITH_SERVICE_USER([pdns-recursor])
-PDNS_CHECK_VIRTUALENV
+
+PDNS_CHECK_PYTHON_VENV
+
+AM_CONDITIONAL([HAVE_MANPAGES], [test -e "$srcdir/pdns_recursor.1"])
+AM_COND_IF([HAVE_MANPAGES],[],[
+  AM_COND_IF([HAVE_VENV],[],[
+    AC_MSG_WARN([Python 3 and/or venv module are not available, documentation will not be built.])
+  ])
+])
 
 AC_SUBST(LIBS)
 
@@ -152,7 +176,7 @@ AC_SUBST([YAHTTP_CFLAGS], ['-I$(top_srcdir)/ext/yahttp'])
 AC_SUBST([YAHTTP_LIBS], ['$(top_builddir)/ext/yahttp/yahttp/libyahttp.la'])
 
 LDFLAGS="$RELRO_LDFLAGS $LDFLAGS"
-CFLAGS="$PIE_CFLAGS $CFLAGS"
+CFLAGS="$SANITIZER_FLAGS $PIE_CFLAGS $CFLAGS"
 CXXFLAGS="$SANITIZER_FLAGS $PIE_CFLAGS $CXXFLAGS"
 PROGRAM_LDFLAGS="$PIE_LDFLAGS $PROGRAM_LDFLAGS"
 AC_SUBST([PROGRAM_LDFLAGS])
@@ -174,7 +198,7 @@ AS_IF([test "x$pdns_configure_args" != "x"],
   [summary_conf_opts=$pdns_configure_args],
   [summary_conf_opts="(no options)"]
 )
-AC_MSG_NOTICE([PowerDNS Recursor configured with: $summary_conf_opts])
+AC_MSG_NOTICE([PowerDNS Recursor $VERSION configured with: $summary_conf_opts])
 AC_MSG_NOTICE([])
 AC_MSG_NOTICE([CC: $CC])
 AC_MSG_NOTICE([CXX: $CXX])
@@ -198,10 +222,9 @@ AS_IF([test "x$LIBDECAF_LIBS" != "x" || test "x$libcrypto_ed448" = "xyes"],
   [AC_MSG_NOTICE([ed448: yes])],
   [AC_MSG_NOTICE([ed448: no])]
 )
-AS_IF([test "x$PROTOBUF_LIBS" != "x" -a x"$PROTOC" != "x"],
-  [AC_MSG_NOTICE([Protobuf: yes])],
-  [AC_MSG_NOTICE([Protobuf: no])]
-)
+
+AC_MSG_NOTICE([Protobuf: yes])
+
 AS_IF([test "x$NET_SNMP_LIBS" != "x"],
   [AC_MSG_NOTICE([SNMP: yes])],
   [AC_MSG_NOTICE([SNMP: no])]
@@ -217,6 +240,26 @@ AM_COND_IF([NOD_ENABLED],
 AM_COND_IF([FSTRM],
   [AC_MSG_NOTICE([dnstap: yes])],
   [AC_MSG_NOTICE([dnstap: no])]
+)
+AS_IF([test "x$enable_dns_over_tls" != "xno"],
+  [AC_MSG_NOTICE([DNS over TLS: yes])],
+  [AC_MSG_NOTICE([DNS over TLS: no])]
+)
+#AS_IF([test "x$enable_dns_over_tls" != "xno"], [
+#  AS_IF([test "x$GNUTLS_LIBS" != "x"],
+#    [AC_MSG_NOTICE([GnuTLS: yes])],
+#    [AC_MSG_NOTICE([GnuTLS: no])]
+#  )]
+#)
+AS_IF([test "x$enable_dns_over_tls" != "xno"], [
+  AS_IF([test "x$LIBSSL_LIBS" != "x"],
+    [AC_MSG_NOTICE([OpenSSL: yes])],
+    [AC_MSG_NOTICE([OpenSSL: no])]
+  )]
+)
+AS_IF([test "x$HAVE_LIBCURL" != "xn"],
+  [AC_MSG_NOTICE([libcurl: yes])],
+  [AC_MSG_NOTICE([libcurl: no])]
 )
 AC_MSG_NOTICE([Context library: $pdns_context_library])
 AC_MSG_NOTICE([])

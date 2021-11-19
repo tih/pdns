@@ -108,7 +108,7 @@ static void* recvThread(const vector<std::unique_ptr<Socket>>* sockets)
           continue;
         }
         g_recvcounter++;
-        for (unsigned int i = 0; i < buf.msg_iovlen; i++)
+        for (decltype(buf.msg_iovlen) i = 0; i < buf.msg_iovlen; i++)
           g_recvbytes += buf.msg_iov[i].iov_len;
 #endif
       }
@@ -399,14 +399,14 @@ try
     if(!subnet.empty() || !ecsRange.empty()) {
       EDNSSubnetOpts opt;
       opt.source = Netmask(subnet.empty() ? "0.0.0.0/32" : subnet);
-      ednsOptions.push_back(std::make_pair(EDNSOptionCode::ECS, makeEDNSSubnetOptsString(opt)));
+      ednsOptions.emplace_back(EDNSOptionCode::ECS, makeEDNSSubnetOptsString(opt));
     }
 
     if(!ednsOptions.empty() || pw.getHeader()->id % 2) {
       pw.addOpt(1500, 0, EDNSOpts::DNSSECOK, ednsOptions);
       pw.commit();
     }
-    unknown.emplace_back(std::make_shared<vector<uint8_t>>(packet));
+    unknown.push_back(std::make_shared<vector<uint8_t>>(packet));
   }
 
   shuffle(unknown.begin(), unknown.end(), pdns::dns_random_engine());

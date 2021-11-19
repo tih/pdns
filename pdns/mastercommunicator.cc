@@ -46,36 +46,36 @@
 void CommunicatorClass::queueNotifyDomain(const DomainInfo& di, UeberBackend* B)
 {
   bool hasQueuedItem=false;
-  set<string> nsset, ips;
+  set<string> ips;
+  set<DNSName> nsset;
   DNSZoneRecord rr;
   FindNS fns;
-
 
   try {
   if (d_onlyNotify.size()) {
     B->lookup(QType(QType::NS), di.zone, di.id);
     while(B->get(rr))
-      nsset.insert(getRR<NSRecordContent>(rr.dr)->getNS().toString());
+      nsset.insert(getRR<NSRecordContent>(rr.dr)->getNS());
 
-    for(set<string>::const_iterator j=nsset.begin();j!=nsset.end();++j) {
-      vector<string> nsips=fns.lookup(DNSName(*j), B);
+    for(const auto & ns : nsset) {
+      vector<string> nsips=fns.lookup(ns, B);
       if(nsips.empty())
-        g_log<<Logger::Warning<<"Unable to queue notification of domain '"<<di.zone<<"': nameservers do not resolve!"<<endl;
+        g_log<<Logger::Warning<<"Unable to queue notification of domain '"<<di.zone<<"' to nameserver '"<<ns<<"': nameserver does not resolve!"<<endl;
       else
-        for(vector<string>::const_iterator k=nsips.begin();k!=nsips.end();++k) {
-          const ComboAddress caIp(*k, 53);
+        for(const auto & nsip : nsips) {
+          const ComboAddress caIp(nsip, 53);
           if(!d_preventSelfNotification || !AddressIsUs(caIp)) {
             if(!d_onlyNotify.match(&caIp))
-              g_log<<Logger::Info<<"Skipped notification of domain '"<<di.zone<<"' to "<<*j<<" because it does not match only-notify."<<endl;
+              g_log<<Logger::Notice<<"Skipped notification of domain '"<<di.zone<<"' to "<<ns<<" because "<<caIp<<" does not match only-notify."<<endl;
             else
               ips.insert(caIp.toStringWithPort());
           }
         }
     }
 
-    for(set<string>::const_iterator j=ips.begin();j!=ips.end();++j) {
-      g_log<<Logger::Warning<<"Queued notification of domain '"<<di.zone<<"' to "<<*j<<endl;
-      d_nq.add(di.zone,*j);
+    for(const auto & ip : ips) {
+      g_log<<Logger::Notice<<"Queued notification of domain '"<<di.zone<<"' to "<<ip<<endl;
+      d_nq.add(di.zone,ip);
       hasQueuedItem=true;
     }
   }
@@ -93,10 +93,10 @@ void CommunicatorClass::queueNotifyDomain(const DomainInfo& di, UeberBackend* B)
   set<string> alsoNotify(d_alsoNotify);
   B->alsoNotifies(di.zone, &alsoNotify);
 
-  for(set<string>::const_iterator j=alsoNotify.begin();j!=alsoNotify.end();++j) {
+  for(const auto & j : alsoNotify) {
     try {
-      const ComboAddress caIp(*j, 53);
-      g_log<<Logger::Warning<<"Queued also-notification of domain '"<<di.zone<<"' to "<<caIp.toStringWithPort()<<endl;
+      const ComboAddress caIp(j, 53);
+      g_log<<Logger::Notice<<"Queued also-notification of domain '"<<di.zone<<"' to "<<caIp.toStringWithPort()<<endl;
       if (!ips.count(caIp.toStringWithPort())) {
         ips.insert(caIp.toStringWithPort());
         d_nq.add(di.zone, caIp.toStringWithPort());
@@ -117,7 +117,7 @@ bool CommunicatorClass::notifyDomain(const DNSName &domain, UeberBackend* B)
 {
   DomainInfo di;
   if(!B->getDomainInfo(domain, di)) {
-    g_log<<Logger::Error<<"No such domain '"<<domain<<"' in our database"<<endl;
+    g_log<<Logger::Warning<<"No such domain '"<<domain<<"' in our database"<<endl;
     return false;
   }
   queueNotifyDomain(di, B);
@@ -138,7 +138,7 @@ void NotificationQueue::dump()
 
 void CommunicatorClass::masterUpdateCheck(PacketHandler *P)
 {
-  if(!::arg().mustDo("master"))
+  if(!::arg().mustDo("primary"))
     return; 
 
   UeberBackend *B=P->getBackend();
@@ -147,12 +147,12 @@ void CommunicatorClass::masterUpdateCheck(PacketHandler *P)
   
   if(cmdomains.empty()) {
     if(d_masterschanged)
-      g_log<<Logger::Warning<<"No master domains need notifications"<<endl;
+      g_log<<Logger::Info<<"No master domains need notifications"<<endl;
     d_masterschanged=false;
   }
   else {
     d_masterschanged=true;
-    g_log<<Logger::Error<<cmdomains.size()<<" domain"<<(cmdomains.size()>1 ? "s" : "")<<" for which we are master need"<<
+    g_log<<Logger::Notice<<cmdomains.size()<<" domain"<<(cmdomains.size()>1 ? "s" : "")<<" for which we are master need"<<
       (cmdomains.size()>1 ? "" : "s")<<
       " notifications"<<endl;
   }
@@ -196,7 +196,7 @@ time_t CommunicatorClass::doNotifications(PacketHandler *P)
       g_log<<Logger::Warning<<"Received unsuccessful notification report for '"<<p.qdomain<<"' from "<<from.toStringWithPort()<<", error: "<<RCode::to_s(p.d.rcode)<<endl;      
 
     if(d_nq.removeIf(from.toStringWithPort(), p.d.id, p.qdomain))
-      g_log<<Logger::Warning<<"Removed from notification list: '"<<p.qdomain<<"' to "<<from.toStringWithPort()<<" "<< (p.d.rcode ? RCode::to_s(p.d.rcode) : "(was acknowledged)")<<endl;      
+      g_log<<Logger::Notice<<"Removed from notification list: '"<<p.qdomain<<"' to "<<from.toStringWithPort()<<" "<< (p.d.rcode ? RCode::to_s(p.d.rcode) : "(was acknowledged)")<<endl;
     else {
       g_log<<Logger::Warning<<"Received spurious notify answer for '"<<p.qdomain<<"' from "<< from.toStringWithPort()<<endl;
       //d_nq.dump();
@@ -226,11 +226,11 @@ time_t CommunicatorClass::doNotifications(PacketHandler *P)
         drillHole(domain, ip);
       }
       catch(ResolverException &re) {
-        g_log<<Logger::Error<<"Error trying to resolve '"<<ip<<"' for notifying '"<<domain<<"' to server: "<<re.reason<<endl;
+        g_log<<Logger::Warning<<"Error trying to resolve '"<<ip<<"' for notifying '"<<domain<<"' to server: "<<re.reason<<endl;
       }
     }
     else
-      g_log<<Logger::Error<<"Notification for "<<domain<<" to "<<ip<<" failed after retries"<<endl;
+      g_log<<Logger::Warning<<"Notification for "<<domain<<" to "<<ip<<" failed after retries"<<endl;
   }
 
   return d_nq.earliest();
@@ -255,7 +255,7 @@ void CommunicatorClass::sendNotification(int sock, const DNSName& domain, const 
 
   if (tsigkeyname.empty() == false) {
     if (!B->getTSIGKey(tsigkeyname, &tsigalgorithm, &tsigsecret64)) {
-      g_log<<Logger::Error<<"TSIG key '"<<tsigkeyname<<"' for domain '"<<domain<<"' not found"<<endl;
+      g_log<<Logger::Warning<<"TSIG key '"<<tsigkeyname<<"' for domain '"<<domain<<"' not found"<<endl;
       return;
     }
     TSIGRecordContent trc;
@@ -263,7 +263,7 @@ void CommunicatorClass::sendNotification(int sock, const DNSName& domain, const 
       trc.d_algoName = DNSName(tsigalgorithm.toStringNoDot() + ".sig-alg.reg.int.");
     else
       trc.d_algoName = tsigalgorithm;
-    trc.d_time = time(0);
+    trc.d_time = time(nullptr);
     trc.d_fudge = 300;
     trc.d_origID=ntohs(id);
     trc.d_eRcode=0;
@@ -281,18 +281,22 @@ void CommunicatorClass::sendNotification(int sock, const DNSName& domain, const 
 
 void CommunicatorClass::drillHole(const DNSName &domain, const string &ip)
 {
-  std::lock_guard<std::mutex> l(d_holelock);
-  d_holes[make_pair(domain,ip)]=time(0);
+  (*d_holes.lock())[pair(domain,ip)]=time(nullptr);
 }
 
 bool CommunicatorClass::justNotified(const DNSName &domain, const string &ip)
 {
-  std::lock_guard<std::mutex> l(d_holelock);
-  if(d_holes.find(make_pair(domain,ip))==d_holes.end()) // no hole
+  auto holes = d_holes.lock();
+  auto it = holes->find(pair(domain,ip));
+  if (it == holes->end()) {
+    // no hole
     return false;
+  }
 
-  if(d_holes[make_pair(domain,ip)]>time(0)-900)    // recent hole
+  if (it->second > time(nullptr)-900) {
+    // recent hole
     return true;
+  }
 
   // do we want to purge this? XXX FIXME 
   return false;

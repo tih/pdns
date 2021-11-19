@@ -22,22 +22,22 @@
 
 // s_resolversForStub contains the ComboAddresses that are used by
 // stubDoResolve
-static vector<ComboAddress> s_resolversForStub;
-static ReadWriteLock s_resolversForStubLock;
+static SharedLockGuarded<vector<ComboAddress>> s_resolversForStub;
 static bool s_stubResolvConfigured = false;
 
 // /etc/resolv.conf last modification time
 static time_t s_localResolvConfMtime = 0;
 static time_t s_localResolvConfLastCheck = 0;
 
+static string logPrefix = "[stub-resolver] ";
+
 /*
  * Returns false if no resolvers are configured, while emitting a warning about this
  */
 bool resolversDefined()
 {
-  ReadLock l(&s_resolversForStubLock);
-  if (s_resolversForStub.empty()) {
-    g_log<<Logger::Warning<<"No upstream resolvers configured, stub resolving (including secpoll and ALIAS) impossible."<<endl;
+  if (s_resolversForStub.read_lock()->empty()) {
+    g_log<<Logger::Warning<<logPrefix<<"No upstream resolvers configured, stub resolving (including secpoll and ALIAS) impossible."<<endl;
     return false;
   }
   return true;
@@ -46,7 +46,7 @@ bool resolversDefined()
 /*
  * Parse /etc/resolv.conf and add those nameservers to s_resolversForStub
  */
-static void parseLocalResolvConf_locked(const time_t& now)
+static void parseLocalResolvConf_locked(vector<ComboAddress>& resolversForStub, const time_t& now)
 {
   struct stat st;
   s_localResolvConfLastCheck = now;
@@ -61,7 +61,7 @@ static void parseLocalResolvConf_locked(const time_t& now)
         return;
       }
 
-      s_resolversForStub = std::move(resolvers);
+      resolversForStub = std::move(resolvers);
     }
   }
 }
@@ -72,8 +72,7 @@ static void parseLocalResolvConf()
   if ((s_localResolvConfLastCheck + LOCAL_RESOLV_CONF_MAX_CHECK_INTERVAL) > now)
     return ;
 
-  WriteLock wl(&s_resolversForStubLock);
-  parseLocalResolvConf_locked(now);
+  parseLocalResolvConf_locked(*(s_resolversForStub.write_lock()), now);
 }
 
 
@@ -88,14 +87,14 @@ static void parseLocalResolvConf()
 void stubParseResolveConf()
 {
   if(::arg().mustDo("resolver")) {
-    WriteLock wl(&s_resolversForStubLock);
+    auto resolversForStub = s_resolversForStub.write_lock();
     vector<string> parts;
     stringtok(parts, ::arg()["resolver"], " ,\t");
     for (const auto& addr : parts)
-      s_resolversForStub.push_back(ComboAddress(addr, 53));
+      resolversForStub->push_back(ComboAddress(addr, 53));
   }
 
-  if (s_resolversForStub.empty()) {
+  if (s_resolversForStub.read_lock()->empty()) {
     parseLocalResolvConf();
   }
   // Emit a warning if there are no stubs.
@@ -117,20 +116,21 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
   if (!resolversDefined())
     return RCode::ServFail;
 
-  ReadLock l(&s_resolversForStubLock);
+  auto resolversForStub = s_resolversForStub.read_lock();
   vector<uint8_t> packet;
 
   DNSPacketWriter pw(packet, qname, qtype);
   pw.getHeader()->id=dns_random_uint16();
   pw.getHeader()->rd=1;
 
-  string msg ="Doing stub resolving, using resolvers: ";
-  for (const auto& server : s_resolversForStub) {
+  string queryNameType = qname.toString() + "|" + QType(qtype).toString();
+  string msg ="Doing stub resolving for '" + queryNameType + "', using resolvers: ";
+  for (const auto& server : *resolversForStub) {
     msg += server.toString() + ", ";
   }
-  g_log<<Logger::Debug<<msg.substr(0, msg.length() - 2)<<endl;
+  g_log<<Logger::Debug<<logPrefix<<msg.substr(0, msg.length() - 2)<<endl;
 
-  for(const ComboAddress& dest :  s_resolversForStub) {
+  for(const ComboAddress& dest : *resolversForStub) {
     Socket sock(dest.sin4.sin_family, SOCK_DGRAM);
     sock.setNonBlocking();
     sock.connect(dest);
@@ -138,7 +138,8 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
 
     string reply;
 
-    waitForData(sock.getHandle(), 2, 0);
+    // error handled after this
+    (void)waitForData(sock.getHandle(), 2, 0);
     try {
     retry:
       sock.read(reply); // this calls recv
@@ -156,15 +157,15 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
     if(mdp.d_header.rcode == RCode::ServFail)
       continue;
 
-    for(MOADNSParser::answers_t::const_iterator i=mdp.d_answers.begin(); i!=mdp.d_answers.end(); ++i) {
-      if(i->first.d_place == 1 && i->first.d_type==qtype) {
+    for(const auto & answer : mdp.d_answers) {
+      if(answer.first.d_place == 1 && answer.first.d_type==qtype) {
         DNSZoneRecord zrr;
-        zrr.dr = i->first;
+        zrr.dr = answer.first;
         zrr.auth=true;
         ret.push_back(zrr);
       }
     }
-    g_log<<Logger::Debug<<"Question got answered by "<<dest.toString()<<endl;
+    g_log<<Logger::Debug<<logPrefix<<"Question for '"<<queryNameType<<"' got answered by "<<dest.toString()<<endl;
     return mdp.d_header.rcode;
   }
   return RCode::ServFail;

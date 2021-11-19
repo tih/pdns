@@ -41,7 +41,7 @@ PcapPacketReader::PcapPacketReader(const string& fname) : d_fname(fname)
   checkedFread(&d_pfh);
 
   if (d_pfh.magic != 2712847316UL) {
-    throw runtime_error((format("PCAP file %s has bad magic %x, should be %x") % fname % d_pfh.magic % 2712847316UL).str());
+    throw runtime_error((boost::format("PCAP file %s has bad magic %x, should be %x") % fname % d_pfh.magic % 2712847316UL).str());
   }
 
   if( d_pfh.linktype==1) {
@@ -56,23 +56,30 @@ PcapPacketReader::PcapPacketReader(const string& fname) : d_fname(fname)
   else if(d_pfh.linktype==113) {
     d_skipMediaHeader=16;
   }
-  else throw runtime_error((format("Unsupported link type %d") % d_pfh.linktype).str());
+  else throw runtime_error((boost::format("Unsupported link type %d") % d_pfh.linktype).str());
 
   d_runts = d_oversized = d_correctpackets = d_nonetheripudp = 0;
+
+  size_t alignmentCorrection = d_skipMediaHeader % alignof(struct ip);
+
+  d_buffer = d_readbuffer + alignmentCorrection;
+  d_bufsize = sizeof(d_readbuffer) - alignmentCorrection;
+
+  if (d_skipMediaHeader > d_bufsize) throw runtime_error("media header is too big");
 }
 
 void PcapPacketReader::checkedFreadSize(void* ptr, size_t size) 
 {
   int ret = fread(ptr, 1, size, d_fp.get());
   if (ret < 0) {
-    unixDie( (format("Error reading %d bytes from %s") % size % d_fname).str());
+    unixDie( (boost::format("Error reading %d bytes from %s") % size % d_fname).str());
   }
 
   if(!ret)
     throw EofException();
   
   if((size_t)ret != size)
-    throw EofException((format("Incomplete read from '%s', got only %d bytes") % d_fname % ret).str());
+    throw EofException((boost::format("Incomplete read from '%s', got only %d bytes") % d_fname % ret).str());
 }
 
 bool PcapPacketReader::getUDPPacket()
@@ -85,9 +92,9 @@ try
       continue;
     }
 
-    if(d_pheader.caplen > sizeof(d_buffer)) {
+    if(d_pheader.caplen > d_bufsize) {
       d_oversized++;
-      throw runtime_error((format("Can't handle a %d byte packet, have space for %d")  % d_pheader.caplen % sizeof(d_buffer)).str());
+      throw runtime_error((boost::format("Can't handle a %d byte packet, have space for %zu")  % d_pheader.caplen % d_bufsize).str());
     }
 
     checkedFreadSize(d_buffer, d_pheader.caplen);

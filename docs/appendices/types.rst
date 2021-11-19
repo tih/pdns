@@ -48,8 +48,6 @@ A specialised record type for the 'Andrew Filesystem'. Stored as:
 ALIAS
 -----
 
-.. versionadded:: 4.0.0
-
 The ALIAS pseudo-record type is supported to provide
 CNAME-like mechanisms on a zone's apex. See the :doc:`howto <../guides/alias>` for information
 on how to configure PowerDNS to serve records synthesized from ALIAS
@@ -60,16 +58,12 @@ records.
 APL
 -----
 
-.. versionadded:: 4.4.0
-
 The APL record, specified in :rfc:`3123`, is used to specify a DNS RR type "APL" for address prefix lists.
 
 .. _types-caa:
 
 CAA
 ---
-
-.. versionadded:: 4.0.0
 
 The "Certification Authority Authorization" record,
 specified in :rfc:`6844`, is used
@@ -88,16 +82,12 @@ Specialised record type for storing certificates, defined in :rfc:`2538`.
 CDNSKEY
 -------
 
-.. versionadded:: 4.0.0
-
 The CDNSKEY (:rfc:`Child DNSKEY <7344#section-3.2>`) type is supported.
 
 .. _types-cds:
 
 CDS
 ---
-
-.. versionadded:: 4.0.0
 
 The CDS (:rfc:`Child DS <7344#section-3.1>`) type is supported.
 
@@ -109,6 +99,15 @@ CNAME
 The CNAME record specifies the canonical name of a record. It is stored
 plainly. Like all other records, it is not terminated by a dot. A sample
 might be 'webserver-01.yourcompany.com'.
+
+.. _types-csync:
+
+CSYNC
+-----
+
+The CSYNC record is used for 'Child-to-Parent Synchronization in DNS', as described in :rfc:`7477`.
+Right now it is only supported as zone content; no special processing is implemented.
+Note that SOA-EDIT is not applied to serial numbers in CSYNC content.
 
 .. _types-dnskey:
 
@@ -141,6 +140,13 @@ HINFO
 
 Hardware Info record, used to specify CPU and operating system. Stored
 with a single space separating these two, example: 'i386 Linux'.
+
+.. _types-https:
+
+HTTPS
+-----
+
+See :ref:`SVCB <types-svcb>` for more information.
 
 .. _types-key:
 
@@ -250,27 +256,10 @@ The stored format is:
 
 ::
 
-     primary hostmaster serial refresh retry expire default_ttl
+     primary hostmaster serial refresh retry expire minimum
 
 Besides the primary and the hostmaster, all fields are numerical.
-PowerDNS has a set of default values:
-
--  primary: :ref:`setting-default-soa-name`
-   configuration option
--  hostmaster: ``hostmaster@domain-name``
--  serial: 0
--  refresh: 10800 (3 hours)
--  retry: 3600 (1 hour)
--  expire: 604800 (1 week)
--  default_ttl: 3600 (1 hour)
-
-The fields have complicated and sometimes controversial meanings. The
-'serial' field is special. If left at 0, the default, PowerDNS will
-perform an internal list of the domain to determine highest change_date
-field of all records within the zone, and use that as the zone serial
-number. This means that the serial number is always raised when changes
-are made to the zone, as long as the change_date field is being set.
-Make sure to check whether your backend of choice supports Autoserial.
+The fields have complicated and sometimes controversial meanings.
 
 .. _types-spf:
 
@@ -300,6 +289,26 @@ priority. For example,
 ``_ldap._tcp.dc._msdcs.conaxis.ch SRV 0 100 389 mars.conaxis.ch`` would
 be encoded with ``0`` in the priority field and
 ``100 389 mars.conaxis.ch`` in the content field.
+
+.. _types-svcb:
+
+SVCB, HTTPS
+-----------
+.. versionadded:: 4.4.0
+
+SVCB records, defined in
+(`draft-ietf-dnsop-svcb-https-07
+<https://www.ietf.org/archive/id/draft-ietf-dnsop-svcb-https-07.html>`__)
+are used to facilitate the lookup of information needed to make
+connections to network services. SVCB records allow a service to be
+provided from multiple alternative endpoints, each with associated
+parameters (such as transport protocol configuration and keys for
+encrypting the TLS ClientHello). They also enable aliasing of apex
+domains, which is not possible with CNAME. The HTTPS RR is a variation
+of SVCB for HTTPS and HTTP origins.
+
+Additional processing is supported for these types.
+Some :doc:`PowerDNS extensions <../guides/svcb>` for automatic IP address hints exist as well.
 
 TKEY, TSIG
 ----------
@@ -372,10 +381,28 @@ The following, rarely used or obsolete record types, are also supported:
 -  IPSECKEY (:rfc:`4025`)
 -  KEY (:rfc:`2535`, obsolete)
 -  KX (:rfc:`2230`)
+-  L32 (:rfc:`6742`)
+-  L64 (:rfc:`6742`)
+-  LP (:rfc:`6742`)
 -  MAILA (:rfc:`1035`)
 -  MAILB (:rfc:`1035`)
 -  MINFO (:rfc:`1035`)
 -  MR (:rfc:`1035`)
+-  NID (:rfc:`6742`)
 -  RKEY (`draft-reid-dnsext-rkey-00.txt <https://tools.ietf.org/html/draft-reid-dnsext-rkey-00>`__)
 -  SIG (:rfc:`2535`, obsolete)
 -  WKS (:rfc:`1035`)
+
+.. _types-unknown:
+
+Unknown DNS Resource Record (RR) Types
+--------------------------------------
+
+PowerDNS supports (:rfc:`3597`) syntax for serving unknown record types. For example
+
+::
+
+   e.example.   IN          TYPE1               \# 4 0A000001
+
+Beware that PowerDNS will attempt to parse known record types even if written in this syntax.
+This bug will be fixed in future release.

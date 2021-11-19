@@ -1,5 +1,11 @@
 builder/tmp
 built_pkgs
-.git
 Dockerfile-*
 .dockerignore
+Makefile.docker
+**/venv
+**/*.1
+!.git
+*.o
+*.la
+*.a

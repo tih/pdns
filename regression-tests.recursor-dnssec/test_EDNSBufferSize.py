@@ -84,13 +84,13 @@ edns-outgoing-bufsize=%d
         """
         response = dns.message.from_wire(rawResponse)
 
-        self.assertEquals(len(rawResponse), size)
+        self.assertEqual(len(rawResponse), size)
         self.assertRcodeEqual(response, dns.rcode.NOERROR)
 
         self.assertMessageHasFlags(response, ['QR', 'RD', 'RA'])
 
         for record in response.answer:
-            self.assertEquals(record.rdtype, dns.rdatatype.TXT)
+            self.assertEqual(record.rdtype, dns.rdatatype.TXT)
             for part in record:
                 for string in part.strings:
                     self.assertTrue(len(string) == 255 or
@@ -250,8 +250,7 @@ class UDPLargeResponder(DatagramProtocol):
         # This is an authoritative answer
         response.flags |= dns.flags.AA
         # We pretend to do EDNS with a 4096 buffer size
-        response.edns = 0
-        response.payload = 4096
+        response.use_edns(payload=4096)
 
         # What we use to fill the TXT records
         # Test number + 64, so 01 = 'A', 02 = 'B' etc...

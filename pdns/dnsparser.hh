@@ -66,7 +66,7 @@ class MOADNSParser;
 class PacketReader
 {
 public:
-  PacketReader(const std::string& content, uint16_t initialPos=sizeof(dnsheader))
+  PacketReader(const pdns_string_view& content, uint16_t initialPos=sizeof(dnsheader))
     : d_pos(initialPos), d_startrecordpos(initialPos), d_content(content)
   {
     if(content.size() > std::numeric_limits<uint16_t>::max())
@@ -80,6 +80,7 @@ public:
   uint16_t get16BitInt();
   uint8_t get8BitInt();
   
+  void xfrNodeOrLocatorID(NodeOrLocatorID& val);
   void xfr48BitInt(uint64_t& val);
 
   void xfr32BitInt(uint32_t& val)
@@ -183,7 +184,7 @@ private:
   uint16_t d_startrecordpos; // needed for getBlob later on
   uint16_t d_recordlen;      // ditto
   uint16_t not_used; // Aligns the whole class on 8-byte boundaries
-  const std::string& d_content;
+  const pdns_string_view d_content;
 };
 
 struct DNSRecord;
@@ -194,7 +195,7 @@ public:
   static std::shared_ptr<DNSRecordContent> mastermake(const DNSRecord &dr, PacketReader& pr);
   static std::shared_ptr<DNSRecordContent> mastermake(const DNSRecord &dr, PacketReader& pr, uint16_t opcode);
   static std::shared_ptr<DNSRecordContent> mastermake(uint16_t qtype, uint16_t qclass, const string& zone);
-  static string upgradeContent(const DNSName& qname, const QType qtype, const string& content);
+  static string upgradeContent(const DNSName& qname, const QType& qtype, const string& content);
 
   virtual std::string getZoneRepresentation(bool noDot=false) const = 0;
   virtual ~DNSRecordContent() {}
@@ -232,17 +233,17 @@ public:
   static void regist(uint16_t cl, uint16_t ty, makerfunc_t* f, zmakerfunc_t* z, const char* name)
   {
     if(f)
-      getTypemap()[make_pair(cl,ty)]=f;
+      getTypemap()[pair(cl,ty)]=f;
     if(z)
-      getZmakermap()[make_pair(cl,ty)]=z;
+      getZmakermap()[pair(cl,ty)]=z;
 
-    getT2Namemap().insert(make_pair(make_pair(cl,ty), name));
-    getN2Typemap().insert(make_pair(name, make_pair(cl,ty)));
+    getT2Namemap().emplace(pair(cl, ty), name);
+    getN2Typemap().emplace(name, pair(cl, ty));
   }
 
   static void unregist(uint16_t cl, uint16_t ty) 
   {
-    pair<uint16_t, uint16_t> key=make_pair(cl, ty);
+    auto key = pair(cl, ty);
     getTypemap().erase(key);
     getZmakermap().erase(key);
   }
@@ -266,7 +267,7 @@ public:
 
   static const string NumberToType(uint16_t num, uint16_t classnum=1)
   {
-    t2namemap_t::const_iterator iter = getT2Namemap().find(make_pair(classnum, num));
+    auto iter = getT2Namemap().find(pair(classnum, num));
     if(iter == getT2Namemap().end()) 
       return "TYPE" + std::to_string(num);
       //      throw runtime_error("Unknown DNS type with numerical id "+std::to_string(num));
@@ -359,6 +360,7 @@ struct DNSZoneRecord
   int signttl{0};
   DNSName wildcardname;
   bool auth{true};
+  bool disabled{false};
   DNSRecord dr;
 };
 
@@ -380,6 +382,11 @@ public:
     return d_dr.d_type;
   }
 
+  const vector<uint8_t>& getRawContent() const
+  {
+    return d_record;
+  }
+
 private:
   DNSRecord d_dr;
   vector<uint8_t> d_record;
@@ -398,7 +405,7 @@ public:
   //! Parse from a pointer and length
   MOADNSParser(bool query, const char *packet, unsigned int len) : d_tsigPos(0)
   {
-    init(query, std::string(packet, len));
+    init(query, pdns_string_view(packet, len));
   }
 
   DNSName d_qname;
@@ -419,14 +426,14 @@ public:
   bool hasEDNS() const;
 
 private:
-  void init(bool query, const std::string& packet);
+  void init(bool query, const pdns_string_view& packet);
   uint16_t d_tsigPos;
 };
 
 string simpleCompress(const string& label, const string& root="");
 void ageDNSPacket(char* packet, size_t length, uint32_t seconds);
 void ageDNSPacket(std::string& packet, uint32_t seconds);
-void editDNSPacketTTL(char* packet, size_t length, std::function<uint32_t(uint8_t, uint16_t, uint16_t, uint32_t)> visitor);
+void editDNSPacketTTL(char* packet, size_t length, const std::function<uint32_t(uint8_t, uint16_t, uint16_t, uint32_t)>& visitor);
 uint32_t getDNSPacketMinTTL(const char* packet, size_t length, bool* seenAuthSOA=nullptr);
 uint32_t getDNSPacketLength(const char* packet, size_t length);
 uint16_t getRecordsOfTypeCount(const char* packet, size_t length, uint8_t section, uint16_t type);
@@ -444,7 +451,7 @@ class DNSPacketMangler
 {
 public:
   explicit DNSPacketMangler(std::string& packet)
-    : d_packet((char*) packet.c_str()), d_length(packet.length()), d_notyouroffset(12), d_offset(d_notyouroffset)
+    : d_packet(packet.data()), d_length(packet.length()), d_notyouroffset(12), d_offset(d_notyouroffset)
   {}
   DNSPacketMangler(char* packet, size_t length)
     : d_packet(packet), d_length(length), d_notyouroffset(12), d_offset(d_notyouroffset)
@@ -479,7 +486,7 @@ public:
     const char* p = d_packet + d_offset;
     moveOffset(4);
     uint32_t ret;
-    memcpy(&ret, (void*)p, sizeof(ret));
+    memcpy(&ret, p, sizeof(ret));
     return ntohl(ret);
   }
   uint16_t get16BitInt()
@@ -487,7 +494,7 @@ public:
     const char* p = d_packet + d_offset;
     moveOffset(2);
     uint16_t ret;
-    memcpy(&ret, (void*)p, sizeof(ret));
+    memcpy(&ret, p, sizeof(ret));
     return ntohs(ret);
   }
 
@@ -510,9 +517,13 @@ public:
     moveOffset(4);
 
     uint32_t tmp;
-    memcpy(&tmp, (void*) p, sizeof(tmp));
+    memcpy(&tmp, p, sizeof(tmp));
     tmp = ntohl(tmp);
-    tmp-=decrease;
+    if (tmp > decrease) {
+      tmp -= decrease;
+    } else {
+      tmp = 0;
+    }
     tmp = htonl(tmp);
     memcpy(d_packet + d_offset-4, (const char*)&tmp, sizeof(tmp));
   }

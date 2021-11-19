@@ -24,13 +24,16 @@
 #include <sys/types.h>
 
 #include "config.h"
+#include "dolog.hh"
 #include "dnsdist.hh"
 #include "dnsdist-lua.hh"
 
-void setupLuaBindingsPacketCache(LuaContext& luaCtx)
+#include <boost/lexical_cast.hpp>
+
+void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
 {
   /* PacketCache */
-  luaCtx.writeFunction("newPacketCache", [](size_t maxEntries, boost::optional<std::unordered_map<std::string, boost::variant<bool, size_t>>> vars) {
+  luaCtx.writeFunction("newPacketCache", [client](size_t maxEntries, boost::optional<std::unordered_map<std::string, boost::variant<bool, size_t, std::vector<std::pair<int, uint16_t>>>>> vars) {
 
       bool keepStaleData = false;
       size_t maxTTL = 86400;
@@ -38,11 +41,11 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
       size_t tempFailTTL = 60;
       size_t maxNegativeTTL = 3600;
       size_t staleTTL = 60;
-      size_t numberOfShards = 1;
+      size_t numberOfShards = 20;
       bool dontAge = false;
       bool deferrableInsertLock = true;
       bool ecsParsing = false;
-      bool cookieHashing = false;
+      std::unordered_set<uint16_t> optionsToSkip{EDNSOptionCode::COOKIE};
 
       if (vars) {
 
@@ -87,24 +90,42 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
         }
 
         if (vars->count("cookieHashing")) {
-          cookieHashing = boost::get<bool>((*vars)["cookieHashing"]);
+          if (boost::get<bool>((*vars)["cookieHashing"])) {
+            optionsToSkip.erase(EDNSOptionCode::COOKIE);
+          }
         }
+        if (vars->count("skipOptions")) {
+          for (auto option: boost::get<std::vector<std::pair<int, uint16_t>>>(vars->at("skipOptions"))) {
+            optionsToSkip.insert(option.second);
+          }
+        }
+      }
+
+      if (maxEntries < numberOfShards) {
+        warnlog("The number of entries (%d) in the packet cache is smaller than the number of shards (%d), decreasing the number of shards to %d", maxEntries, numberOfShards, maxEntries);
+        g_outputBuffer += "The number of entries (" + std::to_string(maxEntries) + " in the packet cache is smaller than the number of shards (" + std::to_string(numberOfShards) + "), decreasing the number of shards to " + std::to_string(maxEntries);
+        numberOfShards = maxEntries;
+      }
+
+      if (client) {
+        maxEntries = 1;
+        numberOfShards = 1;
       }
 
       auto res = std::make_shared<DNSDistPacketCache>(maxEntries, maxTTL, minTTL, tempFailTTL, maxNegativeTTL, staleTTL, dontAge, numberOfShards, deferrableInsertLock, ecsParsing);
 
       res->setKeepStaleData(keepStaleData);
-      res->setCookieHashing(cookieHashing);
+      res->setSkippedOptions(optionsToSkip);
 
       return res;
     });
-  luaCtx.registerFunction<std::string(std::shared_ptr<DNSDistPacketCache>::*)()>("toString", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
+  luaCtx.registerFunction<std::string(std::shared_ptr<DNSDistPacketCache>::*)()const>("toString", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
       if (cache) {
         return cache->toString();
       }
       return std::string();
     });
-  luaCtx.registerFunction<bool(std::shared_ptr<DNSDistPacketCache>::*)()>("isFull", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
+  luaCtx.registerFunction<bool(std::shared_ptr<DNSDistPacketCache>::*)()const>("isFull", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
       if (cache) {
         return cache->isFull();
       }
@@ -112,7 +133,9 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
     });
   luaCtx.registerFunction<size_t(std::shared_ptr<DNSDistPacketCache>::*)(size_t)>("purgeExpired", [](std::shared_ptr<DNSDistPacketCache>& cache, size_t upTo) {
       if (cache) {
-        return cache->purgeExpired(upTo);
+        const time_t now = time(nullptr);
+
+        return cache->purgeExpired(upTo, now);
       }
       return static_cast<size_t>(0);
     });
@@ -138,7 +161,7 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
                   g_outputBuffer="Expunged " + std::to_string(cache->expungeByName(qname, qtype ? *qtype : QType(QType::ANY).getCode(), suffixMatch ? *suffixMatch : false)) + " records\n";
                 }
     });
-  luaCtx.registerFunction<void(std::shared_ptr<DNSDistPacketCache>::*)()>("printStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
+  luaCtx.registerFunction<void(std::shared_ptr<DNSDistPacketCache>::*)()const>("printStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
       if (cache) {
         g_outputBuffer="Entries: " + std::to_string(cache->getEntriesCount()) + "/" + std::to_string(cache->getMaxEntries()) + "\n";
         g_outputBuffer+="Hits: " + std::to_string(cache->getHits()) + "\n";
@@ -150,7 +173,7 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
         g_outputBuffer+="TTL Too Shorts: " + std::to_string(cache->getTTLTooShorts()) + "\n";
       }
     });
-  luaCtx.registerFunction<std::unordered_map<std::string, uint64_t>(std::shared_ptr<DNSDistPacketCache>::*)()>("getStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
+  luaCtx.registerFunction<std::unordered_map<std::string, uint64_t>(std::shared_ptr<DNSDistPacketCache>::*)()const>("getStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
       std::unordered_map<std::string, uint64_t> stats;
       if (cache) {
         stats["entries"] = cache->getEntriesCount();
@@ -165,7 +188,7 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx)
       }
       return stats;
     });
-  luaCtx.registerFunction<void(std::shared_ptr<DNSDistPacketCache>::*)(const std::string& fname)>("dump", [](const std::shared_ptr<DNSDistPacketCache>& cache, const std::string& fname) {
+  luaCtx.registerFunction<void(std::shared_ptr<DNSDistPacketCache>::*)(const std::string& fname)const>("dump", [](const std::shared_ptr<DNSDistPacketCache>& cache, const std::string& fname) {
       if (cache) {
 
         int fd = open(fname.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0660);

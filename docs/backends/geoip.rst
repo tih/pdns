@@ -8,6 +8,7 @@ GeoIP backend
 * DNSSEC: Yes
 * Disabled data: No
 * Comments: No
+* Zone caching: Yes
 * Module name: geoip
 * Launch name: ``geoip``
 
@@ -50,12 +51,6 @@ defaults suit you.
 ``geoip-database-files``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. versionchanged:: 4.2.0
-  The syntax of the argument has been changed.
-
-.. versionchanged:: 4.2.0
-  Support for MMDB has been added.
-
 Comma, tab or space separated list of files to open. You can use
 `geoip-cvs-to-dat <https://github.com/dankamongmen/sprezzos-world/blob/master/packaging/geoip/debian/src/geoip-csv-to-dat.cpp>`__.
 to generate your own.
@@ -76,18 +71,6 @@ Drivers and options
 
   :mode: The caching mode for data, only ``mmap`` is supported
   :language: The language to use, ``en`` by default
-
-``geoip-database-cache``
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 4.2.0
-
-  This setting is removed
-
-Specifies the kind of caching that is done on the database. This is one
-of "standard", "memory", "index" or "mmap". These options map to the
-caching options described
-`here <https://github.com/maxmind/geoip-api-c/blob/master/README.md#memory-caching-and-other-options>`__
 
 .. _setting-geoip-zones-file:
 
@@ -145,6 +128,14 @@ that the ``‐`` before certain keys is part of the syntax.
         service.geo.example.com:
           default: [ '%co.%cn.service.geo.example.com', '%cn.service.geo.example.com' ]
           10.0.0.0/8: 'internal.service.geo.example.com'
+    mapping_lookup_formats: ['%cc-%re', '%cc']
+    custom_mapping:
+      fr: eu-central
+      be: eu-central
+      es: eu-south
+      pt: eu-south
+      us-tx: us-south
+      us-ca: us-south
 
 Keys explained
 ~~~~~~~~~~~~~~
@@ -165,6 +156,16 @@ Keys explained
 
   :services: Defines one or more services for querying.
              Each service name may have one or more placeholders.
+  :mapping_lookup_formats: Defines which format to interpolate when using the ``%mp`` placeholder. Each entry
+                           is looked up in the given order and stops at first match.
+                           This allows using a fine granularity, (e.g. per country), while limiting the number
+                           of records to create.
+                           You can use any placeholder, except ``%mp`` to avoid recursion, within the given
+                           format (e.g. %cc).
+  :custom_mapping: Defines the mapping between the lookup format and a custom value to replace ``%mp`` placeholder.
+
+:mapping_lookup_formats: Same as per domain, but used as default value if not defined at the domain level.
+:custom_mapping: Same as per domain, but used as default value if not defined at the domain level.
 
 .. note::
 
@@ -204,18 +205,15 @@ These placeholders disable caching for the record completely:
 :%ip4: Client IPv4 address
 :%ip6: Client IPv6 address
 
-.. versionadded:: 4.2.0
+Following placeholder allows custom mapping:
 
-  These placeholders have been added in version 4.2.0:
+:%mp: Use formats in ``mapping_lookup_formats`` and use user defined ``custom_mapping``
 
-  - %lat, %lon, %loc to expand for geographic location, if available in backend. %loc in particular can be safely used with LOC record type.
-  - %ip4 and %ip6 that will expand to the IP address when AFI matches, and empty otherwise. Can be particularly used with A and AAAA record types.
+.. versionadded:: 4.4.0
 
-.. versionadded:: 4.1.0
+  These placeholders have been added in version 4.4.0:
 
-  These placeholders have been added in version 4.1.0:
-
-  - %cc = 2 letter country code
+  - %mp to expand user defined custom formats.
 
 Using the ``weight`` attribute
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -252,11 +250,6 @@ For instance, this configuration will send the correct response for both A and S
 If your services match wildcard records in your zone file then these will be returned as CNAMEs.
 This will only be an issue if you are trying to use a service record at the apex of your domain where you need other record types to be present (such as NS and SOA records).
 Per :rfc:`2181`, CNAME records cannot appear in the same label as NS or SOA records.
-
-.. versionchanged:: 4.2.0
-
-  Before, a record expanded to an empty value would cause a SERVFAIL response.
-  Since 4.2.0 such expansions for non-TXT record types are not included in response.
 
 Caching and the GeoIP Backend
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

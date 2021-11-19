@@ -49,10 +49,8 @@ class TestEDNSSelfGenerated(DNSDistTest):
         expectedResponse = dns.message.make_response(query)
         expectedResponse.flags |= dns.flags.TC
 
-        for method in ("sendUDPQuery", "sendTCPQuery"):
-            sender = getattr(self, method)
-            (_, receivedResponse) = sender(query, response=None, useQueue=False)
-            self.checkMessageNoEDNS(expectedResponse, receivedResponse)
+        (_, receivedResponse) = self.sendUDPQuery(query, response=None, useQueue=False)
+        self.checkMessageNoEDNS(expectedResponse, receivedResponse)
 
         name = 'no-edns.lua.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN')
@@ -95,7 +93,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertFalse(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-no-do.tc.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=False)
@@ -104,12 +102,10 @@ class TestEDNSSelfGenerated(DNSDistTest):
         expectedResponse = dns.message.make_response(query, our_payload=1042)
         expectedResponse.flags |= dns.flags.TC
 
-        for method in ("sendUDPQuery", "sendTCPQuery"):
-            sender = getattr(self, method)
-            (_, receivedResponse) = sender(query, response=None, useQueue=False)
-            self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
-            self.assertFalse(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+        (_, receivedResponse) = self.sendUDPQuery(query, response=None, useQueue=False)
+        self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
+        self.assertFalse(receivedResponse.ednsflags & dns.flags.DO)
+        self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-no-do.lua.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=False)
@@ -121,7 +117,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertFalse(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-no-do.spoof.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=False)
@@ -139,7 +135,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertFalse(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
     def testWithEDNSWithDO(self):
         """
@@ -156,7 +152,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-do.tc.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=True)
@@ -165,12 +161,10 @@ class TestEDNSSelfGenerated(DNSDistTest):
         expectedResponse = dns.message.make_response(query, our_payload=1042)
         expectedResponse.flags |= dns.flags.TC
 
-        for method in ("sendUDPQuery", "sendTCPQuery"):
-            sender = getattr(self, method)
-            (_, receivedResponse) = sender(query, response=None, useQueue=False)
-            self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
-            self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+        (_, receivedResponse) = self.sendUDPQuery(query, response=None, useQueue=False)
+        self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
+        self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
+        self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-do.lua.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=True)
@@ -182,7 +176,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-do.spoof.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=True)
@@ -200,7 +194,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
     def testWithEDNSNoOptions(self):
         """
@@ -218,7 +212,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-options.tc.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, options=[ecso], payload=512, want_dnssec=True)
@@ -227,12 +221,10 @@ class TestEDNSSelfGenerated(DNSDistTest):
         expectedResponse = dns.message.make_response(query, our_payload=1042)
         expectedResponse.flags |= dns.flags.TC
 
-        for method in ("sendUDPQuery", "sendTCPQuery"):
-            sender = getattr(self, method)
-            (_, receivedResponse) = sender(query, response=None, useQueue=False)
-            self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
-            self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+        (_, receivedResponse) = self.sendUDPQuery(query, response=None, useQueue=False)
+        self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
+        self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
+        self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-options.lua.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, options=[ecso], payload=512, want_dnssec=True)
@@ -244,7 +236,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
         name = 'edns-options.spoof.edns-self.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, options=[ecso], payload=512, want_dnssec=True)
@@ -262,7 +254,7 @@ class TestEDNSSelfGenerated(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.checkMessageEDNSWithoutOptions(expectedResponse, receivedResponse)
             self.assertTrue(receivedResponse.ednsflags & dns.flags.DO)
-            self.assertEquals(receivedResponse.payload, 1042)
+            self.assertEqual(receivedResponse.payload, 1042)
 
 
 class TestEDNSSelfGeneratedDisabled(DNSDistTest):
@@ -312,10 +304,8 @@ class TestEDNSSelfGeneratedDisabled(DNSDistTest):
         expectedResponse = dns.message.make_response(query)
         expectedResponse.flags |= dns.flags.TC
 
-        for method in ("sendUDPQuery", "sendTCPQuery"):
-            sender = getattr(self, method)
-            (_, receivedResponse) = sender(query, response=None, useQueue=False)
-            self.checkMessageNoEDNS(expectedResponse, receivedResponse)
+        (_, receivedResponse) = self.sendUDPQuery(query, response=None, useQueue=False)
+        self.checkMessageNoEDNS(expectedResponse, receivedResponse)
 
         name = 'edns-no-do.lua.edns-self-disabled.tests.powerdns.com.'
         query = dns.message.make_query(name, 'A', 'IN', use_edns=True, payload=4096, want_dnssec=False)

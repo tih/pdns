@@ -12,6 +12,27 @@ As an example:
  - ``serve-rfc1918=off`` or ``serve-rfc1918=no`` means: do not serve those zones.
  - Anything else means: do serve those zones.
 
+You can use ``+=`` syntax to set some variables incrementally, but this
+requires you to have at least one non-incremental setting for the
+variable to act as base setting. This is mostly useful for
+:ref:`setting-include-dir` directive. An example::
+
+  forward-zones = foo.example.com=192.168.100.1;
+  forward-zones += bar.example.com=[1234::abcde]:5353;
+
+
+.. _setting-aggressive-nsec-cache-size:
+
+``aggressive-nsec-cache-size``
+------------------------------
+.. versionadded:: 4.5.0
+
+-  Integer
+-  Default: 100000
+
+The number of records to cache in the aggressive cache. If set to a value greater than 0, the recursor will cache NSEC and NSEC3 records to generate negative answers, as defined in :rfc:`8198`.
+To use this, DNSSEC processing or validation must be enabled by setting `dnssec`_ to ``process``, ``log-fail`` or ``validate``.
+
 .. _setting-allow-from:
 
 ``allow-from``
@@ -36,6 +57,69 @@ Note that specifying an IP address without a netmask uses an implicit netmask of
 
 Like `allow-from`_, except reading from file.
 Overrides the `allow-from`_ setting. To use this feature, supply one netmask per line, with optional comments preceded by a "#".
+
+.. _setting-allow-notify-for:
+
+``allow-notify-for``
+---------------------
+.. versionadded:: 4.6.0
+
+-  Comma separated list of domain-names
+-  Default: (empty)
+
+Domain names specified in this list are used to permit incoming
+NOTIFY operations to wipe any cache entries that match the domain
+name. If this list is empty, all NOTIFY operations will be ignored.
+
+.. _setting-allow-notify-for-file:
+
+``allow-notify-for-file``
+-------------------------
+.. versionadded:: 4.6.0
+
+-  Path
+
+Like `allow-notify-for`_, except reading from file. To use this
+feature, supply one domain name per line, with optional comments
+preceded by a "#".
+
+.. _setting-allow-notify-from:
+
+``allow-notify-from``
+---------------------
+.. versionadded:: 4.6.0
+
+-  IP addresses or netmasks, separated by commas
+-  Default: unset
+
+Netmasks (both IPv4 and IPv6) that are allowed to issue NOTIFY operations
+to the server.  NOTIFY operations from IP addresses not listed here are
+ignored and do not get an answer.
+
+When the Proxy Protocol is enabled (see `proxy-protocol-from`_), the
+recursor will check the address of the client IP advertised in the
+Proxy Protocol header instead of the one of the proxy.
+
+Note that specifying an IP address without a netmask uses an implicit
+netmask of /32 or /128.
+
+NOTIFY operations received from a client listed in one of these netmasks
+will be accepted and used to wipe any cache entries whose zones match
+the zone specified in the NOTIFY operation, but only if that zone (or
+one of its parents) is included in `allow-notify-for`_,
+`allow-notify-for-file`_, or `forward-zones-file`_ with a '^' prefix.
+
+.. _setting-allow-notify-from-file:
+
+``allow-notify-from-file``
+--------------------------
+.. versionadded:: 4.6.0
+
+-  Path
+
+Like `allow-notify-from`_, except reading from file. To use this
+feature, supply one netmask per line, with optional comments preceded
+by a "#".
 
 .. _setting-any-to-tcp:
 
@@ -74,11 +158,13 @@ Directory where the REST API stores its configuration and zones.
 ``api-key``
 -----------
 .. versionadded:: 4.0.0
+.. versionchanged:: 4.6.0
+  This setting now accepts a hashed and salted version.
 
 -  String
 -  Default: unset
 
-Static pre-shared authentication key for access to the REST API.
+Static pre-shared authentication key for access to the REST API. Since 4.6.0 the key can be hashed and salted using ``rec_control hash-password`` instead of being stored in the configuration in plaintext, but the plaintext version is still supported.
 
 .. _setting-api-readonly:
 
@@ -187,7 +273,8 @@ See :doc:`metrics`.
 -  Path to a Directory
 
 If set, chroot to this directory for more security.
-See :doc:`security`
+This is not recommended; instead, we recommend containing PowerDNS using operating system features.
+We ship systemd unit files with our packages to make this easy.
 
 Make sure that ``/dev/log`` is available from within the chroot.
 Logging will silently fail over time otherwise (on logrotate).
@@ -264,14 +351,6 @@ This parameter is only available on OS that provides the `pthread_setaffinity_np
 
 Operate in the background.
 
-.. _setting-delegation-only:
-
-``delegation-only``
--------------------
--  Domains, comma separated
-
-Which domains we only accept delegations from (a Verisign special).
-
 .. _setting-dont-throttle-names:
 
 ``dont-throttle-names``
@@ -313,8 +392,7 @@ In this case, ``dont-throttle-netmasks`` could be set to ``192.0.2.1``.
 -  Boolean
 -  Default: no
 
-Turn off the packet cache. Useful when running with Lua scripts that can
-not be cached.
+Turn off the packet cache. Useful when running with Lua scripts that can not be cached, though individual query caching can be controlled from Lua as well.
 
 .. _setting-disable-syslog:
 
@@ -374,6 +452,29 @@ If `pdns-distributes-queries`_ is set, spawn this number of distributor threads 
 handle incoming queries and distribute them to other threads based on a hash of the query, to maximize the cache hit
 ratio.
 
+.. _setting-dot-to-auth-names:
+
+``dot-to-auth-names``
+---------------------
+.. versionadded:: 4.6.0
+
+- Comma separated list of domain-names or suffixes
+- Default: (empty).
+
+Force DoT to the listed authoritative nameservers. For this to work, DoT support has to be compiled in.
+Currently, the certificate is not checked for validity in any way.
+
+.. _setting-dot-to-port-853:
+
+``dot-to-port-853``
+-------------------
+.. versionadded:: 4.6.0
+
+- Boolean
+- Default: ``yes`` if DoT support is compiled in, ``no`` otherwise.
+
+Enable DoT to forwarders that specify port 853.
+
 .. _setting-dns64-prefix:
 
 ``dns64-prefix``
@@ -383,8 +484,8 @@ ratio.
 -  Netmask, as a string
 -  Default: None
 
-Enable DNS64 (:rfc:`6147`) support using the supplied /96 IPv6 prefix. This will generate 'fake' AAAA records for names
-with only `A` records, as well as 'fake' PTR records to make sure that reverse lookup of DNS64-generated IPv6 addresses
+Enable DNS64 (:rfc:`6147`) support using the supplied /96 IPv6 prefix. This will generate 'fake' ``AAAA`` records for names
+with only ``A`` records, as well as 'fake' ``PTR`` records to make sure that reverse lookup of DNS64-generated IPv6 addresses
 generate the right name.
 See :doc:`dns64` for more flexible but slower alternatives using Lua.
 
@@ -394,34 +495,28 @@ See :doc:`dns64` for more flexible but slower alternatives using Lua.
 ----------
 .. versionadded:: 4.0.0
 
+.. versionchanged:: 4.5.0
+   The default changed from ``process-no-validate`` to ``process``
+
 -  One of ``off``, ``process-no-validate``, ``process``, ``log-fail``, ``validate``, String
--  Default: ``process-no-validate``
+-  Default: ``process``
 
-Set the mode for DNSSEC processing:
+Set the mode for DNSSEC processing, as detailed in :doc:`dnssec`.
 
-off
-^^^
-No DNSSEC processing whatsoever.
-Ignore DO-bits in queries, don't request any DNSSEC information from authoritative servers.
-This behaviour is similar to PowerDNS Recursor pre-4.0.
-
-process-no-validate
-^^^^^^^^^^^^^^^^^^^
-Respond with DNSSEC records to clients that ask for it, set the DO bit on all outgoing queries.
-Don't do any validation.
-
-process
-^^^^^^^
-Respond with DNSSEC records to clients that ask for it, set the DO bit on all outgoing queries.
-Do validation for clients that request it (by means of the AD- bit or DO-bit in the query).
-
-log-fail
-^^^^^^^^
-Similar behaviour to ``process``, but validate RRSIGs on responses and log bogus responses.
-
-validate
-^^^^^^^^
-Full blown DNSSEC validation. Send SERVFAIL to clients on bogus responses.
+``off``
+   No DNSSEC processing whatsoever.
+   Ignore DO-bits in queries, don't request any DNSSEC information from authoritative servers.
+   This behaviour is similar to PowerDNS Recursor pre-4.0.
+``process-no-validate``
+   Respond with DNSSEC records to clients that ask for it, set the DO bit on all outgoing queries.
+   Don't do any validation.
+``process``
+   Respond with DNSSEC records to clients that ask for it, set the DO bit on all outgoing queries.
+   Do validation for clients that request it (by means of the AD- bit or DO-bit in the query).
+``log-fail``
+   Similar behaviour to ``process``, but validate RRSIGs on responses and log bogus responses.
+``validate``
+   Full blown DNSSEC validation. Send SERVFAIL to clients on bogus responses.
 
 .. _setting-dnssec-log-bogus:
 
@@ -445,7 +540,7 @@ This can have odd effects, depending on your network, and may even be a security
 Therefore, the PowerDNS Recursor by default does not query private space IP addresses.
 This setting can be used to expand or reduce the limitations.
 
-Queries to addresses for zones as configured in any of the settings `forward-zones`_, `forward-zones-file`_ or `forward-zones-recurse`_ are performed regardless of these limitations.
+Queries for names in forward zones and to addresses as configured in any of the settings `forward-zones`_, `forward-zones-file`_ or `forward-zones-recurse`_ are performed regardless of these limitations.
 
 .. _setting-ecs-add-for:
 
@@ -459,7 +554,7 @@ Queries to addresses for zones as configured in any of the settings `forward-zon
 List of requestor netmasks for which the requestor IP Address should be used as the :rfc:`EDNS Client Subnet <7871>` for outgoing queries. Outgoing queries for requestors that do not match this list will use the `ecs-scope-zero-address`_ instead.
 Valid incoming ECS values from `use-incoming-edns-subnet`_ are not replaced.
 
-Regardless of the value of this setting, ECS values are only sent for outgoing queries matching the conditions in the `edns-subnet-whitelist`_ setting. This setting only controls the actual value being sent.
+Regardless of the value of this setting, ECS values are only sent for outgoing queries matching the conditions in the `edns-subnet-allow-list`_ setting. This setting only controls the actual value being sent.
 
 This defaults to not using the requestor address inside RFC1918 and similar "private" IP address spaces.
 
@@ -484,7 +579,7 @@ Number of bits of client IPv4 address to pass when sending EDNS Client Subnet ad
 -  Default: 24
 
 Maximum number of bits of client IPv4 address used by the authoritative server (as indicated by the EDNS Client Subnet scope in the answer) for an answer to be inserted into the query cache. This condition applies in conjunction with ``ecs-cache-limit-ttl``.
-That is, only if both the limits apply, the record will not be cached.
+That is, only if both the limits apply, the record will not be cached. This decision can be overridden by ``ecs-ipv4-never-cache`` and ``ecs-ipv6-never-cache``.
 
 .. _setting-ecs-ipv6-bits:
 
@@ -507,17 +602,46 @@ Number of bits of client IPv6 address to pass when sending EDNS Client Subnet ad
 -  Default: 56
 
 Maximum number of bits of client IPv6 address used by the authoritative server (as indicated by the EDNS Client Subnet scope in the answer) for an answer to be inserted into the query cache. This condition applies in conjunction with ``ecs-cache-limit-ttl``.
-That is, only if both the limits apply, the record will not be cached.
+That is, only if both the limits apply, the record will not be cached. This decision can be overridden by ``ecs-ipv4-never-cache`` and ``ecs-ipv6-never-cache``.
+
+.. _setting-ecs-ipv4-never-cache:
+
+``ecs-ipv4-never-cache``
+------------------------
+.. versionadded:: 4.5.0
+
+-  Boolean
+-  Default: no
+
+When set, never cache replies carrying EDNS IPv4 Client Subnet scope in the record cache.
+In this case the decision made by ```ecs-ipv4-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
+
+.. _setting-ecs-ipv6-never-cache:
+
+``ecs-ipv6-never-cache``
+------------------------
+.. versionadded:: 4.5.0
+
+-  Boolean
+-  Default: no
+
+When set, never cache replies carrying EDNS IPv6 Client Subnet scope in the record cache.
+In this case the decision made by ```ecs-ipv6-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
 
 .. _setting-ecs-minimum-ttl-override:
 
 ``ecs-minimum-ttl-override``
 ----------------------------
+.. versionchanged:: 4.5.0
+  Old versions used default 0.
+
 -  Integer
--  Default: 0 (disabled)
+-  Default: 1
 
 This setting artificially raises the TTLs of records in the ANSWER section of ECS-specific answers to be at least this long.
-While this is a gross hack, and violates RFCs, under conditions of DoS, it may enable you to continue serving your customers.
+Setting this to a value greater than 1 technically is an RFC violation, but might improve performance a lot.
+Using a value of 0 impacts performance of TTL 0 records greatly, since it forces the recursor to contact
+authoritative servers every time a client requests them.
 Can be set at runtime using ``rec_control set-ecs-minimum-ttl 3600``.
 
 .. _setting-ecs-cache-limit-ttl:
@@ -530,7 +654,7 @@ Can be set at runtime using ``rec_control set-ecs-minimum-ttl 3600``.
 -  Default: 0 (disabled)
 
 The minimum TTL for an ECS-specific answer to be inserted into the query cache. This condition applies in conjunction with ``ecs-ipv4-cache-bits`` or ``ecs-ipv6-cache-bits``.
-That is, only if both the limits apply, the record will not be cached.
+That is, only if both the limits apply, the record will not be cached. This decision can be overridden by ``ecs-ipv4-never-cache`` and ``ecs-ipv6-never-cache``.
 
 .. _setting-ecs-scope-zero-address:
 
@@ -542,7 +666,7 @@ That is, only if both the limits apply, the record will not be cached.
 - Default: empty
 
 The IP address sent via EDNS Client Subnet to authoritative servers listed in
-`edns-subnet-whitelist`_ when `use-incoming-edns-subnet`_ is set and the query has
+`edns-subnet-allow-list`_ when `use-incoming-edns-subnet`_ is set and the query has
 an ECS source prefix-length set to 0.
 The default is to look for the first usable (not an ``any`` one) address in
 `query-local-address`_ (starting with IPv4). If no suitable address is
@@ -566,10 +690,54 @@ found, the recursor fallbacks to sending 127.0.0.1.
 This is the value set for the EDNS0 buffer size in outgoing packets.
 Lower this if you experience timeouts.
 
+.. _setting-edns-padding-from:
+
+``edns-padding-from``
+---------------------
+.. versionadded:: 4.5.0
+
+-  Comma separated list of netmasks
+-  Default: (none)
+
+List of netmasks (proxy IP in case of XPF or proxy-protocol presence, client IP otherwise) for which EDNS padding will be enabled in responses, provided that `edns-padding-mode`_ applies.
+
+.. _setting-edns-padding-mode:
+
+``edns-padding-mode``
+---------------------
+.. versionadded:: 4.5.0
+
+-  One of ``always``, ``padded-queries-only``, String
+-  Default: ``padded-queries-only``
+
+Whether to add EDNS padding to all responses (``always``) or only to responses for queries containing the EDNS padding option (``padded-queries-only``, the default).
+In both modes, padding will only be added to responses for queries coming from `edns-padding-from`_ sources.
+
+.. _setting-edns-padding-tag:
+
+``edns-padding-tag``
+--------------------
+.. versionadded:: 4.5.0
+
+-  Integer
+-  Default: 7830
+
+The packetcache tag to use for padded responses, to prevent a client not allowed by the `edns-padding-from`_ list to be served a cached answer generated for an allowed one. This
+effectively divides the packet cache in two when `edns-padding-from`_ is used. Note that this will not override a tag set from one of the ``Lua`` hooks.
+
 .. _setting-edns-subnet-whitelist:
 
 ``edns-subnet-whitelist``
 -------------------------
+.. deprecated:: 4.5.0
+ Use :ref:`setting-edns-subnet-allow-list`.
+
+.. _setting-edns-subnet-allow-list:
+
+``edns-subnet-allow-list``
+--------------------------
+.. versionadded:: 4.5.0
+
 -  Comma separated list of domain names and netmasks
 -  Default: (none)
 
@@ -602,6 +770,18 @@ Change to ``/dev/random`` if PowerDNS should block waiting for enough entropy to
 The path to the /etc/hosts file, or equivalent.
 This file can be used to serve data authoritatively using `export-etc-hosts`_.
 
+.. _setting-event-trace-enabled:
+
+``event-trace-enabled``
+-----------------------
+.. versionadded:: 4.6.0
+
+- Integer
+- Default: 0
+
+Enable the recording and logging of ref:`event traces`. This is an experimental feature subject to change.
+Possible values are 0: (disabled), 1 (add information to protobuf logging messages) and 2 (write to log) and 3 (both).
+
 .. _setting-export-etc-hosts:
 
 ``export-etc-hosts``
@@ -620,6 +800,17 @@ If set, this flag will export the host names and IP addresses mentioned in ``/et
 If set, all hostnames in the `export-etc-hosts`_ file are loaded in canonical form, based on this suffix, unless the name contains a '.', in which case the name is unchanged.
 So an entry called 'pc' with ``export-etc-hosts-search-suffix='home.com'`` will lead to the generation of 'pc.home.com' within the recursor.
 An entry called 'server1.home' will be stored as 'server1.home', regardless of this setting.
+
+.. _setting-extended-resolution-errors:
+
+``extended-resolution-errors``
+------------------------------
+.. versionadded:: 4.5.0
+
+-  Boolean
+-  Default: no
+
+If set, the recursor will add an EDNS Extended Error (:rfc:`8914`) to responses when resolution failed, like DNSSEC validation errors, explaining the reason it failed. This setting is not needed to allow setting custom error codes from Lua or from a RPZ hit.
 
 .. _setting-forward-zones:
 
@@ -658,14 +849,20 @@ Same as `forward-zones`_, parsed from a file. Only 1 zone is allowed per line, s
 
     example.org=203.0.113.210, 192.0.2.4:5300
 
-Zones prefixed with a '+' are forwarded with the recursion-desired bit set, for which see `forward-zones-recurse`_.
-Default behaviour without '+' is as with `forward-zones`_.
+Zones prefixed with a '+' are treated as with
+`forward-zones-recurse`_.  Default behaviour without '+' is as with
+`forward-zones`_.
 
 .. versionchanged:: 4.0.0
 
   Comments are allowed, everything behind '#' is ignored.
 
 The DNSSEC notes from `forward-zones`_ apply here as well.
+
+.. versionchanged:: 4.6.0
+
+Zones prefixed with a '^' are added to the `allow-notify-for`_
+list. Both prefix characters can be used if desired, in any order.
 
 .. _setting-forward-zones-recurse:
 
@@ -675,7 +872,7 @@ The DNSSEC notes from `forward-zones`_ apply here as well.
 
 Like regular `forward-zones`_, but forwarded queries have the 'recursion desired' bit set to 1, meaning that this setting is intended to forward queries to other recursive servers.
 
-The DNSSEC notes from `forward-zones`_ apply here as well.
+See `forward-zones`_ for additional options (such as supplying multiple recursive servers) and an important note about DNSSEC.
 
 .. _setting-gettag-needs-edns-options:
 
@@ -695,6 +892,21 @@ If set, EDNS options in incoming queries are extracted and passed to the :func:`
 -  Path
 
 If set, the root-hints are read from this file. If unset, default root hints are used.
+
+.. _setting-ignore-unknown-settings:
+
+``ignore-unknown-settings``
+---------------------------
+
+.. versionadded:: 4.6.0
+
+-  Setting names, separated by commas
+-  Default: empty
+
+Names of settings to be ignored while parsing configuration files, if the setting
+name is unknown to PowerDNS.
+
+Useful during upgrade testing.
 
 .. _setting-include-dir:
 
@@ -718,7 +930,7 @@ Indication of how many queries will be averaged to get the average latency repor
 ``local-address``
 -----------------
 -  IPv4/IPv6 Addresses, with optional port numbers, separated by commas or whitespace
--  Default: ``0.0.0.0, ::``
+-  Default: ``127.0.0.1``
 
 Local IP addresses to which we bind. Each address specified can
 include a port number; if no port is included then the
@@ -871,8 +1083,9 @@ Maximum number of seconds to cache an item in the DNS cache (negative or positiv
 -  Integer
 -  Default: 1000000
 
-Maximum number of DNS cache entries.
-1 million per thread will generally suffice for most installations.
+Maximum number of DNS record cache entries, shared by all threads since 4.4.0.
+Each entry associates a name and type with a record set.
+The size of the negative cache is 10% of this number.
 
 .. _setting-max-cache-ttl:
 
@@ -900,6 +1113,19 @@ Maximum number of seconds to cache an item in the DNS cache, no matter what the 
 Maximum number of incoming requests handled concurrently per tcp
 connection. This number must be larger than 0 and smaller than 65536
 and also smaller than `max-mthreads`.
+
+.. _setting-max-include-depth:
+
+``max-include-depth``
+----------------------
+
+.. versionadded:: 4.6.0
+
+-  Integer
+-  Default: 20
+
+Maximum number of nested ``$INCLUDE`` directives while processing a zone file.
+Zero mean no ``$INCLUDE`` directives will be accepted.
 
 .. _setting-max-generate-steps:
 
@@ -932,8 +1158,8 @@ Maximum number of simultaneous MTasker threads.
 -  Integer
 -  Default: 500000
 
-Maximum number of Packet Cache entries.
-1 million per thread will generally suffice for most installations.
+Maximum number of Packet Cache entries. Each worker and each distributor thread has a packet cache instance.
+This number will be divided by the number of worker plus the number of distributor threads to compute the maximum number of entries per cache instance.
 
 .. _setting-max-qperq:
 
@@ -1052,11 +1278,16 @@ returning back to normal processing and handling other events.
 
 ``minimum-ttl-override``
 ------------------------
+.. versionchanged:: 4.5.0
+  Old versions used default 0.
+
 -  Integer
--  Default: 0 (disabled)
+-  Default: 1
 
 This setting artificially raises all TTLs to be at least this long.
-While this is a gross hack, and violates RFCs, under conditions of DoS, it may enable you to continue serving your customers.
+Setting this to a value greater than 1 technically is an RFC violation, but might improve performance a lot.
+Using a value of 0 impacts performance of TTL 0 records greatly, since it forces the recursor to contact
+authoritative servers each time a client requests them.
 Can be set at runtime using ``rec_control set-minimum-ttl 3600``.
 
 .. _setting-new-domain-tracking:
@@ -1153,6 +1384,14 @@ from this directory.
 ``new-domain-whitelist``
 ------------------------
 .. versionadded:: 4.2.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-new-domain-ignore-list`.
+
+.. _setting-new-domain-ignore-list:
+
+``new-domain-ignore-list``
+--------------------------
+.. versionadded:: 4.5.0
 
 - List of Domain Names, comma separated
 - Example: xyz.com, abc.com
@@ -1160,7 +1399,7 @@ from this directory.
 This setting is a list of all domains (and implicitly all subdomains)
 that will never be considered a new domain. For example, if the domain
 'xyz123.tv' is in the list, then 'foo.bar.xyz123.tv' will never be
-considered a new domain. One use-case for the whitelist is to never
+considered a new domain. One use-case for the ignore list is to never
 reveal details of internal subdomains via the new-domain-lookup
 feature.
 
@@ -1185,6 +1424,30 @@ a new domain is observed.
 
 Number of milliseconds to wait for a remote authoritative server to respond.
 
+.. _setting-non-resolving-ns-max-fails:
+
+``non-resolving-ns-max-fails``
+------------------------------
+.. versionadded:: 4.5.0
+
+- Integer
+- Default: 5
+
+Number of failed address resolves of a nameserver name to start throttling it, 0 is disabled.
+Nameservers matching :ref:`setting-dont-throttle-names` will not be throttled.
+
+
+.. _setting-non-resolving-ns-throttle-time:
+
+``non-resolving-ns-max-throttle-time``
+--------------------------------------
+.. versionadded:: 4.5.0
+
+- Integer
+- Default: 60
+
+Number of seconds to throttle a nameserver with a name failing to resolve.
+
 .. _setting-nothing-below-nxdomain:
 
 ``nothing-below-nxdomain``
@@ -1202,19 +1465,16 @@ For instance, when ``foo.example.net`` is negatively cached, any query
 matching ``*.foo.example.net`` will be answered with NXDOMAIN directly
 without consulting authoritative servers.
 
-no
-^^
-No :rfc:`8020` processing is done.
+``no``
+  No :rfc:`8020` processing is done.
 
-dnssec
-^^^^^^
-:rfc:`8020` processing is only done using cached NXDOMAIN records that are
-DNSSEC validated.
+``dnssec``
+  :rfc:`8020` processing is only done using cached NXDOMAIN records that are
+  DNSSEC validated.
 
-yes
-^^^
-:rfc:`8020` processing is done using any non-Bogus NXDOMAIN record
-available in the cache.
+``yes``
+  :rfc:`8020` processing is done using any non-Bogus NXDOMAIN record
+  available in the cache.
 
 .. _setting-nsec3-max-iterations:
 
@@ -1223,10 +1483,14 @@ available in the cache.
 .. versionadded:: 4.1.0
 
 -  Integer
--  Default: 2500
+-  Default: 150
 
 Maximum number of iterations allowed for an NSEC3 record.
 If an answer containing an NSEC3 record with more iterations is received, its DNSSEC validation status is treated as Insecure.
+
+.. versionchanged:: 4.5.2
+
+   Default is now 150, was 2500 before.
 
 .. _setting-packetcache-ttl:
 
@@ -1244,7 +1508,8 @@ Maximum number of seconds to cache an item in the packet cache, no matter what t
 -  Integer
 -  Default: 60
 
-Maximum number of seconds to cache a 'server failure' answer in the packet cache.
+Maximum number of seconds to cache an answer indicating a failure to resolve in the packet cache.
+Before version 4.6.0 only ``ServFail`` answers were considered as such. Starting with 4.6.0, all responses with a code other than ``NoError`` and ``NXDomain``, or without records in the answer and authority sections, are considered as a failure to resolve.
 
 .. versionchanged:: 4.0.0
 
@@ -1286,7 +1551,9 @@ Whether to compute the latency of responses in protobuf messages using the times
 Ranges that are required to send a Proxy Protocol version 2 header in front of UDP and TCP queries, to pass the original source and destination addresses and ports to the recursor, as well as custom values.
 Queries that are not prefixed with such a header will not be accepted from clients in these ranges. Queries prefixed by headers from clients that are not listed in these ranges will be dropped.
 
-Note that once a Proxy Protocol header has been received, the source address from the proxy header instead of the address of the proxy will be checked against the `allow-from`_ ACL, 
+Note that once a Proxy Protocol header has been received, the source address from the proxy header instead of the address of the proxy will be checked against the `allow-from`_ ACL.
+
+The dnsdist docs have `more information about the PROXY protocol <https://dnsdist.org/advanced/passing-source-address.html#proxy-protocol>`_.
 
 .. _setting-proxy-protocol-maximum-size:
 
@@ -1375,6 +1642,20 @@ Sets the number of shards in the record cache. If you have high
 contention as reported by
 ``record-cache-contented/record-cache-acquired``, you can try to
 enlarge this value or run with fewer threads.
+
+.. _setting-refresh-on-ttl-perc:
+
+``refresh-on-ttl-perc``
+-----------------------
+.. versionadded:: 4.5.0
+
+-  Integer
+-  Default: 0
+
+Sets the "refresh almost expired" percentage of the record cache. Whenever a record is fetched from the packet or record cache
+and only ``refresh-on-ttl-perc`` percent or less of its original TTL is left, a task is queued to refetch the name/type combination to
+update the record cache. In most cases this causes future queries to always see a non-expired record cache entry.
+A typical value is 10. If the value is zero, this functionality is disabled.
 
 .. _setting-reuseport:
 
@@ -1528,12 +1809,21 @@ If set to true and PowerDNS has been compiled with SNMP support, it will registe
 
 ``snmp-master-socket``
 ----------------------
+
 .. versionadded:: 4.1.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-snmp-daemon-socket`.
+
+.. _setting-snmp-daemon-socket:
+
+``snmp-daemon-socket``
+----------------------
+.. versionadded:: 4.5.0
 
 -  String
 -  Default: empty
 
-If not empty and ``snmp-agent`` is set to true, indicates how PowerDNS should contact the SNMP master to register as an SNMP agent.
+If not empty and ``snmp-agent`` is set to true, indicates how PowerDNS should contact the SNMP daemon to register as an SNMP agent.
 
 .. _setting-socket-dir:
 
@@ -1555,8 +1845,11 @@ Owner and group can be specified by name, mode is in octal.
 
 ``spoof-nearmiss-max``
 ----------------------
+.. versionchanged:: 4.5.0
+  Older versions used 20 as the default value.
+
 -  Integer
--  Default: 20
+-  Default: 1
 
 If set to non-zero, PowerDNS will assume it is being spoofed after seeing this many answers with the wrong id.
 
@@ -1567,7 +1860,7 @@ If set to non-zero, PowerDNS will assume it is being spoofed after seeing this m
 -  Integer
 -  Default: 200000
 
-Size of the stack per thread.
+Size of the stack of each mthread.
 
 .. _setting-statistics-interval:
 
@@ -1586,6 +1879,14 @@ Use 0 to disable.
 ``stats-api-blacklist``
 -----------------------
 .. versionadded:: 4.2.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-stats-api-disabled-list`.
+
+.. _setting-stats-api-disabled-list:
+
+``stats-api-disabled-list``
+---------------------------
+.. versionadded:: 4.5.0
 
 -  String
 -  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-*, ecs-v6-response-bits-*"
@@ -1598,9 +1899,17 @@ These statistics can still be retrieved individually by specifically asking for 
 ``stats-carbon-blacklist``
 --------------------------
 .. versionadded:: 4.2.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-stats-carbon-disabled-list`.
+
+.. _setting-stats-carbon-disabled-list:
+
+``stats-carbon-disabled-list``
+------------------------------
+.. versionadded:: 4.5.0
 
 -  String
--  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-*, ecs-v6-response-bits-*"
+-  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-\*, ecs-v6-response-bits-\*, cumul-answers-\*, cumul-auth4answers-\*, cumul-auth6answers-\*"
 
 A list of comma-separated statistic names, that are prevented from being exported via carbon for performance reasons.
 
@@ -1609,9 +1918,17 @@ A list of comma-separated statistic names, that are prevented from being exporte
 ``stats-rec-control-blacklist``
 -------------------------------
 .. versionadded:: 4.2.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-stats-rec-control-disabled-list`.
+
+.. _setting-stats-rec-control-disabled-list:
+
+``stats-rec-control-disabled-list``
+------------------------------------
+.. versionadded:: 4.5.0
 
 -  String
--  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-*, ecs-v6-response-bits-*"
+-  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-\*, ecs-v6-response-bits-\*, cumul-answers-\*, cumul-auth4answers-\*, cumul-auth6answers-\*"
 
 A list of comma-separated statistic names, that are disabled when retrieving the complete list of statistics via `rec_control get-all`, for performance reasons.
 These statistics can still be retrieved individually.
@@ -1631,11 +1948,30 @@ Can be read out using ``rec_control top-remotes``.
 ``stats-snmp-blacklist``
 ------------------------
 .. versionadded:: 4.2.0
+.. deprecated:: 4.5.0
+  Use :ref:`setting-stats-snmp-disabled-list`.
+
+.. _setting-stats-snmp-disabled-list:
+
+``stats-snmp-disabled-list``
+----------------------------
+.. versionadded:: 4.5.0
 
 -  String
 -  Default: "cache-bytes, packetcache-bytes, special-memory-usage, ecs-v4-response-bits-*, ecs-v6-response-bits-*"
 
 A list of comma-separated statistic names, that are prevented from being exported via SNMP, for performance reasons.
+
+.. _setting-structured-logging:
+
+``structured-logging``
+----------------------
+.. versionadded:: 4.6.0
+
+- Boolean
+- Default: yes
+
+Prefer structured logging when both an old style and a structured log messages is available.
 
 .. _setting-tcp-fast-open:
 
@@ -1647,7 +1983,63 @@ A list of comma-separated statistic names, that are prevented from being exporte
 -  Default: 0 (Disabled)
 
 Enable TCP Fast Open support, if available, on the listening sockets.
-The numerical value supplied is used as the queue size, 0 meaning disabled.
+The numerical value supplied is used as the queue size, 0 meaning disabled. See :ref:`tcp-fast-open-support`.
+
+.. _setting-tcp-fast-open-connect:
+
+``tcp-fast-open-connect``
+-------------------------
+.. versionadded:: 4.5.0
+
+-  Boolean
+-  Default: no (disabled)
+
+Enable TCP Fast Open Connect support, if available, on the outgoing connections to authoritative servers. See :ref:`tcp-fast-open-support`.
+
+.. _setting-tcp-out-max-idle-ms:
+
+``tcp-out-max-idle-ms``
+-----------------------
+.. versionadded:: 4.6.0
+
+-  Integer
+-  Default : 10000
+
+Time outgoing TCP/DoT connections are left idle in milliseconds or 0 if no limit. After having been idle for this time, the connection is eligible for closing.
+
+.. _setting-tcp-out-max-idle-per-auth:
+
+``tcp-out-max-idle-per-auth``
+-----------------------------
+.. versionadded:: 4.6.0
+
+-  Integer
+-  Default : 10
+
+Maximum number of idle outgoing TCP/DoT connections to a specific IP per thread, 0 means do not keep idle connections open.
+
+.. _setting-tcp-out-max-queries:
+
+``tcp-out-max-queries``
+-----------------------
+-  Integer
+-  Default : 0
+
+Maximum total number of queries per outgoing TCP/DoT connection, 0 means no limit. After this number of queries, the connection is
+closed and a new one will be created if needed.
+
+.. versionadded:: 4.6.0
+
+.. _setting-tcp-out-max-idle-per-thread:
+
+``tcp-out-max-idle-per-thread``
+-------------------------------
+.. versionadded:: 4.6.0
+
+-  Integer
+-  Default : 0
+
+Maximum number of idle outgoing TCP/DoT connections per thread, 0 means do not keep idle connections open.
 
 .. _setting-threads:
 
@@ -1662,11 +2054,13 @@ Spawn this number of threads on startup.
 
 ``trace``
 ---------
--  Boolean
--  Default: no
+-  String, one of ``no``, ``yes`` or ``fail``
+-  Default: ``no``
 
 If turned on, output impressive heaps of logging.
 May destroy performance under load.
+To log only queries resulting in a ``ServFail`` answer from the resolving process, this value can be set to ``fail``, but note that the performance impact is still large.
+Also note that queries that do produce a result but with a failing DNSSEC validation are not written to the log
 
 .. _setting-udp-source-port-min:
 
@@ -1819,7 +2213,7 @@ a unique DNS response is observed.
 -  Default: no
 
 Whether to process and pass along a received EDNS Client Subnet to authoritative servers.
-The ECS information will only be sent for netmasks and domains listed in `edns-subnet-whitelist`_ and will be truncated if the received scope exceeds `ecs-ipv4-bits`_ for IPv4 or `ecs-ipv6-bits`_ for IPv6.
+The ECS information will only be sent for netmasks and domains listed in `edns-subnet-allow-list`_ and will be truncated if the received scope exceeds `ecs-ipv4-bits`_ for IPv4 or `ecs-ipv6-bits`_ for IPv6.
 
 .. _setting-version:
 
@@ -1870,6 +2264,18 @@ These IPs and subnets are allowed to access the webserver. Note that
 specifying an IP address without a netmask uses an implicit netmask
 of /32 or /128.
 
+.. _setting-webserver-hash-plaintext-credentials:
+
+``webserver-hash-plaintext-credentials``
+----------------------------------------
+..versionadded:: 4.6.0
+
+-  Boolean
+-  Default: no
+
+Whether passwords and API keys supplied in the configuration as plaintext should be hashed during startup, to prevent the plaintext versions from staying in memory. Doing so increases significantly the cost of verifying credentials and is thus disabled by default.
+Note that this option only applies to credentials stored in the configuration as plaintext, but hashed credentials are supported without enabling this option.
+
 .. _setting-webserver-loglevel:
 
 ``webserver-loglevel``
@@ -1902,7 +2308,7 @@ When set to "detailed", all information about the request and response are logge
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Length: 49
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Type: text/html; charset=utf-8
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Server: PowerDNS/0.0.15896.0.gaba8bab3ab
-  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Full body: 
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Full body:
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   <!html><title>Not Found</title><h1>Not Found</h1>
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e 127.0.0.1:55376 "GET /api/v1/servers/localhost/bla HTTP/1.1" 404 196
 
@@ -1915,10 +2321,13 @@ The value between the hooks is a UUID that is generated for each request. This c
 
 ``webserver-password``
 ----------------------
+.. versionchanged:: 4.6.0
+  This setting now accepts a hashed and salted version.
+
 -  String
 -  Default: unset
 
-Password required to access the webserver.
+Password required to access the webserver. Since 4.6.0 the password can be hashed and salted using ``rec_control hash-password`` instead of being present in the configuration in plaintext, but the plaintext version is still supported.
 
 .. _setting-webserver-port:
 
@@ -1970,3 +2379,17 @@ should be done on the proxy.
 
 This option sets the resource record code to use for XPF records, as long as an official code has not been assigned to it.
 0 means that XPF is disabled.
+
+.. _setting-x-dnssec-names:
+
+``x-dnssec-names``
+------------------
+.. versionadded:: 4.5.0
+
+-  Comma separated list of domain-names
+-  Default: (empty)
+
+List of names whose DNSSEC validation metrics will be counted in a separate set of metrics that start
+with ``x-dnssec-result-``.
+The names are suffix-matched.
+This can be used to not count known failing (test) name validations in the ordinary DNSSEC metrics.

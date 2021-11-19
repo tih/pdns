@@ -5,8 +5,10 @@ AM_CPPFLAGS = $(LUA_CFLAGS) $(YAHTTP_CFLAGS) $(BOOST_CPPFLAGS) $(LIBSODIUM_CFLAG
 
 AM_CPPFLAGS += \
 	-I$(top_srcdir)/ext/json11 \
+	-I$(top_srcdir)/ext/protozero/include \
 	$(YAHTTP_CFLAGS) \
-	$(LIBCRYPTO_INCLUDES)
+	$(LIBCRYPTO_INCLUDES) \
+	-DBOOST_CONTAINER_USE_STD_EXCEPTIONS
 
 AM_CXXFLAGS = \
 	-DSYSCONFDIR=\"$(sysconfdir)\" \
@@ -33,10 +35,6 @@ BUILT_SOURCES=htmlfiles.h \
 	dnslabeltext.cc
 
 CLEANFILES = htmlfiles.h \
-	dnsmessage.pb.cc \
-	dnsmessage.pb.h \
-	dnstap.pb.cc \
-	dnstap.pb.h \
 	recursor.conf-dist
 
 htmlfiles.h: html/*
@@ -66,7 +64,8 @@ EXTRA_DIST = \
 	NOTICE \
 	opensslsigners.hh opensslsigners.cc \
 	portsmplexer.cc \
-	dnstap.proto dnstap.cc dnstap.hh fstrm_logger.cc fstrm_logger.hh rec-dnstap.hh \
+	dnstap.proto dnstap.cc dnstap.hh fstrm_logger.cc fstrm_logger.hh \
+	ext/protozero/include/* \
 	rrd/* \
 	html incfiles \
 	test_libcrypto \
@@ -96,6 +95,7 @@ check-local:
 endif
 
 pdns_recursor_SOURCES = \
+	aggressive_nsec.cc aggressive_nsec.hh \
 	arguments.cc \
 	ascii.hh \
 	axfr-retriever.hh axfr-retriever.cc \
@@ -105,6 +105,7 @@ pdns_recursor_SOURCES = \
 	capabilities.cc capabilities.hh \
 	circular_buffer.hh \
 	comment.hh \
+	credentials.cc credentials.hh \
 	dns.hh dns.cc \
 	dns_random.hh dns_random.cc \
 	dnsbackend.hh \
@@ -116,17 +117,23 @@ pdns_recursor_SOURCES = \
 	dnssecinfra.hh dnssecinfra.cc \
 	dnsseckeeper.hh \
 	dnswriter.cc dnswriter.hh \
+	dolog.hh \
+	ednsextendederror.cc ednsextendederror.hh \
 	ednsoptions.cc ednsoptions.hh \
+	ednspadding.cc ednspadding.hh \
 	ednssubnet.cc ednssubnet.hh \
 	filterpo.cc filterpo.hh \
 	fstrm_logger.cc fstrm_logger.hh \
 	gettime.cc gettime.hh \
+	histogram.hh \
 	iputils.hh iputils.cc \
 	ixfr.cc ixfr.hh \
 	json.cc json.hh \
 	lazy_allocator.hh \
+	libssl.cc libssl.hh \
 	lock.hh \
 	logger.hh logger.cc \
+	logging.hh logging.cc logr.hh \
 	lua-base4.cc lua-base4.hh \
 	lua-recursor4-ffi.hh \
 	lua-recursor4.cc lua-recursor4.hh \
@@ -137,13 +144,14 @@ pdns_recursor_SOURCES = \
 	mtasker_context.cc mtasker_context.hh \
 	namespaces.hh \
 	negcache.hh negcache.cc \
+	noinitvector.hh \
 	nsecrecords.cc \
 	opensslsigners.cc opensslsigners.hh \
 	packetcache.hh \
 	pdns_recursor.cc \
 	pdnsexception.hh \
 	pollmplexer.cc \
-	protobuf.cc protobuf.hh \
+	protozero.cc protozero.hh \
 	proxy-protocol.cc proxy-protocol.hh \
 	pubsuffix.hh pubsuffix.cc \
 	pubsuffixloader.cc \
@@ -151,9 +159,13 @@ pdns_recursor_SOURCES = \
 	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc rcpgenerator.hh \
 	rec-carbon.cc \
+	rec-eventtrace.cc rec-eventtrace.hh \
 	rec-lua-conf.hh rec-lua-conf.cc \
-	rec-protobuf.cc rec-protobuf.hh \
+	rec-protozero.cc rec-protozero.hh \
 	rec-snmp.hh rec-snmp.cc \
+	rec-taskqueue.cc rec-taskqueue.hh \
+        rec-tcpout.cc rec-tcpout.hh \
+        rec-zonetocache.cc rec-zonetocache.hh \
 	rec_channel.cc rec_channel.hh rec_metrics.hh \
 	rec_channel_rec.cc \
 	recpacketcache.cc recpacketcache.hh \
@@ -175,8 +187,11 @@ pdns_recursor_SOURCES = \
 	sortlist.cc sortlist.hh \
 	sstuff.hh \
 	stable-bloom.hh \
+	stat_t.hh \
 	svc-records.cc svc-records.hh \
 	syncres.cc syncres.hh \
+	taskqueue.cc taskqueue.hh \
+	tcpiohandler.cc tcpiohandler.hh \
 	threadname.hh threadname.cc \
 	tsigverifier.cc tsigverifier.hh \
 	ueberbackend.hh \
@@ -185,7 +200,6 @@ pdns_recursor_SOURCES = \
 	uuid-utils.hh uuid-utils.cc \
 	validate.cc validate.hh validate-recursor.cc validate-recursor.hh \
 	version.cc version.hh \
-	views.hh \
 	webserver.cc webserver.hh \
 	ws-api.cc ws-api.hh \
 	ws-recursor.cc ws-recursor.hh \
@@ -211,6 +225,8 @@ pdns_recursor_LDADD = \
 	$(PROBDS_LIBS) \
 	$(LIBCAP_LIBS)
 
+rec_control_LDADD = $(LIBCRYPTO_LIBS)
+
 pdns_recursor_LDFLAGS = $(AM_LDFLAGS) \
 	$(LIBCRYPTO_LDFLAGS) $(BOOST_CONTEXT_LDFLAGS) \
 	$(BOOST_SYSTEM_LDFLAGS)
@@ -224,11 +240,13 @@ pdns_recursor_LDFLAGS += \
 endif
 
 testrunner_SOURCES = \
+	aggressive_nsec.cc aggressive_nsec.hh \
 	arguments.cc \
 	axfr-retriever.hh axfr-retriever.cc \
 	base32.cc \
 	base64.cc base64.hh \
 	circular_buffer.hh \
+	credentials.cc credentials.hh \
 	dns.cc dns.hh \
 	dns_random.cc dns_random.hh \
 	dnslabeltext.cc \
@@ -239,13 +257,16 @@ testrunner_SOURCES = \
 	dnsseckeeper.hh \
 	dnswriter.cc dnswriter.hh \
 	ednscookies.cc ednscookies.hh \
+	ednsextendederror.cc ednsextendederror.hh \
 	ednsoptions.cc ednsoptions.hh \
+	ednspadding.cc ednspadding.hh \
 	ednssubnet.cc ednssubnet.hh \
 	filterpo.cc filterpo.hh \
 	gettime.cc gettime.hh \
 	iputils.cc iputils.hh \
 	ixfr.cc ixfr.hh \
 	logger.cc logger.hh \
+	logging.hh logging.cc logr.hh \
 	misc.cc misc.hh \
 	mtasker_context.cc \
 	namespaces.hh \
@@ -254,11 +275,11 @@ testrunner_SOURCES = \
 	opensslsigners.cc opensslsigners.hh \
 	pdnsexception.hh \
 	pollmplexer.cc \
-	protobuf.cc protobuf.hh \
 	qtype.cc qtype.hh \
 	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc \
-	rec-protobuf.cc rec-protobuf.hh \
+	rec-eventtrace.cc rec-eventtrace.hh \
+	rec-zonetocache.cc rec-zonetocache.hh \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
 	resolver.hh resolver.cc \
@@ -272,10 +293,13 @@ testrunner_SOURCES = \
 	stable-bloom.hh \
 	svc-records.cc svc-records.hh \
 	syncres.cc syncres.hh \
+	taskqueue.cc taskqueue.hh \
+	test-aggressive_nsec_cc.cc \
 	test-arguments_cc.cc \
 	test-base32_cc.cc \
 	test-base64_cc.cc \
 	test-common.hh \
+	test-credentials_cc.cc \
 	test-dns_random_hh.cc \
 	test-dnsname_cc.cc \
 	test-dnsparser_hh.cc \
@@ -283,14 +307,17 @@ testrunner_SOURCES = \
 	test-dnsrecords_cc.cc \
 	test-ednsoptions_cc.cc \
 	test-filterpo_cc.cc \
+	test-histogram_hh.cc \
 	test-iputils_hh.cc \
 	test-ixfr_cc.cc \
+	test-luawrapper.cc \
 	test-misc_hh.cc \
 	test-mplexer.cc \
 	test-mtasker.cc \
 	test-negcache_cc.cc \
 	test-packetcache_hh.cc \
 	test-rcpgenerator_cc.cc \
+	test-rec-zonetocache.cc \
 	test-recpacketcache_cc.cc \
 	test-recursorcache_cc.cc \
 	test-rpzloader_cc.cc \
@@ -349,10 +376,15 @@ if LIBSODIUM
 pdns_recursor_SOURCES += \
 	sodiumsigners.cc
 pdns_recursor_LDADD += $(LIBSODIUM_LIBS)
+
+rec_control_LDADD += $(LIBSODIUM_LIBS)
+
 testrunner_SOURCES += \
 	sodiumsigners.cc
 testrunner_LDADD += $(LIBSODIUM_LIBS)
 endif
+
+
 
 if LIBDECAF
 pdns_recursor_SOURCES += \
@@ -369,9 +401,20 @@ endif
 
 if LUA
 pdns_recursor_LDADD += $(LUA_LIBS)
+testrunner_LDADD += $(LUA_LIBS)
 endif
 
 if HAVE_FREEBSD
+pdns_recursor_SOURCES += kqueuemplexer.cc
+testrunner_SOURCES += kqueuemplexer.cc
+endif
+
+if HAVE_OPENBSD
+pdns_recursor_SOURCES += kqueuemplexer.cc
+testrunner_SOURCES += kqueuemplexer.cc
+endif
+
+if HAVE_DARWIN
 pdns_recursor_SOURCES += kqueuemplexer.cc
 testrunner_SOURCES += kqueuemplexer.cc
 endif
@@ -390,48 +433,37 @@ testrunner_SOURCES += \
 	portsmplexer.cc
 endif
 
-if HAVE_PROTOBUF
-if HAVE_PROTOC
-dnsmessage.pb.cc: dnsmessage.proto
-	$(AM_V_GEN)$(PROTOC) --cpp_out=./ $<
-
-if FSTRM
-dnstap.pb.cc: dnstap.proto
-	$(AM_V_GEN)$(PROTOC) -I$(srcdir) --cpp_out=./ $<
-endif
-
-
-BUILT_SOURCES += dnsmessage.pb.cc
-pdns_recursor_LDADD += $(PROTOBUF_LIBS)
-nodist_pdns_recursor_SOURCES = dnsmessage.pb.cc dnsmessage.pb.h
-nodist_testrunner_SOURCES = dnsmessage.pb.cc dnsmessage.pb.h
-
-if FSTRM
-BUILT_SOURCES += dnstap.pb.cc
-pdns_recursor.$(OBJEXT): dnstap.pb.cc dnsmessage.pb.cc
-testrunner$(OBJEXT): dnstap.pb.cc dnsmessage.pb.cc
-nodist_pdns_recursor_SOURCES += dnstap.pb.cc dnstap.pb.h
-nodist_testrunner_SOURCES += dnstap.pb.cc dnstap.pb.h
-else
-pdns_recursor.$(OBJEXT): dnsmessage.pb.cc
-testrunner$(OBJEXT): dnsmessage.pb.cc
-endif
-
-testrunner_LDADD += $(PROTOBUF_LIBS)
-
-endif
-endif
-
 if FSTRM
 pdns_recursor_SOURCES += \
-	dnstap.cc dnstap.hh rec-dnstap.hh
+	dnstap.cc dnstap.hh
 
 pdns_recursor_LDADD += \
 	$(FSTRM_LIBS)
 endif
 
+if HAVE_DNS_OVER_TLS
+if HAVE_LIBSSL
+AM_CPPFLAGS += $(LIBSSL_CFLAGS)
+pdns_recursor_LDADD += $(LIBSSL_LIBS)
+endif
+
+#if HAVE_GNUTLS
+#AM_CPPFLAGS += $(GNUTLS_CFLAGS)
+#pdns_recursor_LDADD += $(GNUTLS_LIBS)
+#endif
+endif
+if HAVE_LIBCURL
+pdns_recursor_SOURCES += minicurl.cc minicurl.hh
+pdns_recursor_LDADD += $(LIBCURL)
+testrunner_SOURCES += minicurl.cc minicurl.hh
+testrunner_LDADD += $(LIBCURL)
+endif
+
+
 rec_control_SOURCES = \
 	arguments.cc arguments.hh \
+	base64.cc base64.hh \
+	credentials.cc credentials.hh \
 	dnslabeltext.cc \
 	dnsname.hh dnsname.cc \
 	logger.cc \
@@ -465,15 +497,15 @@ MANPAGES=pdns_recursor.1 \
 
 dist_man_MANS=$(MANPAGES)
 
-if HAVE_VIRTUALENV
+if HAVE_VENV
 if !HAVE_MANPAGES
 $(MANPAGES): %: docs/manpages/%.rst .venv
 	.venv/bin/python -msphinx -b man docs . $<
 endif # if !HAVE_MANPAGES
 
 .venv: docs/requirements.txt
-	virtualenv .venv
-	.venv/bin/pip install -U pip setuptools setuptools-git
+	$(PYTHON) -m venv .venv
+	.venv/bin/pip install -U pip setuptools setuptools-git wheel
 	.venv/bin/pip install -r docs/requirements.txt
 
 html-docs: docs/** .venv
@@ -495,23 +527,26 @@ upload-docs: all-docs
 	rsync -crv --no-p --chmod=g=rwX --exclude '*~' ./html-docs.tar.bz2 web1.powerdns.com:/srv/www/doc.powerdns.com/recursor/
 	rsync -crv --no-p --chmod=g=rwX --exclude '*~' ./PowerDNS-Recursor.pdf web1.powerdns.com:/srv/www/doc.powerdns.com/recursor/
 
-else # if HAVE_VIRTUALENV
+else # if HAVE_VENV
 $(MANPAGES):
-	echo "You need virtualenv to generate the manpages"
+	@echo "You need Python 3 and the 'venv' module to generate the manpages"
 	exit 1
 
 PowerDNS-Recursor.pdf:
-	echo "You need virtualenv to generate the PDF"
+	@echo "You need Python 3 and the 'venv' module to generate the PDF"
 	exit 1
 
 html-docs:
-	echo "You need virtualenv to generate the HTML docs"
+	@echo "You need Python 3 and the 'venv' module to generate the HTML docs"
 	exit 1
 endif
 
 if HAVE_SYSTEMD
 pdns-recursor.service: pdns-recursor.service.in
 	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' -e 's![@]service_user[@]!$(service_user)!' -e 's![@]service_group[@]!$(service_group)!' < $< > $@
+if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
+	$(AM_V_GEN)sed -e 's!/pdns_recursor!& --socket-dir=%t/pdns-recursor!' -i $@
+endif
 if !HAVE_SYSTEMD_LOCK_PERSONALITY
 	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
 endif
@@ -571,7 +606,11 @@ pdns-recursor@.service: pdns-recursor.service
 	$(AM_V_GEN)sed -e 's!/pdns_recursor!& --config-name=%i!' \
 	  -e 's!Recursor!& %i!' \
 	  -e 's!RuntimeDirectory=.*!&-%i!' \
+	  -e 's!SyslogIdentifier=.*!&-%i!' \
 	  < $< > $@
+if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
+	$(AM_V_GEN)sed -e 's!--socket-dir=[^ ]\+!&-%i !' -i $@
+endif
 
 systemdsystemunitdir = $(SYSTEMD_DIR)
 

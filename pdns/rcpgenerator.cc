@@ -29,13 +29,14 @@
 #include "utility.hh"
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/replace.hpp>
 
 #include <iostream>
 #include "base32.hh"
 #include "base64.hh"
 #include "namespaces.hh"
 
-RecordTextReader::RecordTextReader(const string& str, const DNSName& zone) : d_string(str), d_zone(zone), d_pos(0)
+RecordTextReader::RecordTextReader(string  str, DNSName  zone) : d_string(std::move(str)), d_zone(std::move(zone)), d_pos(0)
 {
    /* remove whitespace */
    if(!d_string.empty() && ( dns_isspace(*d_string.begin()) || dns_isspace(*d_string.rbegin()) ))
@@ -48,6 +49,25 @@ void RecordTextReader::xfr48BitInt(uint64_t &val)
   xfr64BitInt(val);
   if (val > 281474976710655LL)
     throw RecordTextException("Overflow reading 48 bit integer from record content"); // fixme improve
+}
+
+void RecordTextReader::xfrNodeOrLocatorID(NodeOrLocatorID& val) {
+  skipSpaces();
+  size_t len;
+  for(len=0;
+      d_pos+len < d_string.length() && (isxdigit(d_string.at(d_pos+len)) || d_string.at(d_pos+len) == ':');
+      len++) ;   // find length of ID
+
+  // Parse as v6, and then strip the final 64 zero bytes
+  struct in6_addr tmpbuf;
+  string to_parse = d_string.substr(d_pos, len) + ":0:0:0:0";
+
+  if (inet_pton(AF_INET6, to_parse.c_str(), &tmpbuf) != 1) {
+    throw RecordTextException("while parsing colon-delimited 64-bit field: '" + d_string.substr(d_pos, len) + "' is invalid");
+  }
+
+  std::memcpy(&val.content, tmpbuf.s6_addr, sizeof(val.content));
+  d_pos += len;
 }
 
 void RecordTextReader::xfr64BitInt(uint64_t &val)
@@ -298,6 +318,16 @@ void RecordTextReader::xfrBlob(string& val, int)
   B64Decode(tmp, val);
 }
 
+void RecordTextReader::xfrRFC1035CharString(string &val) {
+  auto ctr = parseRFC1035CharString(d_string.substr(d_pos, d_end - d_pos), val);
+  d_pos += ctr;
+}
+
+void RecordTextReader::xfrSVCBValueList(vector<string> &val) {
+  auto ctr = parseSVCBValueList(d_string.substr(d_pos, d_end - d_pos), val);
+  d_pos += ctr;
+}
+
 void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
 {
   while (d_pos != d_end) {
@@ -317,8 +347,9 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
     // We've reached a space or equals-sign or the end of the string (d_pos is at this char)
     string k = d_string.substr(pos, d_pos - pos);
     SvcParam::SvcParamKey key;
+    bool generic;
     try {
-      key = SvcParam::keyFromString(k);
+      key = SvcParam::keyFromString(k, generic);
     } catch (const std::invalid_argument &e) {
       throw RecordTextException(e.what());
     }
@@ -343,16 +374,34 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
     case SvcParam::ipv4hint: /* fall-through */
     case SvcParam::ipv6hint: {
       vector<ComboAddress> hints;
-      do {
-        ComboAddress address;
-        xfrCAWithoutPort(key, address); // The SVBC authors chose 4 and 6 to represent v4hint and v6hint :)
-        hints.push_back(address);
-        if (d_pos < d_end && d_string.at(d_pos) == ',') {
-          d_pos++; // Go to the next address
+      bool doAuto{false};
+      if (generic) {
+        string value;
+        xfrRFC1035CharString(value);
+        size_t len = key == SvcParam::ipv4hint ? 4 : 16;
+        if (value.size() % len != 0) {
+          throw RecordTextException(k + " in generic format has wrong number of bytes");
         }
-      } while (d_pos != d_end && d_string.at(d_pos) != ' ');
+        for (size_t i=0; i<value.size(); i += len) {
+          auto hint = makeComboAddressFromRaw(static_cast<uint8_t>(key), &value.at(i), len);
+          hints.push_back(hint);
+        }
+      } else {
+        vector<string> value;
+        xfrSVCBValueList(value);
+        for (auto const &v: value) {
+          if (v == "auto") {
+            doAuto = true;
+            hints.clear();
+            break;
+          }
+          hints.push_back(ComboAddress(v));
+        }
+      }
       try {
-        val.insert(SvcParam(key, std::move(hints)));
+        auto p = SvcParam(key, std::move(hints));
+        p.setAutoHint(doAuto);
+        val.insert(p);
       }
       catch (const std::invalid_argument& e) {
         throw RecordTextException(e.what());
@@ -360,49 +409,87 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
       break;
     }
     case SvcParam::alpn: {
-      string value;
-      xfrUnquotedText(value, false);
-      vector<string> parts;
-      stringtok(parts, value, ",");
-      val.insert(SvcParam(key, std::move(parts)));
+      vector<string> value;
+      if (generic) {
+        string v;
+        xfrRFC1035CharString(v);
+        size_t spos{0}, len;
+        while (spos < v.length()) {
+          len = v.at(spos);
+          spos += 1;
+          if (len > v.length() - spos) {
+            throw RecordTextException("Length of ALPN value goes over total length of alpn SVC Param");
+          }
+          value.push_back(v.substr(spos, len));
+          spos += len;
+        }
+      } else {
+        xfrSVCBValueList(value);
+      }
+      val.insert(SvcParam(key, std::move(value)));
       break;
     }
     case SvcParam::mandatory: {
-      string value;
-      xfrUnquotedText(value, false);
+      if (generic) {
+        string v;
+        xfrRFC1035CharString(v);
+        if (v.length() % 2 != 0) {
+          throw RecordTextException("Wrong number of bytes in SVC Param " + k);
+        }
+        std::set<SvcParam::SvcParamKey> keys;
+        for (size_t i=0; i < v.length(); i += 2) {
+          uint16_t mand = (v.at(i) << 8);
+          mand += v.at(i+1);
+          keys.insert(SvcParam::SvcParamKey(mand));
+        }
+        val.insert(SvcParam(key, std::move(keys)));
+        break;
+      }
       vector<string> parts;
-      stringtok(parts, value, ",");
+      xfrSVCBValueList(parts);
       set<string> values(parts.begin(), parts.end());
       val.insert(SvcParam(key, std::move(values)));
       break;
     }
     case SvcParam::port: {
       uint16_t port;
-      xfr16BitInt(port);
+      if (generic) {
+        string v;
+        xfrRFC1035CharString(v);
+        if (v.length() != 2) {
+          throw RecordTextException("port in generic format has the wrong length, expected 2, got " + std::to_string(v.length()));
+        }
+        port = (v.at(0) << 8);
+        port += v.at(1);
+      } else {
+        xfr16BitInt(port);
+      }
       val.insert(SvcParam(key, port));
       break;
     }
-    case SvcParam::echconfig: {
-      bool haveQuote = d_string.at(d_pos) == '"';
-      if (haveQuote) {
-        d_pos++;
-      }
+    case SvcParam::ech: {
       string value;
-      xfrBlobNoSpaces(value);
-      if (haveQuote) {
-        d_pos++;
+      if (generic) {
+        xfrRFC1035CharString(value);
+      } else {
+        bool haveQuote = d_string.at(d_pos) == '"';
+        if (haveQuote) {
+          d_pos++;
+        }
+        xfrBlobNoSpaces(value);
+        if (haveQuote) {
+          if (d_string.at(d_pos) != '"') {
+            throw RecordTextException("ech value starts, but does not end with a '\"' symbol");
+          }
+          d_pos++;
+        }
       }
       val.insert(SvcParam(key, value));
       break;
     }
     default: {
       string value;
-      if (d_string.at(d_pos) == '"') {
-        xfrText(value);
-      }
-      else {
-        xfrUnquotedText(value);
-      }
+      xfrRFC1035CharString(value);
       val.insert(SvcParam(key, value));
       break;
     }
@@ -564,6 +651,24 @@ RecordTextWriter::RecordTextWriter(string& str, bool noDot) : d_string(str)
   d_nodot=noDot;
 }
 
+void RecordTextWriter::xfrNodeOrLocatorID(const NodeOrLocatorID& val)
+{
+  if(!d_string.empty()) {
+    d_string.append(1,' ');
+  }
+
+  size_t ctr = 0;
+  char tmp[5];
+  for (auto const &c : val.content) {
+    snprintf(tmp, sizeof(tmp), "%02X", c);
+    d_string+=tmp;
+    ctr++;
+    if (ctr % 2 == 0 && ctr != 8) {
+      d_string+=':';
+    }
+  }
+}
+
 void RecordTextWriter::xfr48BitInt(const uint64_t& val)
 {
   if(!d_string.empty())
@@ -629,7 +734,7 @@ void RecordTextWriter::xfrIP6(const std::string& val)
   
   val.copy(tmpbuf,16);
 
-  if (inet_ntop(AF_INET6, tmpbuf, addrbuf, sizeof addrbuf) == NULL)
+  if (inet_ntop(AF_INET6, tmpbuf, addrbuf, sizeof addrbuf) == nullptr)
     throw RecordTextException("Unable to convert to ipv6 address");
   
   d_string += std::string(addrbuf);
@@ -720,6 +825,60 @@ void RecordTextWriter::xfrHexBlob(const string& val, bool)
   }
 }
 
+// FIXME copied from dnsparser.cc, see #6010 and #3503 if you want a proper solution
+static string txtEscape(const string &name)
+{
+  string ret;
+  char ebuf[5];
+
+  for(char i : name) {
+    if((unsigned char) i >= 127 || (unsigned char) i < 32) {
+      snprintf(ebuf, sizeof(ebuf), "\\%03u", (unsigned char)i);
+      ret += ebuf;
+    }
+    else if(i=='"' || i=='\\'){
+      ret += '\\';
+      ret += i;
+    }
+    else
+      ret += i;
+  }
+  return ret;
+}
+
+void RecordTextWriter::xfrSVCBValueList(const vector<string> &val) {
+  bool shouldQuote{false};
+  vector<string> escaped;
+  escaped.reserve(val.size());
+  for (auto const &v : val) {
+    if (v.find_first_of(' ') != string::npos) {
+      shouldQuote = true;
+    }
+    string tmp = txtEscape(v);
+    string unescaped;
+    unescaped.reserve(tmp.size() + 4);
+    for (auto const &ch : tmp) {
+      if (ch == '\\') {
+        unescaped += R"F(\\)F";
+        continue;
+      }
+      if (ch == ',') {
+        unescaped += R"F(\\,)F";
+        continue;
+      }
+      unescaped += ch;
+    }
+    escaped.push_back(unescaped);
+  }
+  if (shouldQuote) {
+    d_string.append(1, '"');
+  }
+  d_string.append(boost::join(escaped, ","));
+  if (shouldQuote) {
+    d_string.append(1, '"');
+  }
+}
+
 void RecordTextWriter::xfrSvcParamKeyVals(const set<SvcParam>& val) {
   for (auto const &param : val) {
     if (!d_string.empty())
@@ -737,11 +896,14 @@ void RecordTextWriter::xfrSvcParamKeyVals(const set<SvcParam>& val) {
     case SvcParam::ipv4hint: /* fall-through */
     case SvcParam::ipv6hint:
       // TODO use xfrCA and put commas in between?
+      if (param.getAutoHint()) {
+        d_string.append("auto");
+        break;
+      }
       d_string.append(ComboAddress::caContainerToString(param.getIPHints(), false));
       break;
     case SvcParam::alpn:
-      // This is safe, as this value needs no quotes
-      d_string.append(boost::join(param.getALPN(), ","));
+      xfrSVCBValueList(param.getALPN());
       break;
     case SvcParam::mandatory:
     {
@@ -761,15 +923,18 @@ void RecordTextWriter::xfrSvcParamKeyVals(const set<SvcParam>& val) {
       d_string = str + d_string;
       break;
     }
-    case SvcParam::echconfig: {
+    case SvcParam::ech: {
       auto str = d_string;
       d_string.clear();
-      xfrBlobNoSpaces(param.getEchConfig());
+      xfrBlobNoSpaces(param.getECH());
       d_string = str + '"' + d_string + '"';
       break;
     }
     default:
-      d_string.append(param.getValue());
+      auto str = d_string;
+      d_string.clear();
+      xfrText(param.getValue(), false, false);
+      d_string = str + '"' + txtEscape(d_string) + '"';
       break;
     }
   }

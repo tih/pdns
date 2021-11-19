@@ -1,14 +1,16 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_NO_MAIN
 #include <boost/test/unit_test.hpp>
-#include <boost/assign/std/map.hpp>
+
+#include <cmath>
 #include <numeric>
-#include <math.h>
+#include <unordered_set>
+
 #include "dnsname.hh"
 #include "misc.hh"
 #include "dnswriter.hh"
 #include "dnsrecords.hh"
-#include <unordered_set>
+
 using namespace boost;
 using std::string;
 
@@ -386,35 +388,55 @@ BOOST_AUTO_TEST_CASE(test_hashContainer) {
 
 
 BOOST_AUTO_TEST_CASE(test_QuestionHash) {
-  vector<unsigned char> packet;
+  vector<unsigned char> packet(sizeof(dnsheader));
   reportBasicTypes();
-  DNSPacketWriter dpw1(packet, DNSName("www.ds9a.nl."), QType::AAAA);
-  
-  auto hash1=hashQuestion((char*)&packet[0], packet.size(), 0);
-  DNSPacketWriter dpw2(packet, DNSName("wWw.Ds9A.nL."), QType::AAAA);
-  auto hash2=hashQuestion((char*)&packet[0], packet.size(), 0);
+
+  // A return init case
+  BOOST_CHECK_EQUAL(hashQuestion(packet.data(), sizeof(dnsheader), 0xffU), 0xffU);
+
+  // We subtract 4 from the packet sizes since DNSPacketWriter adds a type and a class
+  // We expect the hash of the root to be unequal to the burtle init value
+  DNSPacketWriter dpw0(packet, DNSName("."), QType::AAAA);
+  BOOST_CHECK(hashQuestion(packet.data(), packet.size() - 4, 0xffU) != 0xffU);
+
+  // A truncated buffer should return the init value
+  DNSPacketWriter dpw1(packet, DNSName("."), QType::AAAA);
+  BOOST_CHECK_EQUAL(hashQuestion(packet.data(), packet.size() - 5, 0xffU), 0xffU);
+
+  DNSPacketWriter dpw2(packet, DNSName("www.ds9a.nl."), QType::AAAA);
+  // Let's make an invalid name by overwriting the length of the second label just outside the buffer
+  packet[sizeof(dnsheader) + 4] = 8;
+  BOOST_CHECK_EQUAL(hashQuestion(packet.data(), packet.size() - 4, 0xffU), 0xffU);
+
+  DNSPacketWriter dpw3(packet, DNSName("www.ds9a.nl."), QType::AAAA);
+  // Let's make an invalid name by overwriting the length of the second label way outside the buffer
+  packet[sizeof(dnsheader) + 4] = 0xff;
+  BOOST_CHECK_EQUAL(hashQuestion(packet.data(), packet.size() - 4, 0xffU), 0xffU);
+
+  DNSPacketWriter dpw4(packet, DNSName("www.ds9a.nl."), QType::AAAA);
+  auto hash1 = hashQuestion(&packet[0], packet.size() - 4, 0);
+  DNSPacketWriter dpw5(packet, DNSName("wWw.Ds9A.nL."), QType::AAAA);
+  auto hash2 = hashQuestion(&packet[0], packet.size() - 4, 0);
   BOOST_CHECK_EQUAL(hash1, hash2);
- 
+
   vector<uint32_t> counts(1500);
- 
-  for(unsigned int n=0; n < 100000; ++n) {
+  for(unsigned int n = 0; n < 100000; ++n) {
     packet.clear();
-    DNSPacketWriter dpw3(packet, DNSName(std::to_string(n)+"."+std::to_string(n*2)+"."), QType::AAAA);
-    counts[hashQuestion((char*)&packet[0], packet.size(), 0) % counts.size()]++;
+    DNSPacketWriter dpw(packet, DNSName(std::to_string(n) + "." + std::to_string(n*2) + "."), QType::AAAA);
+    counts[hashQuestion(&packet[0], packet.size() - 4, 0) % counts.size()]++;
   }
-  
+
   double sum = std::accumulate(std::begin(counts), std::end(counts), 0.0);
   double m =  sum / counts.size();
-  
+
   double accum = 0.0;
   std::for_each (std::begin(counts), std::end(counts), [&](const double d) {
       accum += (d - m) * (d - m);
   });
-      
+
   double stdev = sqrt(accum / (counts.size()-1));
-  BOOST_CHECK(stdev < 10);      
+  BOOST_CHECK(stdev < 10);
 }
-  
 
 BOOST_AUTO_TEST_CASE(test_packetParse) {
   vector<unsigned char> packet;
@@ -523,9 +545,10 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch) {
 BOOST_AUTO_TEST_CASE(test_suffixmatch_tree) {
   SuffixMatchTree<DNSName> smt;
   DNSName ezdns("ezdns.it.");
-  smt.add(ezdns, ezdns);
+  smt.add(ezdns, DNSName(ezdns));
 
-  smt.add(DNSName("org.").getRawLabels(), DNSName("org."));
+  auto labels = DNSName("org.").getRawLabels();
+  smt.add(labels, DNSName("org."));
 
   DNSName wwwpowerdnscom("www.powerdns.com.");
   DNSName wwwezdnsit("www.ezdns.it.");
@@ -548,14 +571,14 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch_tree) {
   BOOST_CHECK(smt.lookup(DNSName("images.bbc.co.uk.")) == nullptr);
   BOOST_CHECK(smt.lookup(DNSName("www.news.gov.uk.")) == nullptr);
 
-  smt.add(g_rootdnsname, g_rootdnsname); // block the root
+  smt.add(g_rootdnsname, DNSName(g_rootdnsname)); // block the root
   BOOST_REQUIRE(smt.lookup(DNSName("a.root-servers.net.")));
   BOOST_CHECK_EQUAL(*smt.lookup(DNSName("a.root-servers.net.")), g_rootdnsname);
 
   DNSName apowerdnscom("a.powerdns.com.");
   DNSName bpowerdnscom("b.powerdns.com.");
-  smt.add(apowerdnscom, apowerdnscom);
-  smt.add(bpowerdnscom, bpowerdnscom);
+  smt.add(apowerdnscom, DNSName(apowerdnscom));
+  smt.add(bpowerdnscom, DNSName(bpowerdnscom));
   BOOST_REQUIRE(smt.lookup(apowerdnscom));
   BOOST_CHECK_EQUAL(*smt.lookup(apowerdnscom), apowerdnscom);
   BOOST_REQUIRE(smt.lookup(bpowerdnscom));
@@ -563,8 +586,8 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch_tree) {
 
   DNSName examplenet("example.net.");
   DNSName net("net.");
-  smt.add(examplenet, examplenet);
-  smt.add(net, net);
+  smt.add(examplenet, DNSName(examplenet));
+  smt.add(net, DNSName(net));
   BOOST_REQUIRE(smt.lookup(examplenet));
   BOOST_CHECK_EQUAL(*smt.lookup(examplenet), examplenet);
   BOOST_REQUIRE(smt.lookup(net));
@@ -577,10 +600,10 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch_tree) {
   BOOST_CHECK_EQUAL(*smt.lookup(examplenet), examplenet);
 
   smt = SuffixMatchTree<DNSName>();
-  smt.add(examplenet, examplenet);
-  smt.add(net, net);
+  smt.add(examplenet, DNSName(examplenet));
+  smt.add(net, DNSName(net));
   smt.add(DNSName("news.bbc.co.uk."), DNSName("news.bbc.co.uk."));
-  smt.add(apowerdnscom, apowerdnscom);
+  smt.add(apowerdnscom, DNSName(apowerdnscom));
 
   smt.remove(DNSName("not-such-entry.news.bbc.co.uk."));
   BOOST_REQUIRE(smt.lookup(DNSName("news.bbc.co.uk.")));
@@ -596,8 +619,8 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch_tree) {
   BOOST_CHECK(smt.lookup(net) == nullptr);
   BOOST_CHECK(smt.lookup(examplenet) == nullptr);
 
-  smt.add(examplenet, examplenet);
-  smt.add(net, net);
+  smt.add(examplenet, DNSName(examplenet));
+  smt.add(net, DNSName(net));
   BOOST_REQUIRE(smt.lookup(examplenet));
   BOOST_CHECK_EQUAL(*smt.lookup(examplenet), examplenet);
   BOOST_REQUIRE(smt.lookup(net));
@@ -678,7 +701,7 @@ BOOST_AUTO_TEST_CASE(test_compare_canonical) {
   BOOST_CHECK(!a(DNSName("www.powerdns.net"), g_rootdnsname));
 
   vector<DNSName> vec;
-  for(const std::string& b : {"bert.com.", "alpha.nl.", "articles.xxx.",
+  for(const char* b : {"bert.com.", "alpha.nl.", "articles.xxx.",
 	"Aleph1.powerdns.com.", "ZOMG.powerdns.com.", "aaa.XXX.", "yyy.XXX.", 
 	"test.powerdns.com.", "\\128.com"}) {
     vec.push_back(DNSName(b));

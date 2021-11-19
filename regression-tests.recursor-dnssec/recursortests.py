@@ -13,6 +13,8 @@ import unittest
 import dns
 import dns.message
 
+from proxyprotocol import ProxyProtocol
+
 from eqdnsmessage import AssertEqualDNSMessageMixin
 
 
@@ -179,6 +181,10 @@ cname-to-formerr.secure.example. 3600 IN CNAME host1.insecure-formerr.example.
 dname-secure.secure.example. 3600 IN DNAME dname-secure.example.
 dname-insecure.secure.example. 3600 IN DNAME insecure.example.
 dname-bogus.secure.example. 3600 IN DNAME bogus.example.
+
+non-apex-dnskey.secure.example. 3600 IN DNSKEY 257 3 13 CT6AJ4MEOtNDgj0+xLtTLGHf1WbLsKWZI8ONHOt/6q7hTjeWSnY/SGig1dIKZrHg+pJFUSPaxeShv48SYVRKEg==
+non-apex-dnskey2.secure.example. 3600 IN DNSKEY 256 3 13 CT6AJ4MEOtNDgj0+xLtTLGHf1WbLsKWZI8ONHOt/6q7hTjeWSnY/SGig1dIKZrHg+pJFUSPaxeShv48SYVRKEg==
+non-apex-dnskey3.secure.example. 3600 IN DNSKEY 256 3 13 DT6AJ4MEOtNDgj0+xLtTLGHf1WbLsKWZI8ONHOt/6q7hTjeWSnY/SGig1dIKZrHg+pJFUSPaxeShv48SYVRKEg==
         """,
         'dname-secure.example': """
 dname-secure.example. 3600 IN SOA {soa}
@@ -925,8 +931,8 @@ distributor-threads={threads}""".format(confdir=confdir,
                 raise TypeError("rcode is neither a str nor int")
 
         if msg.rcode() != rcode:
-            msgRcode = dns.rcode._by_value[msg.rcode()]
-            wantedRcode = dns.rcode._by_value[rcode]
+            msgRcode = dns.rcode.to_text(msg.rcode())
+            wantedRcode = dns.rcode.to_text(rcode)
 
             raise AssertionError("Rcode for %s is %s, expected %s." % (msg.question[0].to_text(), msgRcode, wantedRcode))
 
@@ -954,7 +960,7 @@ distributor-threads={threads}""".format(confdir=confdir,
         expectedResponse.answer = expectedRRs
         print(expectedResponse)
         print(response)
-        self.assertEquals(response, expectedResponse)
+        self.assertEqual(response, expectedResponse)
 
     @classmethod
     def sendQuery(cls, name, rdtype, useTCP=False):
@@ -974,3 +980,59 @@ distributor-threads={threads}""".format(confdir=confdir,
         msg.flags += dns.flags.from_text('RD')
         msg.use_edns(edns=0, ednsflags=dns.flags.edns_from_text(ednsflags))
         return msg
+
+    @classmethod
+    def sendUDPQueryWithProxyProtocol(cls, query, v6, source, destination, sourcePort, destinationPort, values=[], timeout=2.0):
+        queryPayload = query.to_wire()
+        ppPayload = ProxyProtocol.getPayload(False, False, v6, source, destination, sourcePort, destinationPort, values)
+        payload = ppPayload + queryPayload
+
+        if timeout:
+            cls._sock.settimeout(timeout)
+
+        try:
+            cls._sock.send(payload)
+            data = cls._sock.recv(4096)
+        except socket.timeout:
+            data = None
+        finally:
+            if timeout:
+                cls._sock.settimeout(None)
+
+        message = None
+        if data:
+            message = dns.message.from_wire(data)
+        return message
+
+    @classmethod
+    def sendTCPQueryWithProxyProtocol(cls, query, v6, source, destination, sourcePort, destinationPort, values=[], timeout=2.0):
+        queryPayload = query.to_wire()
+        ppPayload = ProxyProtocol.getPayload(False, False, v6, source, destination, sourcePort, destinationPort, values)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if timeout:
+            sock.settimeout(timeout)
+
+        sock.connect(("127.0.0.1", cls._recursorPort))
+
+        try:
+            sock.send(ppPayload)
+            sock.send(struct.pack("!H", len(queryPayload)))
+            sock.send(queryPayload)
+            data = sock.recv(2)
+            if data:
+                (datalen,) = struct.unpack("!H", data)
+                data = sock.recv(datalen)
+        except socket.timeout as e:
+            print("Timeout: %s" % (str(e)))
+            data = None
+        except socket.error as e:
+            print("Network error: %s" % (str(e)))
+            data = None
+        finally:
+            sock.close()
+
+        message = None
+        if data:
+            message = dns.message.from_wire(data)
+        return message

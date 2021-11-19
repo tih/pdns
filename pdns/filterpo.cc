@@ -50,13 +50,21 @@ bool DNSFilterEngine::Zone::findExactQNamePolicy(const DNSName& qname, DNSFilter
 
 bool DNSFilterEngine::Zone::findExactNSPolicy(const DNSName& qname, DNSFilterEngine::Policy& pol) const
 {
-  return findExactNamedPolicy(d_propolName, qname, pol);
+  if (findExactNamedPolicy(d_propolName, qname, pol)) {
+    pol.d_trigger = qname;
+    pol.d_trigger.appendRawLabel(rpzNSDnameName);
+    return true;
+  }
+  return false;
 }
 
 bool DNSFilterEngine::Zone::findNSIPPolicy(const ComboAddress& addr, DNSFilterEngine::Policy& pol) const
 {
   if (const auto fnd = d_propolNSAddr.lookup(addr)) {
     pol = fnd->second;
+    pol.d_trigger = Zone::maskToRPZ(fnd->first);
+    pol.d_trigger.appendRawLabel(rpzNSIPName);
+    pol.d_hit = addr.toString();
     return true;
   }
   return false;
@@ -66,6 +74,9 @@ bool DNSFilterEngine::Zone::findResponsePolicy(const ComboAddress& addr, DNSFilt
 {
   if (const auto fnd = d_postpolAddr.lookup(addr)) {
     pol = fnd->second;
+    pol.d_trigger = Zone::maskToRPZ(fnd->first);
+    pol.d_trigger.appendRawLabel(rpzIPName);
+    pol.d_hit = addr.toString();
     return true;
   }
   return false;
@@ -75,6 +86,9 @@ bool DNSFilterEngine::Zone::findClientPolicy(const ComboAddress& addr, DNSFilter
 {
   if (const auto fnd = d_qpolAddr.lookup(addr)) {
     pol = fnd->second;
+    pol.d_trigger = Zone::maskToRPZ(fnd->first);
+    pol.d_trigger.appendRawLabel(rpzClientIPName);
+    pol.d_hit = addr.toString();
     return true;
   }
   return false;
@@ -179,17 +193,13 @@ bool DNSFilterEngine::getProcessingPolicy(const DNSName& qname, const std::unord
     }
     if (z->findExactNSPolicy(qname, pol)) {
       // cerr<<"Had a hit on the nameserver ("<<qname<<") used to process the query"<<endl;
-      pol.d_trigger = qname;
-      pol.d_trigger.appendRawLabel(rpzNSDnameName);
-      pol.d_hit = qname.toStringNoDot();
       return true;
     }
 
     for (const auto& wc : wcNames) {
       if (z->findExactNSPolicy(wc, pol)) {
         // cerr<<"Had a hit on the nameserver ("<<qname<<") used to process the query"<<endl;
-        pol.d_trigger = wc;
-        pol.d_trigger.appendRawLabel(rpzNSDnameName);
+        // Hit is not the wildcard passed to findExactQNamePolicy but the actual qname!
         pol.d_hit = qname.toStringNoDot();
         return true;
       }
@@ -214,10 +224,6 @@ bool DNSFilterEngine::getProcessingPolicy(const ComboAddress& address, const std
 
     if(z->findNSIPPolicy(address, pol)) {
       //      cerr<<"Had a hit on the nameserver ("<<address.toString()<<") used to process the query"<<endl;
-      // XXX should use ns RPZ
-      pol.d_trigger = Zone::maskToRPZ(address);
-      pol.d_trigger.appendRawLabel(rpzNSIPName);
-      pol.d_hit = address.toString();
       return true;
     }
   }
@@ -294,15 +300,13 @@ bool DNSFilterEngine::getQueryPolicy(const DNSName& qname, const std::unordered_
 
     if (z->findExactQNamePolicy(qname, pol)) {
       // cerr<<"Had a hit on the name of the query"<<endl;
-      pol.d_trigger = qname;
-      pol.d_hit = qname.toStringNoDot();
       return true;
     }
 
     for (const auto& wc : wcNames) {
       if (z->findExactQNamePolicy(wc, pol)) {
         // cerr<<"Had a hit on the name of the query"<<endl;
-        pol.d_trigger = wc;
+        // Hit is not the wildcard passed to findExactQNamePolicy but the actual qname!
         pol.d_hit = qname.toStringNoDot();
         return true;
       }
@@ -356,9 +360,6 @@ bool DNSFilterEngine::getPostPolicy(const DNSRecord& record, const std::unordere
     }
 
     if (z->findResponsePolicy(ca, pol)) {
-      pol.d_trigger = Zone::maskToRPZ(ca);
-      pol.d_trigger.appendRawLabel(rpzIPName);
-      pol.d_hit = ca.toString();
       return true;
     }
   }
@@ -681,7 +682,7 @@ void DNSFilterEngine::Zone::dumpNamedPolicy(FILE* fp, const DNSName& name, const
 {
   auto records = pol.getRecords(name);
   for (const auto& dr : records) {
-    fprintf(fp, "%s %" PRIu32 " IN %s %s\n", dr.d_name.toString().c_str(), dr.d_ttl, QType(dr.d_type).getName().c_str(), dr.d_content->getZoneRepresentation().c_str());
+    fprintf(fp, "%s %" PRIu32 " IN %s %s\n", dr.d_name.toString().c_str(), dr.d_ttl, QType(dr.d_type).toString().c_str(), dr.d_content->getZoneRepresentation().c_str());
   }
 }
 
@@ -697,31 +698,57 @@ DNSName DNSFilterEngine::Zone::maskToRPZ(const Netmask& nm)
   }
   else {
     DNSName temp;
-    const auto str = addr.toString();
-    const auto len = str.size();
-    std::string::size_type begin = 0;
+    static_assert(sizeof(addr.sin6.sin6_addr.s6_addr) == sizeof(uint16_t) * 8);
+    auto src = reinterpret_cast<const uint16_t*>(&addr.sin6.sin6_addr.s6_addr);
+    std::array<uint16_t,8> elems;
 
-    while (begin < len) {
-      std::string::size_type end = str.find(":", begin);
-      std::string sub;
-      if (end != string::npos) {
-        sub = str.substr(begin, end - begin);
-      }
-      else {
-        sub = str.substr(begin);
-      }
+    // this routine was adopted from libc's inet_ntop6, written by Paul Vixie
+    // because the RPZ spec (https://datatracker.ietf.org/doc/html/draft-vixie-dnsop-dns-rpz-00#section-4.1.1) says:
+    //
+    //    If there exists more than one sequence of zero-valued fields of
+    //    identical length, then only the last such sequence is compressed.
+    //    Note that [RFC5952] specifies compressing the first such sequence,
+    //    but our notation here reverses the order of fields, and so must also
+    //    reverse the selection of which zero sequence to compress.
+    //
+    // 'cur.len > best.len' from the original code is replaced by 'cur.len >= best.len', so the last-longest wins.
 
-      if (sub.empty()) {
+    struct { int base, len; } best = {-1, 0}, cur = {-1, 0};
+
+    for (int i = 0; i < (int)elems.size(); i++) {
+      elems[i] = ntohs(src[i]);
+      if (elems[i] == 0) {
+        if (cur.base == -1) {  // start of a run of zeroes
+          cur = { i, 1 };
+        } else {
+          cur.len++;           // continuation of a run of zeroes
+        }
+      } else {                 // not a zero
+        if (cur.base != -1) {  // end of a run of zeroes
+          if (best.base == -1 || cur.len >= best.len) { // first run of zeroes, or a better one than we found before
+            best = cur;
+          }
+          cur.base = -1;
+        }
+      }
+    }
+
+    if (cur.base != -1) {      // address ended with a zero
+      if (best.base == -1 || cur.len >= best.len) {     // first run of zeroes, or a better one than we found before
+        best = cur;
+      }
+    }
+
+    if (best.base != -1 && best.len < 2) {              // if our best run is only one zero long, we do not replace it
+      best.base = -1;
+    }
+    for (int i=0; i < (int)elems.size(); i++) {
+      if (i == best.base) {
         temp = DNSName("zz") + temp;
+        i = i + best.len - 1;
+      } else {
+        temp = DNSName((boost::format("%x") % elems.at(i)).str()) + temp;
       }
-      else {
-        temp = DNSName(sub) + temp;
-      }
-
-      if (end == string::npos) {
-        break;
-      }
-      begin = end + 1;
     }
     res += temp;
   }
@@ -737,7 +764,7 @@ void DNSFilterEngine::Zone::dumpAddrPolicy(FILE* fp, const Netmask& nm, const DN
 
   auto records = pol.getRecords(full);
   for (const auto& dr : records) {
-    fprintf(fp, "%s %" PRIu32 " IN %s %s\n", dr.d_name.toString().c_str(), dr.d_ttl, QType(dr.d_type).getName().c_str(), dr.d_content->getZoneRepresentation().c_str());
+    fprintf(fp, "%s %" PRIu32 " IN %s %s\n", dr.d_name.toString().c_str(), dr.d_ttl, QType(dr.d_type).toString().c_str(), dr.d_content->getZoneRepresentation().c_str());
   }
 }
 

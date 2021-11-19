@@ -16,7 +16,7 @@ The following webserver related configuration items are available:
 
 * :ref:`setting-webserver`: If set to anything but 'no', a webserver is launched.
 * :ref:`setting-webserver-address`: Address to bind the webserver to. Defaults to 127.0.0.1, which implies that only the local computer is able to connect to the nameserver! To allow remote hosts to connect, change to 0.0.0.0 or the physical IP address of your nameserver.
-* :ref:`setting-webserver-password`: If set, viewers will have to enter this plaintext password in order to gain access to the statistics, in addition to entering the configured API key on the index page.
+* :ref:`setting-webserver-password`: If set, viewers will have to enter this password in order to gain access to the statistics, in addition to entering the configured API key on the index page.
 * :ref:`setting-webserver-port`: Port to bind the webserver to.
 * :ref:`setting-webserver-allow-from`: Netmasks that are allowed to connect to the webserver
 * :ref:`setting-webserver-max-bodysize`: Maximum request/response body size in megabytes
@@ -304,10 +304,6 @@ Add these lines to the ``pdns.conf``::
   api=yes
   api-key=changeme
 
-.. versionchanged:: 4.1.0
-
-  Setting :ref:`setting-api` also implicitly enables the webserver.
-
 And restart, the following examples should start working::
 
   curl -v -H 'X-API-Key: changeme' http://127.0.0.1:8081/api/v1/servers/localhost | jq .
@@ -318,7 +314,9 @@ Working with the API
 
 This chapter describes the PowerDNS Authoritative API.
 When creating an API wrapper (for instance when fronting multiple API's), it is recommended to stick to this API specification.
-The API is described in the `OpenAPI format <https://www.openapis.org/>`_, also known as "Swagger", and this description is `available <https://raw.githubusercontent.com/PowerDNS/pdns/master/docs/http-api/swagger/authoritative-api-swagger.yaml>`_.
+The API is described in the `OpenAPI format <https://www.openapis.org/>`_, also known as "Swagger", and this description is `available <https://raw.githubusercontent.com/PowerDNS/pdns/master/docs/http-api/swagger/authoritative-api-swagger.yaml>`_. It can also be obtained from a running server if the administrator of that server has enabled the API; it
+is available at the  `/api/docs` endpoint in both YAML and JSON formats (the 'Accept' header can be used to indicate the
+desired format).
 
 Authentication
 ~~~~~~~~~~~~~~

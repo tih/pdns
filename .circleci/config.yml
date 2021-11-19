@@ -43,6 +43,16 @@ commands:
           name: include $BASH_ENV for both interactive and non-interactive shells
           command: echo '. $BASH_ENV' >> $HOME/.bashrc
 
+  install-clang-8:
+    description: install clang-8 from backports
+    steps:
+      - run:
+          name: add backports and install clang-8
+          command: |
+            echo 'deb http://deb.debian.org/debian buster-backports main' > /etc/apt/sources.list.d/backports.list
+            apt-get update
+            apt-get -qq -t buster-backports --no-install-recommends install clang-8 llvm-8
+
   install-coverity-tools:
     description: Install the coverity tools to /usr/local
     steps:
@@ -59,23 +69,31 @@ commands:
           fingerprints:
             - "3e:0a:aa:2c:30:69:89:f3:eb:17:c1:3f:3b:78:40:7a"
 
+  # FIXME: the build-essential wart below is misformatted intentionally to remind us to replace the remotebackend testing deps with Debian packages
   auth-regress-setup:
     description: Prepare the environment for auth regression tests
     steps:
       - get-workspace
       - install-auth-deps
+      - install-clang-8 # for the symbolizer
       - run:
           name: Install test dependencies
           command: |
             apt-get -y -qq install \
+              authbind \
               bc \
               bind9utils \
+              build-essential libsqlite3-dev libzmq3-dev \
               curl \
               default-jre-headless \
               dnsutils \
+              gawk \
+              git \
               ldnsutils \
               libnet-dns-perl \
               pdns-recursor \
+              socat \
+              sqlite3 \
               unbound-host
       - run:
           name: Install jdnssectools
@@ -94,6 +112,11 @@ commands:
           name: Start PowerDNS Recursor in the background
           command: pdns_recursor
           background: true
+      - run:
+          name: Set up authbind
+          command: |
+            touch /etc/authbind/byport/53
+            chmod 755 /etc/authbind/byport/53
 
   auth-regress:
     description: Run one auth regression context
@@ -170,35 +193,38 @@ commands:
       - run:
           command: |
             apt-get install -qq -y \
-              libluajit-5.1 \
+              libluajit-5.1-2 \
               libboost-all-dev \
               libcap2 \
               libssl1.1 \
               libsystemd0 \
               libsodium23 \
               libfstrm0 \
-              libprotobuf17
+              libsnmp30
 
   install-auth-deps:
     description: Install all libraries needed to run the auth
     steps:
       - run: |
           apt-get install -qq -y --no-install-recommends \
+            default-libmysqlclient-dev \
             libboost-all-dev \
             libcdb1 \
             libcurl4 \
+            libgeoip1 \
             libkrb5-3 \
             libldap-2.4-2 \
             liblmdb0 \
             libluajit-5.1-2 \
+            libmaxminddb0 \
             libp11-kit0 \
             libpq5 \
-            libssl1.1 \
             libsodium23 \
+            libssl1.1 \
             libsystemd0 \
-            default-libmysqlclient-dev \
-            unixodbc \
-            softhsm2
+            libyaml-cpp0.6 \
+            softhsm2 \
+            unixodbc
 
   install-dnsdist-deps:
     description: "Install all libraries needed for testing dnsdist"
@@ -207,35 +233,23 @@ commands:
       - run:
           command: |
             apt-get install -qq -y \
-              libluajit-5.1 \
+              libluajit-5.1-2 \
               libboost-all-dev \
               libcap2 \
               libcdb1 \
               libcurl4-openssl-dev \
               libfstrm0 \
+              libgnutls30 \
               libh2o-evloop0.13 \
               liblmdb0 \
-              libprotobuf17 \
+              libnghttp2-dev \
               libre2-5 \
               libssl-dev \
               libsystemd0 \
               libsodium23 \
               patch \
               protobuf-compiler \
-              virtualenv
-
-  install-ixfrdist-deps:
-    description: "Install all libraries needed for testing ixfrdist"
-    steps:
-      - run: apt-get update
-      - run:
-          command: |
-            apt-get install -qq -y \
-              git \
-              libboost-all-dev \
-              libsystemd0 \
-              libyaml-cpp0.6 \
-              virtualenv
+              python3-venv
 
   install-auth-dev-deps:
     description: Install all packages needed to build the auth
@@ -256,10 +270,12 @@ commands:
               libboost-all-dev \
               libcdb-dev \
               libcurl4-openssl-dev \
+              libgeoip-dev \
               libkrb5-dev \
               libldap2-dev \
               liblmdb-dev \
               libluajit-5.1-dev \
+              libmaxminddb-dev \
               libp11-kit-dev \
               libpq-dev \
               libsodium-dev \
@@ -268,13 +284,16 @@ commands:
               libsystemd-dev \
               libtool \
               libyaml-cpp-dev \
+              libzmq3-dev \
               make \
               pkg-config \
+              python3-venv \
               ragel \
+              ruby-bundler \
+              ruby2.5-dev \
               sqlite3 \
               systemd \
               unixodbc-dev \
-              virtualenv \
               wget
 
   add-auth-repo:
@@ -297,9 +316,9 @@ commands:
           name: "Install apt-keys"
           command: |
             if [ "<< parameters.version >>" = "master" ]; then
-              curl https://repo.powerdns.com/CBC8B383-pub.asc | apt-key add -
+              curl https://repo.powerdns.com/CBC8B383-pub.asc -o /etc/apt/trusted.gpg.d/CBC8B383-pub.asc
             else
-              curl https://repo.powerdns.com/FD380FBB-pub.asc | apt-key add -
+              curl https://repo.powerdns.com/FD380FBB-pub.asc -o /etc/apt/trusted.gpg.d/FD380FBB-pub.asc
             fi
       - run:
           name: "Add repository"
@@ -376,7 +395,7 @@ commands:
             pkg-config \
             ragel \
             rsync \
-            virtualenv
+            python3-venv
             if [ "${CIRCLE_PROJECT_USERNAME}" = "PowerDNS" -a "${CIRCLE_PROJECT_REPONAME}" = "pdns" -a "${CIRCLE_BRANCH}" = "master" ]; then
               apt-get update && apt-get -qq -y install \
                 texlive-full
@@ -393,6 +412,7 @@ commands:
           name: configure
           command: |
             ./configure \
+            --enable-option-checking=fatal \
             --disable-lua-records \
             --disable-unit-tests \
             --without-dynmodules \
@@ -428,8 +448,8 @@ commands:
           name: configure
           command: |
             ./configure \
-              --disable-unit-tests \
-              --disable-protobuf
+              --enable-option-checking=fatal \
+              --disable-unit-tests
           working_directory: ~/project/pdns/recursordist
       - run:
           name: build docs
@@ -464,8 +484,8 @@ commands:
           name: configure
           command: |
             ./configure \
-              --disable-unit-tests \
-              --disable-protobuf
+              --enable-option-checking=fatal \
+              --disable-unit-tests
           working_directory: ~/project/pdns/dnsdistdist
       - run:
           name: build docs
@@ -494,6 +514,9 @@ jobs:
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
 
     steps:
       - checkout-shallow
@@ -504,19 +527,21 @@ jobs:
 
   check-formatting:
     docker:
-      - image: debian:buster
+      - image: debian:bullseye
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - run:
           name: Install dependencies
           command: |
-            echo 'deb http://deb.debian.org/debian buster-backports main' > /etc/apt/sources.list.d/backports.list
             apt-get update && apt-get -qq --no-install-recommends install git
-            apt-get -qq -t buster-backports --no-install-recommends install clang-format-8
+            apt-get -qq --no-install-recommends install clang-format-11
       - get-workspace
       - run:
           name: Check formatting
           command: |
-            ./build-scripts/format-code pdns/recursordist/*.[ch][ch]
+            ./build-scripts/format-code $(find . -type f -name '*.[ch][ch]' | sort | comm -23 - .not-formatted)
             git --no-pager diff
             exit $(git diff | wc -l)
           working_directory: ~/project
@@ -535,10 +560,16 @@ jobs:
   build-auth:
     docker:
       - image: debian:buster
-
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
       - get-workspace
       - install-auth-dev-deps
+      - install-clang-8
       - restore-cache-ccache:
           product: auth
       - run:
@@ -547,28 +578,31 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CC='clang-8' \
+            CXX='clang++-8' \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
-              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc random tinydns lua2' \
+              --enable-option-checking=fatal \
+              --with-modules='bind geoip gmysql godbc gpgsql gsqlite3 ldap lmdb lua2 pipe remote tinydns' \
               --enable-systemd \
               --enable-tools \
               --enable-unit-tests \
               --enable-backend-unit-tests \
               --enable-fuzz-targets \
               --enable-experimental-pkcs11 \
+              --enable-remotebackend-zeromq \
               --with-lmdb=/usr \
               --with-libsodium \
               --prefix=/opt/pdns-auth \
-              --enable-ixfrdist
+              --enable-ixfrdist \
+              --enable-asan \
+              --enable-ubsan
       - run:
           name: build
           command: make -j3 -k
       - save-ccache-cache:
           product: auth
-      - run:
-          name: Run unit tests
-          command: PDNS_TEST_NO_IPV6=1 make check || (cat pdns/test-suite.log; false)
       - run:
           name: Install the binaries
           command: make install
@@ -582,6 +616,12 @@ jobs:
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
       - auth-regress-setup
       - run:
@@ -600,8 +640,7 @@ jobs:
           command: |
             apt-get install -qq -y \
             unixodbc \
-            libsqliteodbc \
-            sqlite3
+            libsqliteodbc
       - run:
           name: Set up sqlite3 odbc testing
           command: echo 'export GODBC_SQLITE3_DSN=pdns-sqlite3-1' > ./vars
@@ -613,6 +652,12 @@ jobs:
   test-auth-regress-odbc-mssql:
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
       - image: mcr.microsoft.com/mssql/server:2017-GA-ubuntu
         environment:
           - ACCEPT_EULA: Y
@@ -669,46 +714,27 @@ jobs:
           context: godbc_mssql-nsec3-narrow
           skip: 8bit-txt-unescaped
 
-  test-auth-regress-gsqlite3:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-    steps:
-      - auth-regress-setup
-      - run:
-          command: apt-get install -qq -y sqlite3
-      - auth-regress:
-          context: gsqlite3-nodnssec-both
-      - auth-regress:
-          context: gsqlite3-both
-      - auth-regress:
-          context: gsqlite3-nsec3-both
-      - auth-regress:
-          context: gsqlite3-nsec3-optout-both
-      - auth-regress:
-          context: gsqlite3-nsec3-narrow
-
   test-auth-regress-bind:
     resource_class: small
 
     docker:
       - image: debian:buster
-      - image: circleci/mysql:5      # for the hybrid test
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
+      - image: mysql:5      # for the hybrid test
+        environment:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 1
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - auth-regress-setup
       - run:
-          command: apt-get install -qq -y sqlite3 p11-kit softhsm2
-      - auth-regress:
-          context: bind-both
-      - auth-regress:
-          context: bind-dnssec-both
-      - auth-regress:
-          context: bind-dnssec-nsec3-both
-      - auth-regress:
-          context: bind-dnssec-nsec3-optout-both
-      - auth-regress:
-          context: bind-dnssec-nsec3-narrow
+          command: apt-get install -qq -y p11-kit softhsm2
       - auth-regress:
           context: bind-dnssec-pkcs11
       - run:
@@ -722,84 +748,26 @@ jobs:
       - run:
           name: Set up mysql client lib to force TCP
           command: echo 'export GMYSQLHOST=127.0.0.1' > ./vars
-          workdir: ~/project/regression-tests            
+          workdir: ~/project/regression-tests
       - auth-regress:
           context: bind-hybrid-nsec3
-
-  test-auth-regress-gmysql:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-      - image: circleci/mysql:5
-    steps:
-      - auth-regress-setup
-      - run:
-          command: apt-get install -qq -y default-mysql-client
-      - run:
-          command: |
-            cat >> ~/.my.cnf \<<- __EOF__
-            [client]
-            protocol=TCP
-            default-character-set=latin1
-            __EOF__
-      - run:
-          name: Set up mysql client lib to force TCP
-          command: echo 'export GMYSQLHOST=127.0.0.1 export GMYSQL2HOST=127.0.0.1 ' > ./vars
-          workdir: ~/project/regression-tests
-      - auth-regress:
-          context: gmysql-nodnssec-both
-      - auth-regress:
-          context: gmysql-both
-      - auth-regress:
-          context: gmysql-nsec3-both
-      - auth-regress:
-          context: gmysql-nsec3-optout-both
-      - auth-regress:
-          context: gmysql-nsec3-narrow
-      - auth-regress:
-          context: gmysql_sp-both
-
-  test-auth-regress-gpgsql:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-      - image: circleci/postgres:9
-        environment:
-          POSTGRES_USER: root
-          POSTGRES_HOST_AUTH_METHOD: trust
-    steps:
-      - auth-regress-setup
-      - run:
-          command: apt-get install -qq -y postgresql-client
-      - run:
-          name: Use TCP for Postgresql connections
-          command: |
-            cat >> ./vars \<<- __EOF__
-            export PGHOST=127.0.0.1
-            export PGPORT=5432
-            __EOF__
-          workdir: ~/project/regression-tests
-      - auth-regress:
-          context: gpgsql-nodnssec-both
-      - auth-regress:
-          context: gpgsql-both
-      - auth-regress:
-          context: gpgsql-nsec3-both
-      - auth-regress:
-          context: gpgsql-nsec3-optout-both
-      - auth-regress:
-          context: gpgsql-nsec3-narrow
 
   test-auth-regress-ldap:
     resource_class: small
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
         environment:
           LDAPHOST: ldap://ldapserver/
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
       - image: powerdns/ldap-regress:1.2.4-1 # OpenLDAP 2.4.47
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
         name: ldapserver
         command: '--loglevel debug'
         environment:
@@ -817,71 +785,34 @@ jobs:
           context: ldap-strict
           doroot: false
 
-  test-auth-regress-tinydns:
+  test-auth-regress-geoip:
     resource_class: small
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
       - auth-regress-setup
+      - run: export geoipdatabase=../modules/geoipbackend/regression-tests/GeoLiteCity.mmdb
       - auth-regress:
-          context: tinydns
+          context: geoip
           doroot: false
-
-  test-auth-regress-lmdb:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-    steps:
-      - auth-regress-setup
-      - run: apt-get install -y -qq jq
-      - auth-regress:
-          context: lmdb-nodnssec-both
-      - auth-regress:
-          context: lmdb-both
-      - auth-regress:
-          context: lmdb-nsec3-both
-      - auth-regress:
-          context: lmdb-nsec3-optout-both
-      - auth-regress:
-          context: lmdb-nsec3-narrow
-
-  test-auth-algorithms:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-    steps:
-      - auth-regress-setup
-      - run:
-          name: Test all algorithms
-          command: /opt/pdns-auth/bin/pdnsutil test-algorithms
-
-  test-auth-api:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-    steps:
-      - auth-regress-setup
-      - run: apt-get -y -qq install virtualenv sqlite3
-      - run:
-          name: Run API tests
-          workdir: ~/project/regression-tests.api
-          command: |
-            PDNSSERVER="/opt/pdns-auth/sbin/pdns_server" \
-            PDNSUTIL="/opt/pdns-auth/bin/pdnsutil" \
-            SDIG="/opt/pdns-auth/bin/sdig" \
-            ZONE2SQL="/opt/pdns-auth/bin/zone2sql" \
-            ./runtests authoritative
 
   build-recursor:
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
-      - restore-cache-ccache:
-          product: recursor
       - run:
           name: Install dependencies
           command: |
@@ -898,17 +829,19 @@ jobs:
             libcap-dev \
             libluajit-5.1-dev \
             libfstrm-dev \
-            libprotobuf-dev \
+            libsnmp-dev \
             libsodium-dev \
             libssl-dev \
             libsystemd-dev \
             libtool \
             make \
             pkg-config \
-            protobuf-compiler \
             ragel \
             systemd \
-            virtualenv
+            python3-venv
+      - install-clang-8
+      - restore-cache-ccache:
+          product: recursor
       - get-workspace
       - run:
           name: autoconf
@@ -917,9 +850,12 @@ jobs:
       - run:
           name: configure
           command: |
-            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
+            CC='clang-8' \
+            CXX='clang++-8' \
+            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int" \
+            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
+            --enable-option-checking=fatal \
             --enable-unit-tests \
             --enable-nod \
             --enable-systemd \
@@ -927,8 +863,10 @@ jobs:
             --with-libsodium \
             --with-lua=luajit \
             --with-libcap \
-            --with-protobuf=yes \
-            --without-net-snmp
+            --with-net-snmp \
+            --enable-dns-over-tls \
+            --enable-asan \
+            --enable-ubsan
           working_directory: ~/project/pdns/recursordist
       - run:
           name: build
@@ -954,9 +892,15 @@ jobs:
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
       - add-auth-repo
-      - run: apt-get --no-install-recommends install -qq -y pdns-server pdns-backend-bind pdns-tools daemontools authbind jq libfaketime lua-posix lua-socket moreutils bc virtualenv protobuf-compiler
+      - run: apt-get --no-install-recommends install -qq -y pdns-server pdns-backend-bind pdns-tools daemontools authbind jq libfaketime lua-posix lua-socket moreutils bc python3-venv protobuf-compiler prometheus
       - install-recursor-deps
       - run:
           name: Set up authbind
@@ -965,11 +909,18 @@ jobs:
             chmod 755 /etc/authbind/byport/53
       - get-workspace
       - run:
+          name: setup snmp
+          command: |
+            apt-get -qq --no-install-recommends install snmpd
+            sed "s/agentxperms 0700 0755 recursor/agentxperms 0700 0755/g" regression-tests.recursor-dnssec/snmpd.conf > /etc/snmp/snmpd.conf
+            /etc/init.d/snmpd start
+      - run:
           name: Run regression tests
           workdir: ~/project
           command: |
             PDNSRECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
             RECCONTROL=/opt/pdns-recursor/bin/rec_control \
+            SKIP_IPV6_TESTS=y \
             ./build-scripts/test-recursor
 
   test-recursor-bulk:
@@ -977,6 +928,12 @@ jobs:
 
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
+        environment:
+          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
+          ASAN_OPTIONS: detect_leaks=0
     steps:
       - add-auth-repo
       - run: apt-get --no-install-recommends install -qq -y pdns-tools moreutils time
@@ -1029,179 +986,15 @@ jobs:
             TRACE=no \
             ./timestamp ./recursor-test 5300 50000 16
           workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest E
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 2 4096
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest F
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 4 4096
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest G
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest H
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 16 4096
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest I
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 1
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest J
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 2
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest K
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 4
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest L
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 8
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest M
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 16
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest M
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 32
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest N
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 64
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest O
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 128
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest P
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 256
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest Q
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 512
-          workdir: ~/project/regression-tests
-      - run:
-          name: Run bulktest R
-          command: |
-            DNSBULKTEST=/usr/bin/dnsbulktest \
-            RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor \
-            RECCONTROL=/opt/pdns-recursor/bin/rec_control \
-            THRESHOLD=95 \
-            TRACE=no \
-            ./timestamp ./recursor-test 5300 50000 8 4096 1024
-          workdir: ~/project/regression-tests
-
-  test-recursor-api:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-    steps:
-      - add-auth-repo
-      - run: apt-get --no-install-recommends install -qq -y virtualenv pdns-tools
-      - install-recursor-deps
-      - get-workspace
-      - run:
-          name: Run API tests
-          workdir: ~/project/regression-tests.api
-          command: |
-            PDNSRECURSOR="/opt/pdns-recursor/sbin/pdns_recursor" \
-            ./runtests recursor
 
   build-auth-docs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1211,7 +1004,10 @@ jobs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1223,7 +1019,10 @@ jobs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1233,7 +1032,10 @@ jobs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1245,7 +1047,10 @@ jobs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1255,7 +1060,10 @@ jobs:
     resource_class: small
 
     docker:
-      - image: debian:buster
+      - image: texlive/texlive
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - get-workspace
       - install-doc-deps
@@ -1266,6 +1074,9 @@ jobs:
   coverity-auth:
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - install-auth-dev-deps
       - install-coverity-tools
@@ -1281,8 +1092,9 @@ jobs:
             CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
             CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
+              --enable-option-checking=fatal \
               --disable-systemd \
-              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc random tinydns' \
+              --with-modules='bind lmdb ldap gmysql gsqlite3 gpgsql godbc tinydns' \
               --enable-tools \
               --with-lmdb=/usr \
               --with-libsodium \
@@ -1309,6 +1121,9 @@ jobs:
   coverity-dnsdist:
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - run:
           name: Install dependencies
@@ -1328,9 +1143,10 @@ jobs:
             libcdb-dev \
             libedit-dev \
             libfstrm-dev \
+            libgnutls28-dev \
             liblmdb-dev \
             libluajit-5.1-dev \
-            libprotobuf-dev \
+            libnghttp2-dev \
             libre2-dev \
             libsnmp-dev \
             libsodium-dev \
@@ -1339,9 +1155,8 @@ jobs:
             libtool \
             make \
             pkg-config \
-            protobuf-compiler \
             ragel \
-            virtualenv
+            python3-venv
       - install-coverity-tools
       - checkout-shallow
       - run:
@@ -1354,16 +1169,18 @@ jobs:
             CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
             CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
+            --enable-option-checking=fatal \
             --disable-systemd \
             --disable-unit-tests \
             --enable-dnstap \
             --enable-dnscrypt \
             --enable-dns-over-tls \
             --prefix=/opt/dnsdist \
+            --with-gnutls \
             --with-libsodium \
             --with-lua=luajit \
             --with-libcap \
-            --with-protobuf=yes \
+            --with-nghttp2 \
             --with-re2
           working_directory: /opt/project/pdns/dnsdistdist
       - run:
@@ -1388,6 +1205,9 @@ jobs:
   coverity-recursor:
     docker:
       - image: debian:buster
+        auth:
+          username: powerdnsreadonly
+          password: $DOCKERHUB_PASSWORD
     steps:
       - run:
           name: Install dependencies
@@ -1406,16 +1226,15 @@ jobs:
             libcap-dev \
             libluajit-5.1-dev \
             libfstrm-dev \
-            libprotobuf-dev \
+            libsnmp-dev \
             libsodium-dev \
             libssl-dev \
             libsystemd-dev \
             libtool \
             make \
             pkg-config \
-            protobuf-compiler \
             ragel \
-            virtualenv
+            python3-venv
       - install-coverity-tools
       - checkout-shallow
       - run:
@@ -1428,14 +1247,14 @@ jobs:
             CFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security" \
             CXXFLAGS="-O1 -Werror=vla -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
             ./configure \
+            --enable-option-checking=fatal \
             --disable-systemd \
             --disable-unit-tests \
             --prefix=/opt/pdns-recursor \
             --with-libsodium \
             --with-lua=luajit \
             --with-libcap \
-            --with-protobuf=yes \
-            --without-net-snmp
+            --with-net-snmp
           working_directory: /opt/project/pdns/recursordist
       - run:
           name: build
@@ -1455,132 +1274,6 @@ jobs:
             --form version="$(./builder-support/gen-version)" \
             --form description="master build" \
             https://scan.coverity.com/builds?project=${COVERITY_PROJECT}
-
-  build-dnsdist:
-    docker:
-      - image: debian:buster
-        environment:
-          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
-    steps:
-      - restore-cache-ccache:
-          product: dnsdist
-      - run:
-          name: Install dependencies
-          command: |
-            apt-get update && apt-get -qq --no-install-recommends install \
-            autoconf \
-            automake \
-            g++ \
-            git \
-            libboost-all-dev \
-            libcap-dev \
-            libcdb-dev \
-            libedit-dev \
-            libfstrm-dev \
-            libh2o-evloop-dev \
-            liblmdb-dev \
-            libluajit-5.1-dev \
-            libprotobuf-dev \
-            libre2-dev \
-            libsnmp-dev \
-            libsodium-dev \
-            libssl-dev \
-            libsystemd-dev \
-            libtool \
-            make \
-            pkg-config \
-            protobuf-compiler \
-            ragel \
-            systemd \
-            virtualenv
-      - get-workspace
-      - run:
-          name: autoconf
-          command: BUILDER_VERSION=0.0.0-git1 autoreconf -vfi
-          working_directory: ~/project/pdns/dnsdistdist
-      - run:
-          name: configure
-          command: |
-            CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security" \
-            CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Wp,-D_GLIBCXX_ASSERTIONS" \
-            ./configure \
-            --enable-unit-tests \
-            --enable-dnstap \
-            --enable-dnscrypt \
-            --enable-dns-over-tls \
-            --enable-dns-over-https \
-            --enable-systemd \
-            --prefix=/opt/dnsdist \
-            --with-libsodium \
-            --with-lua=luajit \
-            --with-libcap \
-            --with-protobuf=yes \
-            --with-re2 \
-            --enable-asan \
-            --enable-ubsan
-          working_directory: ~/project/pdns/dnsdistdist
-      - run:
-          name: build
-          command: make -j1 -k
-          working_directory: ~/project/pdns/dnsdistdist
-      - save-ccache-cache:
-          product: dnsdist
-      - run:
-          name: Run unit tests
-          command: make check || (cat test-suite.log; false)
-          working_directory: ~/project/pdns/dnsdistdist
-      - run:
-          name: Install resulting binaries
-          command: make install
-          working_directory: ~/project/pdns/dnsdistdist
-      - persist_to_workspace:
-          root: /opt
-          paths:
-            - dnsdist
-
-  test-dnsdist-regression:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-        environment:
-          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
-    steps:
-      - install-dnsdist-deps
-      - get-workspace
-      - run:
-          name: setup snmp
-          command: |
-            apt-get -qq --no-install-recommends install snmpd
-            sed "s/agentxperms 0700 0755 dnsdist/agentxperms 0700 0755/g" regression-tests.dnsdist/snmpd.conf > /etc/snmp/snmpd.conf
-            /etc/init.d/snmpd start
-      - run:
-          name: install prometheus tools
-          command: |
-            apt-get -qq --no-install-recommends install prometheus
-      - run:
-          name: Run dnsdist tests
-          workdir: ~/project/regression-tests.dnsdist
-          command: |
-            DNSDISTBIN="/opt/dnsdist/bin/dnsdist" \
-            ./runtests
-
-  test-ixfrdist-regression:
-    resource_class: small
-
-    docker:
-      - image: debian:buster
-        environment:
-          UBSAN_OPTIONS: 'print_stacktrace=1:halt_on_error=1'
-    steps:
-      - install-ixfrdist-deps
-      - get-workspace
-      - run:
-          name: Run ixfrdist tests
-          workdir: ~/project/regression-tests.ixfrdist
-          command: |
-            IXFRDISTBIN="/opt/pdns-auth/bin/ixfrdist" \
-            ./runtests
 
 workflows:
   version: 2
@@ -1605,37 +1298,16 @@ workflows:
       - build-auth:
           requires:
             - checkout
-      - test-auth-api:
-          requires:
-            - build-auth
-      - test-auth-algorithms:
-          requires:
-            - build-auth
       - test-auth-regress-odbc-sqlite3:
           requires:
             - build-auth
       - test-auth-regress-odbc-mssql:
           requires:
             - build-auth
-      - test-auth-regress-gmysql:
-          requires:
-            - build-auth
-      - test-auth-regress-bind:
-          requires:
-            - build-auth
-      - test-auth-regress-gsqlite3:
-          requires:
-            - build-auth
-      - test-auth-regress-gpgsql:
-          requires:
-            - build-auth
-      - test-auth-regress-lmdb:
+      - test-auth-regress-geoip:
           requires:
             - build-auth
       - test-auth-regress-ldap:
-          requires:
-            - build-auth
-      - test-auth-regress-tinydns:
           requires:
             - build-auth
       - check-formatting:
@@ -1650,18 +1322,6 @@ workflows:
       - test-recursor-bulk:
           requires:
             - build-recursor
-      - test-recursor-api:
-          requires:
-            - build-recursor
-      - build-dnsdist:
-          requires:
-            - checkout
-      - test-dnsdist-regression:
-          requires:
-            - build-dnsdist
-      - test-ixfrdist-regression:
-          requires:
-            - build-auth
 
   build-docs:
     jobs:

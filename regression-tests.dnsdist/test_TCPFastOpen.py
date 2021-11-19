@@ -18,11 +18,14 @@ class TestBrokenTCPFastOpen(DNSDistTest):
     _webTimeout = 2.0
     _webServerPort = 8083
     _webServerBasicAuthPassword = 'secret'
+    _webServerBasicAuthPasswordHashed = '$scrypt$ln=10,p=1,r=8$6DKLnvUYEeXWh3JNOd3iwg==$kSrhdHaRbZ7R74q3lGBqO1xetgxRxhmWzYJ2Qvfm7JM='
     _webServerAPIKey = 'apisecret'
-    _config_params = ['_testServerPort', '_testServerRetries', '_webServerPort', '_webServerBasicAuthPassword', '_webServerAPIKey']
+    _webServerAPIKeyHashed = '$scrypt$ln=10,p=1,r=8$9v8JxDfzQVyTpBkTbkUqYg==$bDQzAOHeK1G9UvTPypNhrX48w974ZXbFPtRKS34+aso='
+    _config_params = ['_testServerPort', '_testServerRetries', '_webServerPort', '_webServerBasicAuthPasswordHashed', '_webServerAPIKeyHashed']
     _config_template = """
     newServer{address="127.0.0.1:%s", useClientSubnet=true, tcpFastOpen=true, retries=%d }
-    webserver("127.0.0.1:%s", "%s", "%s")
+    webserver("127.0.0.1:%s")
+    setWebserverConfig({password="%s", apiKey="%s"})
     """
 
     @classmethod
@@ -81,10 +84,10 @@ class TestBrokenTCPFastOpen(DNSDistTest):
         url = 'http://127.0.0.1:' + str(self._webServerPort) + '/api/v1/servers/localhost'
         r = requests.get(url, headers=headers, timeout=self._webTimeout)
         self.assertTrue(r)
-        self.assertEquals(r.status_code, 200)
+        self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json())
         content = r.json()
         self.assertTrue(len(content['servers']), 1)
         server = content['servers'][0]
         self.assertIn('tcpDiedReadingResponse', server)
-        self.assertEquals(server['tcpDiedReadingResponse'], self._testServerRetries)
+        self.assertEqual(server['tcpDiedReadingResponse'], self._testServerRetries)

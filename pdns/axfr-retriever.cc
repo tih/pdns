@@ -51,7 +51,7 @@ AXFRRetriever::AXFRRetriever(const ComboAddress& remote,
     d_sock = makeQuerySocket(local, false); // make a TCP socket
     if (d_sock < 0)
       throw ResolverException("Error creating socket for AXFR request to "+d_remote.toStringWithPort());
-    d_buf = shared_array<char>(new char[65536]);
+    d_buf = boost::shared_array<char>(new char[65536]);
     d_remote = remote; // mostly for error reporting
     this->connect(timeout);
     d_soacount = 0;
@@ -65,7 +65,7 @@ AXFRRetriever::AXFRRetriever(const ComboAddress& remote,
         d_trc.d_algoName = tt.algo + DNSName("sig-alg.reg.int");
       else
         d_trc.d_algoName = tt.algo;
-      d_trc.d_time = time(0);
+      d_trc.d_time = time(nullptr);
       d_trc.d_fudge = 300;
       d_trc.d_origID=ntohs(pw.getHeader()->id);
       d_trc.d_eRcode=0;

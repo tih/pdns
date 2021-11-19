@@ -20,36 +20,81 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #pragma once
-#include <pthread.h>
-#include <errno.h>
-#include "misc.hh"
-#include "pdnsexception.hh"
+#include <mutex>
+#include <shared_mutex>
+
+/*
+  This file provides several features around locks:
+
+  - LockGuarded and SharedLockGuarded provide a way to wrap any data structure as
+  protected by a lock (mutex or shared mutex), while making it immediately clear
+  which data is protected by that lock, and preventing any access to the data without
+  holding the lock.
+
+  For example, to protect a set of integers with a simple mutex:
+
+  LockGuarded<std::set<int>> d_data;
+
+  or with a shared mutex instead:
+
+  SharedLockGuarded<std::set<int>> d_data;
+
+  Then the only ways to access the data is to call the lock(), read_only_lock() or try_lock() methods
+  for the simple case, or the read_lock(), write_lock(), try_read_lock() or try_write_lock() for the
+  shared one.
+  Doing so will return a "holder" object, which provides access to the protected data, checking that
+  the lock has really been acquired if needed (try_ cases). The data might be read-only if read_lock(),
+  try_read_lock() or read_only_lock() was called. Access is provided by dereferencing the holder object
+  via '*' or '->', allowing a quick-access syntax:
+
+  return d_data.lock()->size();
+
+  Or when the lock needs to be kept for a bit longer:
+
+  {
+    auto data = d_data.lock();
+    data->clear();
+    data->insert(42);
+  }
+
+  - ReadWriteLock is a very light wrapper around a std::shared_mutex.
+  It used to be useful as a RAII wrapper around pthread_rwlock, but since
+  C++17 we don't actually that, so it's mostly there for historical
+  reasons.
+
+  - ReadLock, WriteLock, TryReadLock and TryWriteLock are there as RAII
+  objects allowing to take a lock and be sure that it will always be unlocked
+  when we exit the block, even with a unforeseen exception.
+  They are light wrappers around std::unique_lock and std::shared_lock
+  since C++17.
+
+  Note that while the use of a shared mutex might be very efficient when the data
+  is predominantly concurrently accessed for reading by multiple threads and not
+  often written to (although if it is almost never updated our StateHolder in
+  sholder.hh might be a better fit), it is significantly more expensive than
+  a regular mutex, so that one might be a better choice if the contention is
+  low. It is wise to start with a regular mutex and actually measure the contention
+  under load before switching to a shared mutex.
+ */
 
 class ReadWriteLock
 {
 public:
   ReadWriteLock()
   {
-    if (pthread_rwlock_init(&d_lock, nullptr) != 0) {
-      throw std::runtime_error("Error creating a read-write lock: " + stringerror());
-    }
-  }
-
-  ~ReadWriteLock() {
-    /* might have been moved */
-    pthread_rwlock_destroy(&d_lock);
   }
 
   ReadWriteLock(const ReadWriteLock& rhs) = delete;
+  ReadWriteLock(ReadWriteLock&& rhs) = delete;
   ReadWriteLock& operator=(const ReadWriteLock& rhs) = delete;
 
-  pthread_rwlock_t* getLock()
+  std::shared_mutex& getLock()
   {
-    return &d_lock;
+    return d_lock;
   }
 
 private:
-  pthread_rwlock_t d_lock;
+  std::shared_mutex d_lock;
 };
 
 class ReadLock
@@ -63,30 +108,18 @@ public:
   {
   }
 
-  ~ReadLock()
-  {
-    if(d_lock) // may have been moved
-      pthread_rwlock_unlock(d_lock);
-  }
-
-  ReadLock(ReadLock&& rhs)
-  {
-    d_lock = rhs.d_lock;
-    rhs.d_lock = nullptr;
-  }
   ReadLock(const ReadLock& rhs) = delete;
   ReadLock& operator=(const ReadLock& rhs) = delete;
-
-private:
-  ReadLock(pthread_rwlock_t *lock) : d_lock(lock)
+  ReadLock(ReadLock&& rhs) : d_lock(std::move(rhs.d_lock))
   {
-    int err;
-    if((err = pthread_rwlock_rdlock(d_lock))) {
-      throw PDNSException("error acquiring rwlock readlock: "+stringerror(err));
-    }
   }
 
- pthread_rwlock_t *d_lock;
+private:
+  ReadLock(std::shared_mutex& lock) : d_lock(lock)
+  {
+  }
+
+  std::shared_lock<std::shared_mutex> d_lock;
 };
 
 class WriteLock
@@ -100,31 +133,18 @@ public:
   {
   }
 
-  WriteLock(WriteLock&& rhs)
-  {
-    d_lock = rhs.d_lock;
-    rhs.d_lock=0;
-  }
-
-  ~WriteLock()
-  {
-    if(d_lock) // might have been moved
-      pthread_rwlock_unlock(d_lock);
-  }
-
   WriteLock(const WriteLock& rhs) = delete;
   WriteLock& operator=(const WriteLock& rhs) = delete;
-
-private:
-  WriteLock(pthread_rwlock_t *lock) : d_lock(lock)
+  WriteLock(WriteLock&& rhs) : d_lock(std::move(rhs.d_lock))
   {
-    int err;
-    if((err = pthread_rwlock_wrlock(d_lock))) {
-      throw PDNSException("error acquiring rwlock wrlock: "+stringerror(err));
-    }
   }
 
-  pthread_rwlock_t *d_lock;
+private:
+  WriteLock(std::shared_mutex& lock) : d_lock(lock)
+  {
+  }
+
+  std::unique_lock<std::shared_mutex> d_lock;
 };
 
 class TryReadLock
@@ -138,40 +158,20 @@ public:
   {
   }
 
-  TryReadLock(TryReadLock&& rhs)
-  {
-    d_lock = rhs.d_lock;
-    rhs.d_lock = nullptr;
-    d_havelock = rhs.d_havelock;
-    rhs.d_havelock = false;
-  }
-
-  ~TryReadLock()
-  {
-    if(d_havelock && d_lock)
-      pthread_rwlock_unlock(d_lock);
-  }
-
   TryReadLock(const TryReadLock& rhs) = delete;
   TryReadLock& operator=(const TryReadLock& rhs) = delete;
 
-  bool gotIt()
+  bool gotIt() const
   {
-    return d_havelock;
+    return d_lock.owns_lock();
   }
 
 private:
-  TryReadLock(pthread_rwlock_t *lock) : d_lock(lock)
+  TryReadLock(std::shared_mutex& lock) : d_lock(lock, std::try_to_lock)
   {
-    int err;
-    if((err = pthread_rwlock_tryrdlock(d_lock)) && err!=EBUSY) {
-      throw PDNSException("error acquiring rwlock tryrdlock: "+stringerror(err));
-    }
-    d_havelock=(err==0);
   }
 
-  pthread_rwlock_t *d_lock;
-  bool d_havelock;
+  std::shared_lock<std::shared_mutex> d_lock;
 };
 
 class TryWriteLock
@@ -185,40 +185,268 @@ public:
   {
   }
 
-  TryWriteLock(TryWriteLock&& rhs)
-  {
-    d_lock = rhs.d_lock;
-    rhs.d_lock = nullptr;
-    d_havelock = rhs.d_havelock;
-    rhs.d_havelock = false;
-  }
-
-  ~TryWriteLock()
-  {
-    if(d_havelock && d_lock) // we might be moved
-      pthread_rwlock_unlock(d_lock);
-  }
-
   TryWriteLock(const TryWriteLock& rhs) = delete;
   TryWriteLock& operator=(const TryWriteLock& rhs) = delete;
 
-  bool gotIt()
+  bool gotIt() const
   {
-    return d_havelock;
+    return d_lock.owns_lock();
   }
 
 private:
-  TryWriteLock(pthread_rwlock_t *lock) : d_lock(lock)
+  TryWriteLock(std::shared_mutex& lock) : d_lock(lock, std::try_to_lock)
   {
-    d_havelock=false;
-    int err;
-    if((err = pthread_rwlock_trywrlock(d_lock)) && err!=EBUSY) {
-      throw PDNSException("error acquiring rwlock tryrwlock: "+stringerror(err));
-    }
-    d_havelock=(err==0);
   }
 
-  pthread_rwlock_t *d_lock;
-  bool d_havelock;
+  std::unique_lock<std::shared_mutex> d_lock;
 };
 
+template <typename T>
+class LockGuardedHolder
+{
+public:
+  explicit LockGuardedHolder(T& value, std::mutex& mutex): d_lock(mutex), d_value(value)
+  {
+  }
+
+  T& operator*() const noexcept {
+    return d_value;
+  }
+
+  T* operator->() const noexcept {
+    return &d_value;
+  }
+
+private:
+  std::lock_guard<std::mutex> d_lock;
+  T& d_value;
+};
+
+template <typename T>
+class LockGuardedTryHolder
+{
+public:
+  explicit LockGuardedTryHolder(T& value, std::mutex& mutex): d_lock(mutex, std::try_to_lock), d_value(value)
+  {
+  }
+
+  T& operator*() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return d_value;
+  }
+
+  T* operator->() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return &d_value;
+  }
+
+  operator bool() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+  bool owns_lock() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+  void lock()
+  {
+    d_lock.lock();
+  }
+
+private:
+  std::unique_lock<std::mutex> d_lock;
+  T& d_value;
+};
+
+template <typename T>
+class LockGuarded
+{
+public:
+  explicit LockGuarded(const T& value): d_value(value)
+  {
+  }
+
+  explicit LockGuarded(T&& value): d_value(std::move(value))
+  {
+  }
+
+  explicit LockGuarded()
+  {
+  }
+
+  LockGuardedTryHolder<T> try_lock()
+  {
+    return LockGuardedTryHolder<T>(d_value, d_mutex);
+  }
+
+  LockGuardedHolder<T> lock()
+  {
+    return LockGuardedHolder<T>(d_value, d_mutex);
+  }
+
+  LockGuardedHolder<const T> read_only_lock() const
+  {
+    return LockGuardedHolder<const T>(d_value, d_mutex);
+  }
+
+private:
+  std::mutex d_mutex;
+  T d_value;
+};
+
+template <typename T>
+class SharedLockGuardedHolder
+{
+public:
+  explicit SharedLockGuardedHolder(T& value, std::shared_mutex& mutex): d_lock(mutex), d_value(value)
+  {
+  }
+
+  T& operator*() const noexcept {
+    return d_value;
+  }
+
+  T* operator->() const noexcept {
+    return &d_value;
+  }
+
+private:
+  std::lock_guard<std::shared_mutex> d_lock;
+  T& d_value;
+};
+
+template <typename T>
+class SharedLockGuardedTryHolder
+{
+public:
+  explicit SharedLockGuardedTryHolder(T& value, std::shared_mutex& mutex): d_lock(mutex, std::try_to_lock), d_value(value)
+  {
+  }
+
+  T& operator*() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return d_value;
+  }
+
+  T* operator->() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return &d_value;
+  }
+
+  operator bool() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+  bool owns_lock() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+private:
+  std::unique_lock<std::shared_mutex> d_lock;
+  T& d_value;
+};
+
+template <typename T>
+class SharedLockGuardedNonExclusiveHolder
+{
+public:
+  explicit SharedLockGuardedNonExclusiveHolder(const T& value, std::shared_mutex& mutex): d_lock(mutex), d_value(value)
+  {
+  }
+
+  const T& operator*() const noexcept {
+    return d_value;
+  }
+
+  const T* operator->() const noexcept {
+    return &d_value;
+  }
+
+private:
+  std::shared_lock<std::shared_mutex> d_lock;
+  const T& d_value;
+};
+
+template <typename T>
+class SharedLockGuardedNonExclusiveTryHolder
+{
+public:
+  explicit SharedLockGuardedNonExclusiveTryHolder(const T& value, std::shared_mutex& mutex): d_lock(mutex, std::try_to_lock), d_value(value)
+  {
+  }
+
+  const T& operator*() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return d_value;
+  }
+
+  const T* operator->() const {
+    if (!owns_lock()) {
+      throw std::runtime_error("Trying to access data protected by a mutex while the lock has not been acquired");
+    }
+    return &d_value;
+  }
+
+  operator bool() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+  bool owns_lock() const noexcept {
+    return d_lock.owns_lock();
+  }
+
+private:
+  std::shared_lock<std::shared_mutex> d_lock;
+  const T& d_value;
+};
+
+template <typename T>
+class SharedLockGuarded
+{
+public:
+  explicit SharedLockGuarded(const T& value): d_value(value)
+  {
+  }
+
+  explicit SharedLockGuarded(T&& value): d_value(std::move(value))
+  {
+  }
+
+  explicit SharedLockGuarded()
+  {
+  }
+
+  SharedLockGuardedTryHolder<T> try_write_lock()
+  {
+    return SharedLockGuardedTryHolder<T>(d_value, d_mutex);
+  }
+
+  SharedLockGuardedHolder<T> write_lock()
+  {
+    return SharedLockGuardedHolder<T>(d_value, d_mutex);
+  }
+
+  SharedLockGuardedNonExclusiveTryHolder<T> try_read_lock()
+  {
+    return SharedLockGuardedNonExclusiveTryHolder<T>(d_value, d_mutex);
+  }
+
+  SharedLockGuardedNonExclusiveHolder<T> read_lock()
+  {
+    return SharedLockGuardedNonExclusiveHolder<T>(d_value, d_mutex);
+  }
+
+private:
+  std::shared_mutex d_mutex;
+  T d_value;
+};

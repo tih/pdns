@@ -26,7 +26,7 @@ There are 3 ways of getting the source.
 
 If you want the bleeding edge, you can clone the `repository at GitHub <https://github.com/PowerDNS/pdns>`__ and run ``autoreconf -vi`` in the clone.
 
-You can also download snapshot tarballs `here <https://downloads.powerdns.com/autobuilt_browser/#/auth>`__.
+You can also download `snapshot tarballs <https://downloads.powerdns.com/autobuilt_browser/#/auth>`__.
 
 You can also download releases on the `website <https://downloads.powerdns.com/releases/>`__.
 These releases are PGP-signed with one of these key-ids:
@@ -45,12 +45,12 @@ By default, the PowerDNS Authoritative Server requires the following libraries a
 * `Boost <http://boost.org/>`_ 1.35 or newer
 * `OpenSSL <https://openssl.org>`_
 
-To build from git, the following dependencies are also required:
+To build from a Git repository clone, the following dependencies are also required:
 
 * `ragel <http://www.colm.net/open-source/ragel/>`_
 * `bison <https://www.gnu.org/software/bison/>`_
 * `flex <https://github.com/westes/flex>`_
-* `virtualenv <https://pypi.python.org/pypi/virtualenv>`_
+* `Python <https://python.org>`_ 3.6 or newer, with the 'venv' package
 
 Optional dependencies
 ---------------------
@@ -64,17 +64,11 @@ ed25519 support with libsodium
 The PowerDNS Authoritative Server can link with `libsodium <https://download.libsodium.org/doc/>`_ to support ed25519 (DNSSEC algorithm 15).
 To detect libsodium, use the ``--with-libsodium`` configure option.
 
-.. versionchanged:: 4.2.0
-  This option was previously ``--enable-libsodium``
-
 ed25519 and ed448 support with libdecaf
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 `libdecaf <https://sourceforge.net/projects/ed448goldilocks/>`_ is a library that allows the PowerDNS Authoritative Server to support ed25519 and Ed448 (DNSSEC algorithms 15 and 16).
 To detect libdecaf, use the ``--with-libdecaf`` configure option.
-
-.. versionchanged:: 4.2.0
-  This option was previously ``--enable-libdecaf``
 
 systemd notify support
 ^^^^^^^^^^^^^^^^^^^^^^

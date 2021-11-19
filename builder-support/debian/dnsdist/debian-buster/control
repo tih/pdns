@@ -3,7 +3,7 @@ Section: net
 Priority: optional
 Maintainer: PowerDNS.COM BV <powerdns.support.sales@powerdns.com>
 Uploaders: PowerDNS.COM BV <powerdns.support.sales@powerdns.com>
-Build-Depends: debhelper (>= 10~),
+Build-Depends: debhelper (>= 10),
                libboost-all-dev,
                libcap-dev,
                libcdb-dev,
@@ -12,8 +12,9 @@ Build-Depends: debhelper (>= 10~),
                libgnutls28-dev,
                libh2o-evloop-dev,
                liblmdb-dev,
-               libluajit-5.1-dev,
-               libprotobuf-dev,
+               libluajit-5.1-dev [!arm64 !s390x],
+               liblua5.3-dev [arm64 s390x],
+               libnghttp2-dev,
                libre2-dev,
                libsnmp-dev,
                libsodium-dev,
@@ -21,7 +22,6 @@ Build-Depends: debhelper (>= 10~),
                libsystemd-dev [linux-any],
                libwslay-dev,
                pkg-config,
-               protobuf-compiler,
                ragel,
                systemd [linux-any]
 Standards-Version: 4.1.5

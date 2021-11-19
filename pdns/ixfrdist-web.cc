@@ -25,12 +25,12 @@
 #include "iputils.hh"
 #include "ixfrdist-stats.hh"
 
-IXFRDistWebServer::IXFRDistWebServer(const ComboAddress &listenAddress, const NetmaskGroup &acl, const string &loglevel) :
-  d_ws(std::unique_ptr<WebServer>(new WebServer(listenAddress.toString(), listenAddress.getPort())))
+IXFRDistWebServer::IXFRDistWebServer(const ComboAddress& listenAddress, const NetmaskGroup& acl, const string& loglevel) :
+  d_ws(std::make_unique<WebServer>(listenAddress.toString(), listenAddress.getPort()))
 {
   d_ws->setACL(acl);
   d_ws->setLogLevel(loglevel);
-  d_ws->registerWebHandler("/metrics", std::bind(&IXFRDistWebServer::getMetrics, this, std::placeholders::_1, std::placeholders::_2));
+  d_ws->registerWebHandler("/metrics", [this](HttpRequest* req, HttpResponse* resp){getMetrics(req, resp);});
   d_ws->bind();
 }
 

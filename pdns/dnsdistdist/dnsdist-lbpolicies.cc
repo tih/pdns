@@ -59,8 +59,9 @@ shared_ptr<DownstreamState> leastOutstanding(const ServerPolicy::NumberedServerV
 shared_ptr<DownstreamState> firstAvailable(const ServerPolicy::NumberedServerVector& servers, const DNSQuestion* dq)
 {
   for(auto& d : servers) {
-    if(d.second->isUp() && d.second->qps.check())
+    if (d.second->isUp() && d.second->qps.checkOnly()) {
       return d.second;
+    }
   }
   return leastOutstanding(servers, dq);
 }
@@ -105,7 +106,7 @@ static shared_ptr<DownstreamState> valrandom(unsigned int val, const ServerPolic
   }
 
   // Catch poss & sum are empty to avoid SIGFPE
-  if (poss.empty()) {
+  if (poss.empty() || sum == 0) {
     return shared_ptr<DownstreamState>();
   }
 
@@ -162,20 +163,20 @@ shared_ptr<DownstreamState> chashedFromHash(const ServerPolicy::NumberedServerVe
   for (const auto& d: servers) {
     if (d.second->isUp() && (g_consistentHashBalancingFactor == 0 || d.second->outstanding <= (targetLoad * d.second->weight))) {
       // make sure hashes have been computed
-      if (d.second->hashes.empty()) {
+      if (!d.second->hashesComputed) {
         d.second->hash();
       }
       {
-        ReadLock rl(&(d.second->d_lock));
         const auto& server = d.second;
+        auto hashes = server->hashes.read_lock();
         // we want to keep track of the last hash
-        if (min > *(server->hashes.begin())) {
-          min = *(server->hashes.begin());
+        if (min > *(hashes->begin())) {
+          min = *(hashes->begin());
           first = server;
         }
 
-        auto hash_it = std::lower_bound(server->hashes.begin(), server->hashes.end(), qhash);
-        if (hash_it != server->hashes.end()) {
+        auto hash_it = std::lower_bound(hashes->begin(), hashes->end(), qhash);
+        if (hash_it != hashes->end()) {
           if (*hash_it < sel) {
             sel = *hash_it;
             ret = server;
@@ -328,7 +329,7 @@ std::shared_ptr<DownstreamState> ServerPolicy::getSelectedBackend(const ServerPo
 
   if (d_isLua) {
     if (!d_isFFI) {
-      std::lock_guard<std::mutex> lock(g_luamutex);
+      auto lock = g_lua.lock();
       selectedBackend = d_policy(servers, &dq);
     }
     else {
@@ -337,7 +338,7 @@ std::shared_ptr<DownstreamState> ServerPolicy::getSelectedBackend(const ServerPo
       unsigned int selected = 0;
 
       if (!d_isPerThread) {
-        std::lock_guard<std::mutex> lock(g_luamutex);
+        auto lock = g_lua.lock();
         selected = d_ffipolicy(&serversList, &dnsq);
       }
       else {

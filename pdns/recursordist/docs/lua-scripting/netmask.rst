@@ -94,9 +94,15 @@ They can be matched against netmasks objects:
 
 Prefixing a mask with ``!`` excludes that mask from matching.
 
-.. function:: newNMG() -> NetMaskGroup
+.. function:: newNMG([masks]) -> NetMaskGroup
 
-  Returns a new, empty :class:`NetMaskGroup`.
+  .. versionchanged:: 4.6.0
+    Added the optional ``masks`` parameter.
+
+  Returns a new :class:`NetMaskGroup`.
+  If no masks are passed, the object is empty.
+
+  :param {str} masks: The masks to add.
 
 .. class:: NetMaskGroup
 

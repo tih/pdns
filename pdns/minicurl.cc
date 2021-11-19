@@ -74,7 +74,7 @@ static string extractHostFromURL(const std::string& url)
   return url.substr(pos, endpos-pos);
 }
 
-void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout)
+void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, bool fastopen, bool verify)
 {
   if(rem) {
     struct curl_slist *hostlist = nullptr; // THIS SHOULD BE FREED
@@ -105,21 +105,25 @@ void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const C
   curl_easy_setopt(d_curl, CURLOPT_FOLLOWLOCATION, true);
   /* only allow HTTP and HTTPS */
   curl_easy_setopt(d_curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
-  curl_easy_setopt(d_curl, CURLOPT_SSL_VERIFYPEER, false);
-  curl_easy_setopt(d_curl, CURLOPT_SSL_VERIFYHOST, false);
+  curl_easy_setopt(d_curl, CURLOPT_SSL_VERIFYPEER, verify);
+  curl_easy_setopt(d_curl, CURLOPT_SSL_VERIFYHOST, verify ? 2 : 0);
   curl_easy_setopt(d_curl, CURLOPT_FAILONERROR, true);
   curl_easy_setopt(d_curl, CURLOPT_URL, str.c_str());
   curl_easy_setopt(d_curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(d_curl, CURLOPT_WRITEDATA, this);
   curl_easy_setopt(d_curl, CURLOPT_TIMEOUT, static_cast<long>(timeout));
-
+#if defined(CURL_AT_LEAST_VERSION)
+#if CURL_AT_LEAST_VERSION(7, 49, 0) && defined(__linux__)
+  curl_easy_setopt(d_curl, CURLOPT_TCP_FASTOPEN, fastopen);
+#endif
+#endif
   clearHeaders();
   d_data.clear();
 }
 
-std::string MiniCurl::getURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout)
+std::string MiniCurl::getURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, bool fastopen, bool verify)
 {
-  setupURL(str, rem, src, timeout);
+  setupURL(str, rem, src, timeout, fastopen, verify);
   auto res = curl_easy_perform(d_curl);
   long http_code = 0;
   curl_easy_getinfo(d_curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -132,9 +136,9 @@ std::string MiniCurl::getURL(const std::string& str, const ComboAddress* rem, co
   return ret;
 }
 
-std::string MiniCurl::postURL(const std::string& str, const std::string& postdata, MiniCurlHeaders& headers, int timeout)
+std::string MiniCurl::postURL(const std::string& str, const std::string& postdata, MiniCurlHeaders& headers, int timeout, bool fastopen, bool verify)
 {
-  setupURL(str, nullptr, nullptr, timeout);
+  setupURL(str, nullptr, nullptr, timeout, fastopen, verify);
   setHeaders(headers);
   curl_easy_setopt(d_curl, CURLOPT_POSTFIELDSIZE, postdata.size());
   curl_easy_setopt(d_curl, CURLOPT_POSTFIELDS, postdata.c_str());

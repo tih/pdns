@@ -65,7 +65,7 @@ static Json::object emitRecord(const string& zoneName, const DNSName &DNSqname, 
     string::size_type pos = content.find_first_not_of("0123456789");
     if(pos != string::npos)
       boost::erase_head(content, pos);
-    trim_left(content);
+    boost::trim_left(content);
   }
 
   Json::object dict;
@@ -104,6 +104,7 @@ try
     ::arg().set("zone-name","Specify an $ORIGIN in case it is not present")="";
     ::arg().set("named-conf","Bind 8/9 named.conf to parse")="";
     ::arg().set("max-generate-steps", "Maximum number of $GENERATE steps when loading a zone from a file")="0";
+    ::arg().set("max-include-depth", "Maximum level of nested $INCLUDE depth when loading a zone from a file")="20";
 
     ::arg().setCmd("help","Provide a helpful message");
     ::arg().setCmd("version","Print the version");
@@ -144,10 +145,10 @@ try
     
       vector<BindDomainInfo> domains=BP.getDomains();
       struct stat st;
-      for(vector<BindDomainInfo>::iterator i=domains.begin(); i!=domains.end(); ++i) {
-        if(stat(i->filename.c_str(), &st) == 0) {
-          i->d_dev = st.st_dev;
-          i->d_ino = st.st_ino;
+      for(auto & domain : domains) {
+        if(stat(domain.filename.c_str(), &st) == 0) {
+          domain.d_dev = st.st_dev;
+          domain.d_ino = st.st_ino;
         }
       }
       
@@ -171,11 +172,12 @@ try
             Json::array recs;
             ZoneParserTNG zpt(i->filename, i->name, BP.getDirectory());
             zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
+            zpt.setMaxIncludes(::arg().asNum("max-include-depth"));
             DNSResourceRecord rr;
             obj["name"] = i->name.toString();
 
             while(zpt.get(rr)) 
-              recs.push_back(emitRecord(i->name.toString(), rr.qname, rr.qtype.getName(), rr.content, rr.ttl));
+              recs.push_back(emitRecord(i->name.toString(), rr.qname, rr.qtype.toString(), rr.content, rr.ttl));
             obj["records"] = recs;
             Json tmp = obj;
             cout<<tmp.dump();
@@ -211,7 +213,7 @@ try
       obj["name"] = ::arg()["zone-name"];
 
       while(zpt.get(rr)) 
-        records.push_back(emitRecord(::arg()["zone-name"], rr.qname, rr.qtype.getName(), rr.content, rr.ttl));
+        records.push_back(emitRecord(::arg()["zone-name"], rr.qname, rr.qtype.toString(), rr.content, rr.ttl));
       obj["records"] = records;
 
       Json tmp = obj;

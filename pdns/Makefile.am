@@ -6,7 +6,9 @@ AM_CPPFLAGS += \
 	$(LIBEDIT_CFLAGS) \
 	$(LIBCRYPTO_INCLUDES) \
 	$(SYSTEMD_CFLAGS) \
-	$(YAML_CFLAGS)
+	$(YAML_CFLAGS) \
+	-I$(top_srcdir)/ext/protozero/include \
+	-DBOOST_CONTAINER_USE_STD_EXCEPTIONS
 
 AM_CXXFLAGS = \
 	-DSYSCONFDIR=\"$(sysconfdir)\" \
@@ -15,6 +17,7 @@ AM_CXXFLAGS = \
 
 AM_LDFLAGS = \
 	$(PROGRAM_LDFLAGS) \
+	$(LIBCRYPTO_LIBS) \
 	$(THREADFLAGS)
 
 AM_LFLAGS = -i
@@ -40,7 +43,6 @@ EXTRA_DIST = \
 	dnslabeltext.rl \
 	dnslabeltext.cc \
 	dnsmessage.proto \
-	effective_tld_names.dat \
 	mtasker.cc \
 	inflighter.cc \
 	bindparser.h \
@@ -50,12 +52,18 @@ EXTRA_DIST = \
 	ixfrdist.example.yml \
 	lua-record.cc \
 	minicurl.cc \
-	minicurl.hh
+	minicurl.hh \
+	api-swagger.yaml \
+	api-swagger.json \
+	requirements.txt \
+	incfiles \
+	convert-yaml-to-json.py
 
 BUILT_SOURCES = \
 	bind-dnssec.schema.sqlite3.sql.h \
 	bindparser.h \
-	dnslabeltext.cc
+	dnslabeltext.cc \
+	apidocfiles.h
 
 CLEANFILES = \
 	*.gcda \
@@ -64,8 +72,38 @@ CLEANFILES = \
 	backends/gsql/gsqlbackend.gcda \
 	backends/gsql/gsqlbackend.gcno \
 	backends/gsql/gsqlbackend.gcov \
-	dnsmessage.pb.cc dnsmessage.pb.h \
-	pdns.conf-dist
+	pdns.conf-dist \
+	apidocfiles.h
+
+if !HAVE_API_SWAGGER_JSON
+# don't clean these files if they were present
+# at 'configure' time (e.g. from a source dist)
+CLEANFILES += \
+	api-swagger.yaml \
+	api-swagger.json
+endif
+
+# use a $(wildcard) wrapper here to allow build to proceed if output
+# file is present but input file is not (e.g. in a dist tarball)
+api-swagger.yaml: $(wildcard ../docs/http-api/swagger/authoritative-api-swagger.yaml)
+	cp $< $@
+
+if HAVE_VENV
+api-swagger.json: api-swagger.yaml requirements.txt
+	$(PYTHON) -m venv .venv
+	.venv/bin/pip install -U pip setuptools setuptools-git wheel
+	.venv/bin/pip install -r requirements.txt
+	.venv/bin/python convert-yaml-to-json.py $< $@
+else # if HAVE_VENV
+if !HAVE_API_SWAGGER_JSON
+api-swagger.json:
+	echo "You need Python 3 and the 'venv' module to generate the JSON API document"
+	exit 1
+endif
+endif
+
+apidocfiles.h: api-swagger.yaml api-swagger.json
+	./incfiles $^ > $@
 
 noinst_SCRIPTS = pdns.init
 sysconf_DATA = pdns.conf-dist
@@ -81,6 +119,7 @@ if TOOLS
 bin_PROGRAMS += \
 	dnsgram \
 	dnspcap2calidns \
+	dnspcap2protobuf \
 	dnsreplay \
 	dnsscan \
 	dnsscope \
@@ -119,6 +158,7 @@ EXTRA_PROGRAMS = \
 	dnsdemog \
 	dnsgram \
 	dnspcap2calidns \
+	dnspcap2protobuf \
 	dnsreplay \
 	dnsscan \
 	dnsscope \
@@ -147,6 +187,7 @@ pdns_server_SOURCES = \
 	auth-carbon.cc \
 	auth-packetcache.cc auth-packetcache.hh \
 	auth-querycache.cc auth-querycache.hh \
+	auth-zonecache.cc auth-zonecache.hh \
 	axfr-retriever.cc axfr-retriever.hh \
 	backends/gsql/gsqlbackend.cc backends/gsql/gsqlbackend.hh \
 	backends/gsql/ssql.hh \
@@ -160,6 +201,7 @@ pdns_server_SOURCES = \
 	comment.hh \
 	common_startup.cc common_startup.hh \
 	communicator.cc communicator.hh \
+	credentials.cc credentials.hh \
 	dbdnsseckeeper.cc \
 	digests.hh \
 	distributor.hh \
@@ -179,8 +221,10 @@ pdns_server_SOURCES = \
 	dynhandler.cc dynhandler.hh \
 	dynlistener.cc dynlistener.hh \
 	dynmessenger.hh \
+	ednscookies.cc ednscookies.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
+	histogram.hh \
 	iputils.cc iputils.hh \
 	ixfr.cc ixfr.hh \
 	json.cc json.hh \
@@ -192,11 +236,13 @@ pdns_server_SOURCES = \
 	misc.cc misc.hh \
 	nameserver.cc nameserver.hh \
 	namespaces.hh \
+	noinitvector.hh \
 	nsecrecords.cc \
 	opensslsigners.cc opensslsigners.hh \
 	packetcache.hh \
 	packethandler.cc packethandler.hh \
 	pdnsexception.hh \
+	proxy-protocol.cc proxy-protocol.hh \
 	qtype.cc qtype.hh \
 	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc \
@@ -212,12 +258,14 @@ pdns_server_SOURCES = \
 	signingpipe.cc signingpipe.hh \
 	sillyrecords.cc \
 	slavecommunicator.cc \
+	stat_t.hh \
 	statbag.cc statbag.hh \
 	stubresolver.cc stubresolver.hh \
 	svc-records.cc svc-records.hh \
 	tcpreceiver.cc tcpreceiver.hh \
 	threadname.hh threadname.cc \
 	tkey.cc \
+	trusted-notification-proxy.hh trusted-notification-proxy.cc \
 	tsigutils.hh tsigutils.cc \
 	tsigverifier.cc tsigverifier.hh \
 	ueberbackend.cc ueberbackend.hh \
@@ -226,7 +274,6 @@ pdns_server_SOURCES = \
 	utility.hh \
 	uuid-utils.hh uuid-utils.cc \
 	version.cc version.hh \
-	views.hh \
 	webserver.cc webserver.hh \
 	ws-api.cc ws-api.hh \
 	ws-auth.cc ws-auth.hh \
@@ -281,6 +328,7 @@ pdnsutil_SOURCES = \
 	auth-caches.cc auth-caches.hh \
 	auth-packetcache.cc auth-packetcache.hh \
 	auth-querycache.cc auth-querycache.hh \
+	auth-zonecache.cc auth-zonecache.hh \
 	backends/gsql/gsqlbackend.cc backends/gsql/gsqlbackend.hh \
 	backends/gsql/ssql.hh \
 	base32.cc \
@@ -289,6 +337,7 @@ pdnsutil_SOURCES = \
 	bindparser.yy \
 	cachecleaner.hh \
 	circular_buffer.hh \
+	credentials.cc credentials.hh \
 	dbdnsseckeeper.cc \
 	dns.cc \
 	dns_random.cc \
@@ -302,6 +351,7 @@ pdnsutil_SOURCES = \
 	dnssecsigner.cc \
 	dnswriter.cc dnswriter.hh \
 	dynlistener.cc \
+	ednscookies.cc ednscookies.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc \
 	ipcipher.cc ipcipher.hh \
@@ -476,7 +526,9 @@ sdig_SOURCES = \
 	dnsparser.cc dnsparser.hh \
 	dnsrecords.cc \
 	dnswriter.cc dnswriter.hh \
+	dolog.hh \
 	ednssubnet.cc iputils.cc \
+	libssl.cc libssl.hh \
 	logger.cc \
 	misc.cc misc.hh \
 	nsecrecords.cc \
@@ -488,14 +540,35 @@ sdig_SOURCES = \
 	sstuff.hh \
 	statbag.cc \
 	svc-records.cc svc-records.hh \
+	tcpiohandler.cc tcpiohandler.hh \
 	unix_utility.cc
 
+sdig_CPPFLAGS = $(AM_CPPFLAGS)
 sdig_LDADD = $(LIBCRYPTO_LIBS)
 sdig_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
 
 if HAVE_LIBCURL
 sdig_SOURCES += minicurl.cc minicurl.hh
 sdig_LDADD += $(LIBCURL)
+endif
+
+if HAVE_DNS_OVER_TLS
+
+if HAVE_GNUTLS
+sdig_CPPFLAGS += $(GNUTLS_CFLAGS)
+sdig_LDADD += -lgnutls
+endif
+
+if HAVE_LIBSSL
+sdig_CPPFLAGS += $(LIBSSL_CFLAGS)
+sdig_LDADD += $(LIBSSL_LIBS)
+endif
+
+if LIBSODIUM
+sdig_CPPFLAGS +=$(LIBSODIUM_CFLAGS)
+sdig_LDADD += $(LIBSODIUM_LIBS)
+endif
+
 endif
 
 calidns_SOURCES = \
@@ -609,6 +682,7 @@ ixfrdist_SOURCES = \
 	axfr-retriever.cc \
 	base32.cc \
 	base64.cc base64.hh \
+	credentials.cc credentials.hh \
 	dns.cc \
 	dns_random_urandom.cc dns_random.hh \
 	dnslabeltext.cc \
@@ -643,7 +717,6 @@ ixfrdist_SOURCES = \
 	webserver.hh webserver.cc \
 	zoneparser-tng.cc
 
-
 ixfrdist_LDADD = \
 	$(BOOST_PROGRAM_OPTIONS_LIBS) \
 	$(JSON11_LIBS) \
@@ -655,6 +728,10 @@ ixfrdist_LDFLAGS = \
 	$(AM_LDFLAGS) \
 	$(BOOST_PROGRAM_OPTIONS_LDFLAGS) \
 	$(LIBCRYPTO_LDFLAGS)
+
+if LIBSODIUM
+ixfrdist_LDADD += $(LIBSODIUM_LIBS)
+endif
 
 if PKCS11
 ixfrdist_SOURCES += pkcs11signers.cc pkcs11signers.hh
@@ -842,12 +919,16 @@ tsig_tests_LDADD += $(P11KIT1_LIBS)
 endif
 
 speedtest_SOURCES = \
+	arguments.cc arguments.hh \
 	base32.cc \
 	base64.cc base64.hh \
+	credentials.cc credentials.hh \
+	dns_random.cc dns_random.hh \
 	dnslabeltext.cc \
 	dnsname.cc dnsname.hh \
 	dnsparser.cc dnsparser.hh \
 	dnsrecords.cc \
+	dnssecinfra.cc dnssecinfra.hh \
 	dnswriter.cc dnswriter.hh \
 	iputils.cc \
 	logger.cc \
@@ -859,7 +940,8 @@ speedtest_SOURCES = \
 	speedtest.cc \
 	statbag.cc \
 	svc-records.cc svc-records.hh \
-	unix_utility.cc
+        unix_utility.cc \
+        uuid-utils.cc
 
 speedtest_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
 speedtest_LDADD = $(LIBCRYPTO_LIBS) \
@@ -1196,16 +1278,6 @@ dnspcap2calidns_LDADD = \
 	$(LIBCRYPTO_LIBS) \
 	$(BOOST_PROGRAM_OPTIONS_LIBS)
 
-if HAVE_PROTOBUF
-if HAVE_PROTOC
-bin_PROGRAMS += dnspcap2protobuf
-
-dnsmessage.pb.cc: dnsmessage.proto
-	$(AM_V_GEN)$(PROTOC) --cpp_out=./ $<
-
-BUILT_SOURCES += dnsmessage.pb.cc
-dnspcap2protobuf.$(OBJEXT): dnsmessage.pb.cc
-
 dnspcap2protobuf_SOURCES = \
 	base32.cc \
 	base64.cc base64.hh \
@@ -1221,7 +1293,7 @@ dnspcap2protobuf_SOURCES = \
 	logger.cc \
 	misc.cc \
 	nsecrecords.cc \
-	protobuf.cc protobuf.hh \
+	protozero.cc protozero.hh \
 	qtype.cc \
 	rcpgenerator.cc rcpgenerator.hh \
 	sillyrecords.cc \
@@ -1231,8 +1303,6 @@ dnspcap2protobuf_SOURCES = \
 	utility.hh \
 	uuid-utils.hh uuid-utils.cc
 
-nodist_dnspcap2protobuf_SOURCES=dnsmessage.pb.cc dnsmessage.pb.h
-
 dnspcap2protobuf_LDFLAGS = \
 	$(AM_LDFLAGS) \
 	$(LIBCRYPTO_LDFLAGS) \
@@ -1240,24 +1310,23 @@ dnspcap2protobuf_LDFLAGS = \
 
 dnspcap2protobuf_LDADD = \
 	$(LIBCRYPTO_LIBS) \
-	$(PROTOBUF_LIBS) \
 	$(BOOST_PROGRAM_OPTIONS_LIBS) \
 	$(RT_LIBS)
-endif
-endif
 
 pdns.conf-dist: pdns_server
-	$(AM_V_GEN)./pdns_server --config=default 2>/dev/null > $@
+	$(AM_V_GEN)./pdns_server --config=default > $@
 
 testrunner_SOURCES = \
 	arguments.cc \
 	auth-caches.cc auth-caches.hh \
 	auth-packetcache.cc auth-packetcache.hh \
 	auth-querycache.cc auth-querycache.hh \
+	auth-zonecache.cc auth-zonecache.hh \
 	base32.cc \
 	base64.cc \
 	bindlexer.l \
 	bindparser.yy \
+	credentials.cc credentials.hh \
 	dbdnsseckeeper.cc \
 	dns.cc \
 	dns_random.cc \
@@ -1275,6 +1344,7 @@ testrunner_SOURCES = \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc \
 	gettime.cc gettime.hh \
+	histogram.hh \
 	ipcipher.cc ipcipher.hh \
 	iputils.cc \
 	ixfr.cc ixfr.hh \
@@ -1290,17 +1360,21 @@ testrunner_SOURCES = \
 	qtype.cc \
 	rcpgenerator.cc \
 	responsestats-auth.cc \
-	responsestats.cc \
+	responsestats.cc responsestats.hh \
 	shuffle.cc shuffle.hh \
 	sillyrecords.cc \
+	stat_t.hh \
 	statbag.cc \
 	stubresolver.hh stubresolver.cc \
 	svc-records.cc svc-records.hh \
 	test-arguments_cc.cc \
+	test-auth-zonecache_cc.cc \
 	test-base32_cc.cc \
 	test-base64_cc.cc \
 	test-bindparser_cc.cc \
 	test-common.hh \
+	test-communicator_hh.cc \
+	test-credentials_cc.cc \
 	test-digests_hh.cc \
 	test-distributor_hh.cc \
 	test-dns_random_hh.cc \
@@ -1310,11 +1384,13 @@ testrunner_SOURCES = \
 	test-dnsrecordcontent.cc \
 	test-dnsrecords_cc.cc \
 	test-dnswriter_cc.cc \
+	test-ednscookie_cc.cc \
 	test-ipcrypt_cc.cc \
 	test-iputils_hh.cc \
 	test-ixfr_cc.cc \
 	test-lock_hh.cc \
 	test-lua_auth4_cc.cc \
+	test-luawrapper.cc \
 	test-misc_hh.cc \
 	test-mplexer.cc \
 	test-nameserver_cc.cc \
@@ -1326,11 +1402,13 @@ testrunner_SOURCES = \
 	test-signers.cc \
 	test-statbag_cc.cc \
 	test-svc_records_cc.cc \
+	test-trusted-notification-proxy_cc.cc \
 	test-tsig.cc \
 	test-ueberbackend_cc.cc \
 	test-zoneparser_tng_cc.cc \
 	testrunner.cc \
 	threadname.hh threadname.cc \
+	trusted-notification-proxy.cc \
 	tsigverifier.cc tsigverifier.hh \
 	ueberbackend.cc ueberbackend.hh \
 	unix_utility.cc \
@@ -1352,11 +1430,14 @@ testrunner_LDADD = \
 if PKCS11
 testrunner_SOURCES += pkcs11signers.cc pkcs11signers.hh
 testrunner_LDADD += $(P11KIT1_LIBS)
+speedtest_SOURCES += pkcs11signers.cc pkcs11signers.hh
+speedtest_LDADD += $(P11KIT1_LIBS)
 endif
 
 if LIBSODIUM
 testrunner_SOURCES += sodiumsigners.cc
 testrunner_LDADD += $(LIBSODIUM_LIBS)
+speedtest_LDADD += $(LIBSODIUM_LIBS)
 endif
 
 if LIBDECAF
@@ -1365,6 +1446,11 @@ testrunner_LDADD += $(LIBDECAF_LIBS)
 endif
 
 if HAVE_FREEBSD
+ixfrdist_SOURCES += kqueuemplexer.cc
+testrunner_SOURCES += kqueuemplexer.cc
+endif
+
+if HAVE_OPENBSD
 ixfrdist_SOURCES += kqueuemplexer.cc
 testrunner_SOURCES += kqueuemplexer.cc
 endif
@@ -1395,8 +1481,12 @@ pdns_control_SOURCES = \
 	statbag.cc \
 	unix_utility.cc
 
-if UNIT_TESTS
+pdns_control_LDFLAGS = \
+       $(AM_LDFLAGS) \
+       $(LIBCRYPTO_LDFLAGS)
 
+if UNIT_TESTS
+noinst_PROGRAMS = testrunner
 if HAVE_BOOST_GE_148
 TESTS_ENVIRONMENT = env BOOST_TEST_LOG_LEVEL=message SRCDIR='$(srcdir)'
 TESTS=testrunner
@@ -1422,7 +1512,8 @@ fuzz_targets_programs =  \
 	fuzz_target_moadnsparser \
 	fuzz_target_packetcache \
 	fuzz_target_proxyprotocol \
-	fuzz_target_zoneparsertng
+	fuzz_target_zoneparsertng \
+	fuzz_target_dnslabeltext_parseRFC1035CharString
 
 fuzz_targets: $(fuzz_targets_programs)
 
@@ -1491,8 +1582,11 @@ fuzz_target_proxyprotocol_LDFLAGS = $(fuzz_targets_ldflags)
 fuzz_target_proxyprotocol_LDADD = $(fuzz_targets_libs)
 
 fuzz_target_dnsdistcache_SOURCES = \
+	dns.cc dns.hh \
 	dnsdist-cache.cc dnsdist-cache.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
+	dnsdist-idstate.hh \
+	dnsdist-protocols.cc dnsdist-protocols.hh \
 	dnslabeltext.cc \
 	dnsname.cc dnsname.hh \
 	dnsparser.cc dnsparser.hh \
@@ -1536,6 +1630,14 @@ fuzz_target_zoneparsertng_DEPENDENCIES = $(fuzz_targets_deps)
 fuzz_target_zoneparsertng_LDFLAGS = $(fuzz_targets_ldflags)
 fuzz_target_zoneparsertng_LDADD = $(fuzz_targets_libs)
 
+fuzz_target_dnslabeltext_parseRFC1035CharString_SOURCES = \
+	dnslabeltext.cc \
+	fuzz_dnslabeltext_parseRFC1035CharString.cc
+
+fuzz_target_dnslabeltext_parseRFC1035CharString_DEPENDENCIES = $(fuzz_targets_deps)
+fuzz_target_dnslabeltext_parseRFC1035CharString_LDFLAGS = $(fuzz_targets_ldflags)
+fuzz_target_dnslabeltext_parseRFC1035CharString_LDADD = $(fuzz_targets_libs)
+
 endif
 
 dnslabeltext.cc: dnslabeltext.rl
@@ -1550,15 +1652,6 @@ bind-dnssec.schema.sqlite3.sql.h: bind-dnssec.schema.sqlite3.sql
 
 bindlexer.$(OBJEXT): bindparser.h
 
-curl_verbose = $(curl_verbose_$(V))
-curl_verbose_ = $(curl_verbose_$(AM_DEFAULT_VERBOSITY))
-curl_verbose_0 = @echo "  CURL    " $@;
-$(srcdir)/effective_tld_names.dat:
-	$(curl_verbose)if ! curl -s -S https://publicsuffix.org/list/public_suffix_list.dat > $@; then rm -f $@; exit 1; fi
-
-pubsuffix.cc: $(srcdir)/effective_tld_names.dat
-	$(AM_V_GEN)./mkpubsuffixcc
-
 pdns_recursor rec_control:
 	@echo "Please build the recursor from the recursordist/ dir"
 	@exit 1
@@ -1570,6 +1663,9 @@ dnsdist:
 if HAVE_SYSTEMD
 pdns.service: pdns.service.in
 	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' -e 's![@]service_user[@]!$(service_user)!' -e 's![@]service_group[@]!$(service_group)!' < $< > $@
+if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
+	$(AM_V_GEN)sed -e 's!/pdns_server!& --socket-dir=%t/pdns!' -i $@
+endif
 if !HAVE_SYSTEMD_LOCK_PERSONALITY
 	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
 endif
@@ -1631,6 +1727,9 @@ pdns@.service: pdns.service
 	  -e 's!RuntimeDirectory=.*!&-%i!' \
 	  -e 's!SyslogIdentifier=.*!&-%i!' \
 	  < $< > $@
+if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
+	$(AM_V_GEN)sed -e 's!--socket-dir=[^ ]\+!&-%i !' -i $@
+endif
 
 systemdsystemunitdir = $(SYSTEMD_DIR)
 

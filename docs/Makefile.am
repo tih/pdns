@@ -14,6 +14,7 @@ endif
 
 MANPAGES_TARGET_TOOLS = calidns.1 \
 	dnspcap2calidns.1 \
+	dnspcap2protobuf.1 \
 	dnsgram.1 \
 	dnsreplay.1 \
 	dnsscan.1 \
@@ -33,18 +34,11 @@ MANPAGES_TARGET_IXFRDIST = ixfrdist.1 \
 MANPAGES_DIST += $(MANPAGES_TARGET_TOOLS) \
 	$(MANPAGES_TARGET_IXFRDIST) \
 	dnsbulktest.1 \
-	dnstcpbench.1 \
-	dnspcap2protobuf.1
+	dnstcpbench.1
 
 if HAVE_BOOST_GE_148
 MANPAGES_INSTALL += dnsbulktest.1 \
 	dnstcpbench.1
-endif
-
-if HAVE_PROTOBUF
-if HAVE_PROTOC
-MANPAGES_INSTALL += dnspcap2protobuf.1
-endif
 endif
 
 if TOOLS
@@ -59,7 +53,7 @@ man_MANS = $(MANPAGES_INSTALL)
 
 EXTRA_DIST = $(MANPAGES_DIST)
 
-if HAVE_VIRTUALENV
+if HAVE_VENV
 if !HAVE_MANPAGES
 $(MANPAGES_DIST): %: mans/.complete manpages/%.rst
 	mv "$(<D)/$@" "$@" && rm -f "$<"
@@ -73,8 +67,8 @@ mans/.complete: .venv
 	rm -rf "$(@D).tmp"
 
 .venv: requirements.txt
-	virtualenv .venv
-	.venv/bin/pip install -U pip setuptools setuptools-git
+	$(PYTHON) -m venv .venv
+	.venv/bin/pip install -U pip setuptools setuptools-git wheel
 	.venv/bin/pip install -r requirements.txt
 
 .NOTPARALLEL: \
@@ -87,7 +81,11 @@ mans/.complete: .venv
 	html-docs.tar.bz2
 
 clean-local:
+if !HAVE_MANPAGES
+# don't clean these files if they were present
+# at 'configure' time (e.g. from a source dist)
 	rm -f latex/PowerDNS-Authoritative.pdf $(MANPAGES_DIST) html-docs.tar.bz2
+endif
 	rm -rf mans
 
 html-docs: common/** manpages/** .venv *.rst
@@ -109,17 +107,17 @@ upload-docs: all-docs
 	rsync -crv --no-p --chmod=g=rwX --exclude '*~' ./html-docs.tar.bz2 web1.powerdns.com:/srv/www/doc.powerdns.com/authoritative/
 	rsync -crv --no-p --chmod=g=rwX --exclude '*~' ./PowerDNS-Authoritative.pdf web1.powerdns.com:/srv/www/doc.powerdns.com/authoritative/
 
-else # if HAVE_VIRTUALENV
+else # if HAVE_VENV
 $(MANPAGES_DIST):
-	echo "You need virtualenv to generate the manpages"
+	@echo "You need Python 3 and the 'venv' module to generate the manpages"
 	exit 1
 
 PowerDNS-Authoritative.pdf:
-	echo "You need virtualenv to generate the PDF"
+	@echo "You need Python 3 and the 'venv' module to generate the PDF"
 	exit 1
 
 html-docs:
-	echo "You need virtualenv to generate the HTML docs"
+	@echo "You need Python 3 and the 'venv' module to generate the HTML docs"
 	exit 1
 endif
 

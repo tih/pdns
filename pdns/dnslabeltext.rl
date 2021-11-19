@@ -6,6 +6,7 @@
 #include "dnsname.hh"
 #include "namespaces.hh"
 #include "dnswriter.hh"
+#include "misc.hh"
 
 namespace {
 void appendSplit(vector<string>& ret, string& segment, char c)
@@ -169,6 +170,135 @@ DNSName::string_t segmentDNSNameRaw(const char* realinput, size_t inputlen)
         return ret;
 };
 
+// Reads an RFC 1035 character string from 'in', puts the resulting bytes in 'out'.
+// Returns the amount of bytes read from 'in'
+size_t parseRFC1035CharString(const std::string &in, std::string &val) {
+
+  val.clear();
+  val.reserve(in.size());
+  const char *p = in.c_str();
+  const char *pe = p + in.size();
+  int cs = 0;
+  uint8_t escaped_octet = 0;
+  // Keeps track of how many chars we read from the source string
+  size_t counter=0;
+
+/* This parses an RFC 1035 char-string.
+ * It was created from the ABNF in draft-ietf-dnsop-svcb-https-02 with
+ * https://github.com/zinid/abnfc and modified to put all the characters in the
+ * right place.
+ */
+%%{
+  machine dns_text_to_string;
+
+  action doEscapedNumber {
+    escaped_octet *= 10;
+    escaped_octet += fc-'0';
+    counter++;
+  }
+
+  action doneEscapedNumber {
+    val += escaped_octet;
+    escaped_octet = 0;
+  }
+
+  action addToVal {
+    val += fc;
+    counter++;
+  }
+
+  action incrementCounter {
+    counter++;
+  }
+
+  # generated rules, define required actions
+  DIGIT = 0x30..0x39;
+  DQUOTE = "\"";
+  HTAB = "\t";
+  SP = " ";
+  WSP = (SP | HTAB)@addToVal;
+  non_special = "!" | 0x23..0x27 | 0x2a..0x3a | 0x3c..0x5b | 0x5d..0x7e;
+  non_digit = 0x21..0x2f | 0x3a..0x7e;
+  dec_octet = ( ( "0" | "1" ) DIGIT{2} ) | ( "2" ( ( 0x30..0x34 DIGIT ) | ( "5" 0x30..0x35 ) ) );
+  escaped = '\\'@incrementCounter ( non_digit$addToVal | dec_octet$doEscapedNumber@doneEscapedNumber );
+  contiguous = ( non_special$addToVal | escaped )+;
+  quoted = DQUOTE@incrementCounter ( contiguous | ( '\\'? WSP ) )* DQUOTE@incrementCounter;
+  char_string = (contiguous | quoted);
+
+  # instantiate machine rules
+  main := char_string;
+  write data;
+  write init;
+}%%
+
+  // silence warnings
+  (void) dns_text_to_string_first_final;
+  (void) dns_text_to_string_error;
+  (void) dns_text_to_string_en_main;
+  %% write exec;
+
+  return counter;
+}
+
+size_t parseSVCBValueListFromParsedRFC1035CharString(const std::string &in, std::vector<std::string> &val) {
+  val.clear();
+  const char *p = in.c_str();
+  const char *pe = p + in.size();
+  int cs = 0;
+  const char* eof = pe;
+  // Keeps track of how many chars we read from the source string
+  size_t counter=0;
+
+  // Here we store the parsed value until we hit a comma or are done
+  std::string tmp;
+
+%%{
+  machine dns_text_to_value_list;
+  alphtype unsigned char;
+
+  action addToVal {
+    tmp += fc;
+    counter++;
+  }
+
+  action addToValNoIncrement {
+    tmp += fc;
+  }
+
+  action addToVector {
+    val.push_back(tmp);
+    tmp.clear();
+    counter++;
+  }
+
+  action incrementCounter {
+    counter++;
+  }
+
+  # generated rules, define required actions
+  OCTET = 0x00..0xff;
+  item_allowed = 0x00..0x2b | 0x2d..0x5b | 0x5d..0xff;
+  escaped_item = ( item_allowed$addToVal | '\\,'$incrementCounter@addToValNoIncrement | '\\\\'$incrementCounter@addToValNoIncrement )+;
+  comma_separated = ( escaped_item%addToVector ( ","@incrementCounter escaped_item%addToVector )* )?;
+
+  # instantiate machine rules
+  main := comma_separated;
+  write data;
+  write init;
+}%%
+
+  // silence warnings
+  (void) dns_text_to_value_list_first_final;
+  (void) dns_text_to_value_list_error;
+  (void) dns_text_to_value_list_en_main;
+  %% write exec;
+
+  if ( cs < dns_text_to_value_list_first_final ) {
+          throw runtime_error("Unable to parse DNS SVCB value list '"+in+"'");
+  }
+
+  return counter;
+}
 
 
 #if 0

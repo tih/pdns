@@ -10,7 +10,6 @@
 #include <unordered_set>
 #include "sstuff.hh"
 #include <thread>
-#include <mutex>
 
 #include "ueberbackend.hh"
 
@@ -41,10 +40,10 @@ void AuthLua4::postPrepareContext() {
   d_lw->registerFunction<DNSPacket, int(const char *, size_t)>("parse", [](DNSPacket &p, const char *mesg, size_t len){ return p.parse(mesg, len); });
   d_lw->registerFunction<DNSPacket, const std::string()>("getString", [](DNSPacket &p) { return p.getString(); });
   d_lw->registerFunction<DNSPacket, void(const ComboAddress&)>("setRemote", [](DNSPacket &p, const ComboAddress &ca) { p.setRemote(&ca); });
-  d_lw->registerFunction<DNSPacket, ComboAddress()>("getRemote", [](DNSPacket &p) { return p.getRemote(); });
+  d_lw->registerFunction<DNSPacket, ComboAddress()>("getRemote", [](DNSPacket &p) { return p.getInnerRemote(); });
   d_lw->registerFunction<DNSPacket, Netmask()>("getRealRemote", [](DNSPacket &p) { return p.getRealRemote(); });
   d_lw->registerFunction<DNSPacket, ComboAddress()>("getLocal", [](DNSPacket &p) { return p.getLocal(); });
-  d_lw->registerFunction<DNSPacket, unsigned int()>("getRemotePort", [](DNSPacket &p) { return p.getRemotePort(); });
+  d_lw->registerFunction<DNSPacket, unsigned int()>("getRemotePort", [](DNSPacket &p) { return p.getInnerRemote().getPort(); });
   d_lw->registerFunction<DNSPacket, std::tuple<const std::string, unsigned int>()>("getQuestion", [](DNSPacket &p) { return std::make_tuple(p.qdomain.toString(), static_cast<unsigned int>(p.qtype.getCode())); });
   d_lw->registerFunction<DNSPacket, void(bool)>("setA", [](DNSPacket &p, bool a) { return p.setA(a); });
   d_lw->registerFunction<DNSPacket, void(unsigned int)>("setID", [](DNSPacket &p, unsigned int id) { return p.setID(static_cast<uint16_t>(id)); });
@@ -71,7 +70,7 @@ void AuthLua4::postPrepareContext() {
   d_lw->registerMember<DNSPacket, DNSName>("qdomainzone", [](const DNSPacket &p) -> DNSName { return p.qdomainzone; }, [](DNSPacket &p, const DNSName& name) { p.qdomainzone = name; });
 
   d_lw->registerMember<DNSPacket, std::string>("d_peer_principal", [](const DNSPacket &p) -> std::string { return p.d_peer_principal; }, [](DNSPacket &p, const std::string &princ) { p.d_peer_principal = princ; });
-  d_lw->registerMember<DNSPacket, const std::string>("qtype", [](const DNSPacket &p) ->  const std::string { return p.qtype.getName(); }, [](DNSPacket &p, const std::string &type) { p.qtype = type; });
+  d_lw->registerMember<DNSPacket, const std::string>("qtype", [](const DNSPacket &p) ->  const std::string { return p.qtype.toString(); }, [](DNSPacket &p, const std::string &type) { p.qtype = type; });
 /* End of DNSPacket */
 
 
@@ -88,16 +87,16 @@ void AuthLua4::postPrepareContext() {
 }
 
 void AuthLua4::postLoad() {
-  d_update_policy = d_lw->readVariable<boost::optional<luacall_update_policy_t>>("updatepolicy").get_value_or(0);
-  d_axfr_filter = d_lw->readVariable<boost::optional<luacall_axfr_filter_t>>("axfrfilter").get_value_or(0);
-  d_prequery = d_lw->readVariable<boost::optional<luacall_prequery_t>>("prequery").get_value_or(0);
+  d_update_policy = d_lw->readVariable<boost::optional<luacall_update_policy_t>>("updatepolicy").get_value_or(nullptr);
+  d_axfr_filter = d_lw->readVariable<boost::optional<luacall_axfr_filter_t>>("axfrfilter").get_value_or(nullptr);
+  d_prequery = d_lw->readVariable<boost::optional<luacall_prequery_t>>("prequery").get_value_or(nullptr);
 }
 
 bool AuthLua4::axfrfilter(const ComboAddress& remote, const DNSName& zone, const DNSResourceRecord& in, vector<DNSResourceRecord>& out) {
   luacall_axfr_filter_t::result_type ret;
   int rcode;
 
-  if (d_axfr_filter == NULL) return false;
+  if (d_axfr_filter == nullptr) return false;
 
   ret = d_axfr_filter(remote, zone, in);
   rcode = std::get<0>(ret);
@@ -144,7 +143,7 @@ bool AuthLua4::axfrfilter(const ComboAddress& remote, const DNSName& zone, const
 }
 
 
-bool AuthLua4::updatePolicy(const DNSName &qname, QType qtype, const DNSName &zonename, const DNSPacket& packet) {
+bool AuthLua4::updatePolicy(const DNSName &qname, const QType& qtype, const DNSName &zonename, const DNSPacket& packet) {
   // default decision is all goes
   if (d_update_policy == nullptr) return true;
 
@@ -153,7 +152,7 @@ bool AuthLua4::updatePolicy(const DNSName &qname, QType qtype, const DNSName &zo
   upq.qtype = qtype.getCode();
   upq.zonename = zonename;
   upq.local = packet.getLocal();
-  upq.remote = packet.getRemote();
+  upq.remote = packet.getInnerRemote();
   upq.realRemote = packet.getRealRemote();
   upq.tsigName = packet.getTSIGKeyname();
   upq.peerPrincipal = packet.d_peer_principal;

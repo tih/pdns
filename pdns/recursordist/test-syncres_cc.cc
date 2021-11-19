@@ -1,17 +1,21 @@
 #define BOOST_TEST_DYN_LINK
 #include <boost/test/unit_test.hpp>
 
+#include "aggressive_nsec.hh"
 #include "base32.hh"
 #include "lua-recursor4.hh"
 #include "root-dnssec.hh"
+#include "rec-taskqueue.hh"
 #include "test-syncres_cc.hh"
 
 RecursorStats g_stats;
 GlobalStateHolder<LuaConfigItems> g_luaconfs;
+GlobalStateHolder<SuffixMatchNode> g_xdnssec;
 GlobalStateHolder<SuffixMatchNode> g_dontThrottleNames;
 GlobalStateHolder<NetmaskGroup> g_dontThrottleNetmasks;
-std::unique_ptr<MemRecursorCache> g_recCache{nullptr};
-std::unique_ptr<NegCache> g_negCache{nullptr};
+GlobalStateHolder<SuffixMatchNode> g_DoTToAuthNames;
+std::unique_ptr<MemRecursorCache> g_recCache;
+std::unique_ptr<NegCache> g_negCache;
 unsigned int g_numThreads = 1;
 bool g_lowercaseOutgoing = false;
 
@@ -27,14 +31,38 @@ void primeRootNSZones(bool, unsigned int)
 {
 }
 
-bool RecursorLua4::preoutquery(const ComboAddress& ns, const ComboAddress& requestor, const DNSName& query, const QType& qtype, bool isTcp, vector<DNSRecord>& res, int& ret) const
+BaseLua4::~BaseLua4()
+{
+}
+
+void BaseLua4::getFeatures(Features&)
+{
+}
+
+bool RecursorLua4::preoutquery(const ComboAddress& ns, const ComboAddress& requestor, const DNSName& query, const QType& qtype, bool isTcp, vector<DNSRecord>& res, int& ret, RecEventTrace& et) const
 {
   return false;
 }
 
-bool RecursorLua4::policyHitEventFilter(const ComboAddress& remote, const DNSName& qname, const QType& qtype, bool tcp, DNSFilterEngine::Policy& policy, std::unordered_set<std::string>& tags, std::unordered_map<std::string, bool>& dicardedPolicies) const
+bool RecursorLua4::policyHitEventFilter(const ComboAddress& remote, const DNSName& qname, const QType& qtype, bool tcp, DNSFilterEngine::Policy& policy, std::unordered_set<std::string>& tags, std::unordered_map<std::string, bool>& discardedPolicies) const
 {
   return false;
+}
+
+RecursorLua4::~RecursorLua4()
+{
+}
+
+void RecursorLua4::postPrepareContext()
+{
+}
+
+void RecursorLua4::postLoad()
+{
+}
+
+void RecursorLua4::getFeatures(Features& features)
+{
 }
 
 LWResult::Result asyncresolve(const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, const std::shared_ptr<std::vector<std::unique_ptr<RemoteLogger>>>& outgoingLoggers, const std::shared_ptr<std::vector<std::unique_ptr<FrameStreamLogger>>>& fstrmLoggers, const std::set<uint16_t>& exportTypes, LWResult* res, bool* chained)
@@ -50,20 +78,20 @@ LWResult::Result asyncresolve(const ComboAddress& ip, const DNSName& domain, int
 
 #include "root-addresses.hh"
 
-bool primeHints(void)
+bool primeHints(time_t now)
 {
   vector<DNSRecord> nsset;
   if (!g_recCache)
-    g_recCache = std::unique_ptr<MemRecursorCache>(new MemRecursorCache());
+    g_recCache = std::make_unique<MemRecursorCache>();
   if (!g_negCache)
-    g_negCache = std::unique_ptr<NegCache>(new NegCache());
+    g_negCache = std::make_unique<NegCache>();
 
   DNSRecord arr, aaaarr, nsrr;
   nsrr.d_name = g_rootdnsname;
   arr.d_type = QType::A;
   aaaarr.d_type = QType::AAAA;
   nsrr.d_type = QType::NS;
-  arr.d_ttl = aaaarr.d_ttl = nsrr.d_ttl = time(nullptr) + 3600000;
+  arr.d_ttl = aaaarr.d_ttl = nsrr.d_ttl = now + 3600000;
 
   for (char c = 'a'; c <= 'm'; ++c) {
     char templ[40];
@@ -75,18 +103,18 @@ bool primeHints(void)
     arr.d_content = std::make_shared<ARecordContent>(ComboAddress(rootIps4[c - 'a']));
     vector<DNSRecord> aset;
     aset.push_back(arr);
-    g_recCache->replace(time(nullptr), DNSName(templ), QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true); // auth, nuke it all
+    g_recCache->replace(now, DNSName(templ), QType(QType::A), aset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false, g_rootdnsname);
     if (rootIps6[c - 'a'] != NULL) {
       aaaarr.d_content = std::make_shared<AAAARecordContent>(ComboAddress(rootIps6[c - 'a']));
 
       vector<DNSRecord> aaaaset;
       aaaaset.push_back(aaaarr);
-      g_recCache->replace(time(nullptr), DNSName(templ), QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), true);
+      g_recCache->replace(now, DNSName(templ), QType(QType::AAAA), aaaaset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false, g_rootdnsname);
     }
 
     nsset.push_back(nsrr);
   }
-  g_recCache->replace(time(nullptr), g_rootdnsname, QType(QType::NS), nsset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false); // and stuff in the cache
+  g_recCache->replace(now, g_rootdnsname, QType(QType::NS), nsset, vector<std::shared_ptr<RRSIGRecordContent>>(), vector<std::shared_ptr<DNSRecord>>(), false, g_rootdnsname); // and stuff in the cache
   return true;
 }
 
@@ -114,8 +142,8 @@ void initSR(bool debug)
     g_log.toConsole(Logger::Error);
   }
 
-  g_recCache = std::unique_ptr<MemRecursorCache>(new MemRecursorCache());
-  g_negCache = std::unique_ptr<NegCache>(new NegCache());
+  g_recCache = std::make_unique<MemRecursorCache>();
+  g_negCache = std::make_unique<NegCache>();
 
   SyncRes::s_maxqperq = 50;
   SyncRes::s_maxnsaddressqperq = 10;
@@ -145,10 +173,12 @@ void initSR(bool debug)
   SyncRes::addEDNSLocalSubnet("::/0");
   SyncRes::clearEDNSRemoteSubnets();
   SyncRes::clearEDNSDomains();
-  SyncRes::clearDelegationOnly();
   SyncRes::clearDontQuery();
   SyncRes::setECSScopeZeroAddress(Netmask("127.0.0.1/32"));
   SyncRes::s_qnameminimization = false;
+  SyncRes::s_nonresolvingnsmaxfails = 0;
+  SyncRes::s_nonresolvingnsthrottletime = 0;
+  SyncRes::s_refresh_ttlperc = 0;
 
   SyncRes::clearNSSpeeds();
   BOOST_CHECK_EQUAL(SyncRes::getNSSpeedsSize(), 0U);
@@ -158,6 +188,8 @@ void initSR(bool debug)
   BOOST_CHECK_EQUAL(SyncRes::getThrottledServersSize(), 0U);
   SyncRes::clearFailedServers();
   BOOST_CHECK_EQUAL(SyncRes::getFailedServersSize(), 0U);
+  SyncRes::clearNonResolvingNS();
+  BOOST_CHECK_EQUAL(SyncRes::getNonResolvingNSSize(), 0U);
 
   SyncRes::clearECSStats();
 
@@ -174,6 +206,8 @@ void initSR(bool debug)
   g_dnssecmode = DNSSECMode::Off;
   g_dnssecLOG = debug;
   g_maxNSEC3Iterations = 2500;
+
+  g_aggressiveNSECCache.reset();
 
   ::arg().set("version-string", "string reported on version.pdns or version.bind") = "PowerDNS Unit Tests";
   ::arg().set("rng") = "auto";
@@ -193,7 +227,7 @@ void initSR(std::unique_ptr<SyncRes>& sr, bool dnssec, bool debug, time_t fakeNo
 
   initSR(debug);
 
-  sr = std::unique_ptr<SyncRes>(new SyncRes(now));
+  sr = std::make_unique<SyncRes>(now);
   sr->setDoEDNS0(true);
   if (dnssec) {
     sr->setDoDNSSEC(dnssec);
@@ -256,15 +290,14 @@ void computeRRSIG(const DNSSECPrivateKey& dpk, const DNSName& signer, const DNSN
     now = time(nullptr);
   }
   DNSKEYRecordContent drc = dpk.getDNSKEY();
-  const std::shared_ptr<DNSCryptoKeyEngine> rc = dpk.getKey();
+  const auto& rc = dpk.getKey();
 
   rrc.d_type = signQType;
-  rrc.d_labels = signQName.countLabels() - signQName.isWildcard();
+  rrc.d_labels = signQName.countLabels() - (signQName.isWildcard() ? 1 : 0);
   rrc.d_originalttl = signTTL;
   rrc.d_siginception = inception ? *inception : (*now - 10);
   rrc.d_sigexpire = *now + sigValidity;
   rrc.d_signer = signer;
-  rrc.d_tag = 0;
   rrc.d_tag = drc.getTag();
   rrc.d_algorithm = algo ? *algo : drc.d_algorithm;
 
@@ -398,6 +431,17 @@ void addNSEC3UnhashedRecordToLW(const DNSName& domain, const DNSName& zone, cons
   addNSEC3RecordToLW(DNSName(toBase32Hex(hashed)) + zone, next, salt, iterations, types, ttl, records, optOut);
 }
 
+/* Proves a NODATA (name exists, type does not) but the next owner name is right behind, so it should not prove anything else unless we are very unlucky */
+void addNSEC3NoDataNarrowRecordToLW(const DNSName& domain, const DNSName& zone, const std::set<uint16_t>& types, uint32_t ttl, std::vector<DNSRecord>& records, unsigned int iterations, bool optOut)
+{
+  static const std::string salt = "deadbeef";
+  std::string hashed = hashQNameWithSalt(salt, iterations, domain);
+  std::string hashedNext(hashed);
+  incrementHash(hashedNext);
+
+  addNSEC3RecordToLW(DNSName(toBase32Hex(hashed)) + zone, hashedNext, salt, iterations, types, ttl, records, optOut);
+}
+
 void addNSEC3NarrowRecordToLW(const DNSName& domain, const DNSName& zone, const std::set<uint16_t>& types, uint32_t ttl, std::vector<DNSRecord>& records, unsigned int iterations, bool optOut)
 {
   static const std::string salt = "deadbeef";
@@ -445,16 +489,18 @@ LWResult::Result genericDSAndDNSKEYHandler(LWResult* res, const DNSName& domain,
         /* sign the SOA */
         addRRSIG(keys, res->d_records, auth, 300, false, boost::none, boost::none, now);
         /* add a NSEC denying the DS */
-        std::set<uint16_t> types = {nsec3 ? QType::NSEC : QType::NSEC3};
+        std::set<uint16_t> types = {QType::RRSIG};
         if (proveCut) {
           types.insert(QType::NS);
         }
 
         if (!nsec3) {
-          addNSECRecordToLW(domain, DNSName("z") + domain, types, 600, res->d_records);
+          addNSECRecordToLW(domain, DNSName("+") + domain, types, 600, res->d_records);
         }
         else {
-          addNSEC3UnhashedRecordToLW(domain, auth, (DNSName("z") + domain).toString(), types, 600, res->d_records, 10, optOut);
+          DNSName next(DNSName("z") + domain);
+          next.makeUsRelative(auth);
+          addNSEC3UnhashedRecordToLW(domain, auth, next.toString(), types, 600, res->d_records, 10, optOut);
         }
 
         addRRSIG(keys, res->d_records, auth, 300, false, boost::none, boost::none, now);
@@ -467,7 +513,7 @@ LWResult::Result genericDSAndDNSKEYHandler(LWResult* res, const DNSName& domain,
   if (type == QType::DNSKEY) {
     setLWResult(res, 0, true, false, true);
     addDNSKEY(keys, domain, 300, res->d_records);
-    addRRSIG(keys, res->d_records, domain, 300);
+    addRRSIG(keys, res->d_records, domain, 300, false, boost::none, boost::none, now);
     return LWResult::Result::Success;
   }
 
@@ -505,4 +551,11 @@ LWResult::Result basicRecordsForQnameMinimization(LWResult* res, const DNSName& 
     return LWResult::Result::Success;
   }
   return LWResult::Result::Timeout;
+}
+
+pdns::TaskQueue g_test_tasks;
+
+void pushAlmostExpiredTask(const DNSName& qname, uint16_t qtype, time_t deadline)
+{
+  g_test_tasks.push({qname, qtype, deadline, true, nullptr});
 }

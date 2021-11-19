@@ -31,6 +31,7 @@
 
 #include "dnspacket.hh"
 #include "dnsbackend.hh"
+#include "lock.hh"
 #include "namespaces.hh"
 
 /** This is a very magic backend that allows us to load modules dynamically,
@@ -53,8 +54,7 @@ public:
   /** Tracks all created UeberBackend instances for us. We use this vector to notify
       existing threads of new modules 
   */
-  static vector<UeberBackend *>instances;
-  static std::mutex instances_lock;
+  static LockGuarded<vector<UeberBackend *>> d_instances;
 
   static bool loadmodule(const string &name);
   static bool loadModules(const vector<string>& modules, const string& path);
@@ -87,6 +87,7 @@ public:
     //! Index of the current backend within the backends vector
     unsigned int i;
     QType qtype;
+    int zoneId;
 
   private:
 
@@ -97,11 +98,10 @@ public:
 
   /** Determines if we are authoritative for a zone, and at what level */
   bool getAuth(const DNSName &target, const QType &qtype, SOAData* sd, bool cachedOk=true);
-
   /** Load SOA info from backends, ignoring the cache.*/
   bool getSOAUncached(const DNSName &domain, SOAData &sd);
   bool get(DNSZoneRecord &r);
-  void getAllDomains(vector<DomainInfo> *domains, bool include_disabled=false);
+  void getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool include_disabled);
 
   void getUnfreshSlaveInfos(vector<DomainInfo>* domains);
   void getUpdatedMasters(vector<DomainInfo>* domains);
@@ -131,6 +131,10 @@ public:
   void reload();
   bool searchRecords(const string &pattern, int maxResults, vector<DNSResourceRecord>& result);
   bool searchComments(const string &pattern, int maxResults, vector<Comment>& result);
+
+  void updateZoneCache();
+
+  bool inTransaction();
 private:
   handle d_handle;
   vector<DNSZoneRecord> d_answers;
@@ -147,16 +151,16 @@ private:
   }d_question;
 
   unsigned int d_cache_ttl, d_negcache_ttl;
-  int d_domain_id;
-  int d_ancount;
+  uint16_t d_qtype;
 
   bool d_negcached;
   bool d_cached;
+  static AtomicCounter* s_backendQueries;
   static bool d_go;
   bool d_stale;
+  static bool s_doANYLookupsOnly;
 
   int cacheHas(const Question &q, vector<DNSZoneRecord> &rrs);
   void addNegCache(const Question &q);
   void addCache(const Question &q, vector<DNSZoneRecord>&& rrs);
-  
 };

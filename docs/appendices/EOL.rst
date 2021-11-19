@@ -7,14 +7,13 @@ The release before that gets critical security updates only.
 Older releases are marked end of life and receive no updates at all.
 Pre-releases do not receive immediate security updates.
 
-The currently supported release train of PowerDNS Authoritative Server is 4.3.
+The currently supported release train of PowerDNS Authoritative Server is 4.5.
 
-PowerDNS Authoritative Server 4.2 will only receive correctness, stability and security updates and will be receiving security updates only after PowerDNS Authoritative Server 4.4 is released.
-It wil be end of life after PowerDNS Authoritative Server 4.5 is released.
+PowerDNS Authoritative Server 4.4 will only receive correctness, stability and security updates and will be receiving critical updates only after PowerDNS Authoritative Server 4.6 is released. It will be end of life after PowerDNS Authoritative Server 4.7 is released.
 
-PowerDNS Authoritative Server 4.1 will only receive critical security updates and will be end of life after PowerDNS Authoritative Server 4.4 is released.
+PowerDNS Authoritative Server 4.3 will only receive critical updates and will be end of life after PowerDNS Authoritative Server 4.6 is released.
 
-PowerDNS Authoritative Server 4.0, 3.x and 2.x are end of life, and will not
+PowerDNS Authoritative Server 4.2, 4.1, 4.0, 3.x and 2.x are end of life, and will not
 receive any updates, not even security fixes.
 
 Note: Users with a commercial agreement with PowerDNS.COM BV or Open-Xchange
@@ -26,21 +25,25 @@ such a user, these EOL statements do not apply to you.
 
    * - Version
      - Release date
-     - Security-Only updates
+     - Critical-Only updates
      - End of Life
+   * - 4.5
+     - July 13 2021
+     - ~ January 2022
+     - ~ January 2023
+   * - 4.4
+     - December 18 2020
+     - ~ December 2021
+     - ~ June 2022
    * - 4.3
      - April 7 2020
      - ~ April 2021
      - ~ October 2021
    * - 4.2
      - August 30 2019
-     - ~ October 2020
-     - ~ April 2021
-   * - 4.1
-     - November 30 2017
-     - April 7 2020
-     - ~ October 2020
-   * - 4.0 and older
+     - December 2020
+     - EOL July 2021
+   * - 4.1 and older
      - EOL
      - EOL
      - EOL

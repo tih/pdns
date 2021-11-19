@@ -27,6 +27,7 @@
 #include "misc.hh"
 #include <thread>
 #include "threadname.hh"
+#include <utility>
 #include <vector>
 #include "logger.hh"
 #include <stdio.h>
@@ -51,10 +52,10 @@ json11::Json HttpRequest::json()
   return doc;
 }
 
-bool HttpRequest::compareAuthorization(const string &expected_password)
+bool HttpRequest::compareAuthorization(const CredentialsHolder& credentials) const
 {
   // validate password
-  YaHTTP::strstr_map_t::iterator header = headers.find("authorization");
+  auto header = headers.find("authorization");
   bool auth_ok = false;
   if (header != headers.end() && toLower(header->second).find("basic ") == 0) {
     string cookie = header->second.substr(6);
@@ -65,47 +66,79 @@ bool HttpRequest::compareAuthorization(const string &expected_password)
     vector<string> cparts;
     stringtok(cparts, plain, ":");
 
-    // this gets rid of terminating zeros
-    auth_ok = (cparts.size()==2 && (0==strcmp(cparts[1].c_str(), expected_password.c_str())));
+    auth_ok = (cparts.size() == 2 && credentials.matches(cparts[1].c_str()));
   }
   return auth_ok;
 }
 
-bool HttpRequest::compareHeader(const string &header_name, const string &expected_value)
+bool HttpRequest::compareHeader(const string &header_name, const string &expected_value) const
 {
-  YaHTTP::strstr_map_t::iterator header = headers.find(header_name);
-  if (header == headers.end())
+  auto header = headers.find(header_name);
+  if (header == headers.end()) {
     return false;
+  }
 
   // this gets rid of terminating zeros
   return (0==strcmp(header->second.c_str(), expected_value.c_str()));
 }
 
-
-void HttpResponse::setBody(const json11::Json& document)
+bool HttpRequest::compareHeader(const string &header_name, const CredentialsHolder& credentials) const
 {
+  auto header = headers.find(header_name);
+  if (header == headers.end()) {
+    return false;
+  }
+
+  return credentials.matches(header->second);
+}
+
+void HttpResponse::setPlainBody(const string& document)
+{
+  this->headers["Content-Type"] = "text/plain; charset=utf-8";
+
+  this->body = document;
+}
+
+void HttpResponse::setYamlBody(const string& document)
+{
+  this->headers["Content-Type"] = "application/x-yaml";
+
+  this->body = document;
+}
+
+void HttpResponse::setJsonBody(const string& document)
+{
+  this->headers["Content-Type"] = "application/json";
+
+  this->body = document;
+}
+
+void HttpResponse::setJsonBody(const json11::Json& document)
+{
+  this->headers["Content-Type"] = "application/json";
+
   document.dump(this->body);
 }
 
 void HttpResponse::setErrorResult(const std::string& message, const int status_)
 {
-  setBody(json11::Json::object { { "error", message } });
+  setJsonBody(json11::Json::object { { "error", message } });
   this->status = status_;
 }
 
 void HttpResponse::setSuccessResult(const std::string& message, const int status_)
 {
-  setBody(json11::Json::object { { "result", message } });
+  setJsonBody(json11::Json::object { { "result", message } });
   this->status = status_;
 }
 
-static void bareHandlerWrapper(WebServer::HandlerFunction handler, YaHTTP::Request* req, YaHTTP::Response* resp)
+static void bareHandlerWrapper(const WebServer::HandlerFunction& handler, YaHTTP::Request* req, YaHTTP::Response* resp)
 {
   // wrapper to convert from YaHTTP::* to our subclasses
   handler(static_cast<HttpRequest*>(req), static_cast<HttpResponse*>(resp));
 }
 
-void WebServer::registerBareHandler(const string& url, HandlerFunction handler)
+void WebServer::registerBareHandler(const string& url, const HandlerFunction& handler)
 {
   YaHTTP::THandlerFunction f = [=](YaHTTP::Request* req, YaHTTP::Response* resp){return bareHandlerWrapper(handler, req, resp);};
   YaHTTP::Router::Any(url, f);
@@ -125,21 +158,21 @@ static bool optionsHandler(HttpRequest* req, HttpResponse* resp) {
   return false;
 }
 
-void WebServer::apiWrapper(WebServer::HandlerFunction handler, HttpRequest* req, HttpResponse* resp, bool allowPassword) {
+void WebServer::apiWrapper(const WebServer::HandlerFunction& handler, HttpRequest* req, HttpResponse* resp, bool allowPassword) {
   if (optionsHandler(req, resp)) return;
 
   resp->headers["access-control-allow-origin"] = "*";
 
-  if (d_apikey.empty()) {
+  if (!d_apikey) {
     g_log<<Logger::Error<<req->logprefix<<"HTTP API Request \"" << req->url.path << "\": Authentication failed, API Key missing in config" << endl;
     throw HttpUnauthorizedException("X-API-Key");
   }
 
-  bool auth_ok = req->compareHeader("x-api-key", d_apikey) || req->getvars["api-key"] == d_apikey;
+  bool auth_ok = req->compareHeader("x-api-key", *d_apikey) || d_apikey->matches(req->getvars["api-key"]);
 
   if (!auth_ok && allowPassword) {
-    if (!d_webserverPassword.empty()) {
-      auth_ok = req->compareAuthorization(d_webserverPassword);
+    if (d_webserverPassword) {
+      auth_ok = req->compareAuthorization(*d_webserverPassword);
     } else {
       auth_ok = true;
     }
@@ -149,8 +182,6 @@ void WebServer::apiWrapper(WebServer::HandlerFunction handler, HttpRequest* req,
     g_log<<Logger::Error<<req->logprefix<<"HTTP Request \"" << req->url.path << "\": Authentication by API Key failed" << endl;
     throw HttpUnauthorizedException("X-API-Key");
   }
-
-  resp->headers["Content-Type"] = "application/json";
 
   // security headers
   resp->headers["X-Content-Type-Options"] = "nosniff";
@@ -178,14 +209,14 @@ void WebServer::apiWrapper(WebServer::HandlerFunction handler, HttpRequest* req,
   }
 }
 
-void WebServer::registerApiHandler(const string& url, HandlerFunction handler, bool allowPassword) {
-  HandlerFunction f = std::bind(&WebServer::apiWrapper, this, handler, std::placeholders::_1, std::placeholders::_2, allowPassword);
+void WebServer::registerApiHandler(const string& url, const HandlerFunction& handler, bool allowPassword) {
+  auto f = [=](HttpRequest *req, HttpResponse* resp){apiWrapper(handler, req, resp, allowPassword);};
   registerBareHandler(url, f);
 }
 
-void WebServer::webWrapper(WebServer::HandlerFunction handler, HttpRequest* req, HttpResponse* resp) {
-  if (!d_webserverPassword.empty()) {
-    bool auth_ok = req->compareAuthorization(d_webserverPassword);
+void WebServer::webWrapper(const WebServer::HandlerFunction& handler, HttpRequest* req, HttpResponse* resp) {
+  if (d_webserverPassword) {
+    bool auth_ok = req->compareAuthorization(*d_webserverPassword);
     if (!auth_ok) {
       g_log<<Logger::Debug<<req->logprefix<<"HTTP Request \"" << req->url.path << "\": Web Authentication failed" << endl;
       throw HttpUnauthorizedException("Basic");
@@ -195,8 +226,8 @@ void WebServer::webWrapper(WebServer::HandlerFunction handler, HttpRequest* req,
   handler(req, resp);
 }
 
-void WebServer::registerWebHandler(const string& url, HandlerFunction handler) {
-  HandlerFunction f = std::bind(&WebServer::webWrapper, this, handler, std::placeholders::_1, std::placeholders::_2);
+void WebServer::registerWebHandler(const string& url, const HandlerFunction& handler) {
+  auto f = [=](HttpRequest *req, HttpResponse *resp){webWrapper(handler, req, resp);};
   registerBareHandler(url, f);
 }
 
@@ -233,8 +264,12 @@ void WebServer::handleRequest(HttpRequest& req, HttpResponse& resp) const
     YaHTTP::strstr_map_t::iterator header;
 
     if ((header = req.headers.find("accept")) != req.headers.end()) {
-      // json wins over html
-      if (header->second.find("application/json") != std::string::npos) {
+      // yaml wins over json, json wins over html
+      if (header->second.find("application/x-yaml") != std::string::npos) {
+        req.accept_yaml = true;
+      } else if (header->second.find("text/x-yaml") != std::string::npos) {
+        req.accept_yaml = true;
+      } else if (header->second.find("application/json") != std::string::npos) {
         req.accept_json = true;
       } else if (header->second.find("text/html") != std::string::npos) {
         req.accept_html = true;
@@ -272,14 +307,14 @@ void WebServer::handleRequest(HttpRequest& req, HttpResponse& resp) const
     // TODO rm this logline?
     g_log<<Logger::Debug<<req.logprefix<<"Error result for \"" << req.url.path << "\": " << resp.status << endl;
     string what = YaHTTP::Utility::status2text(resp.status);
-    if(req.accept_html) {
-      resp.headers["Content-Type"] = "text/html; charset=utf-8";
-      resp.body = "<!html><title>" + what + "</title><h1>" + what + "</h1>";
-    } else if (req.accept_json) {
+    if (req.accept_json) {
       resp.headers["Content-Type"] = "application/json";
       if (resp.body.empty()) {
         resp.setErrorResult(what, resp.status);
       }
+    } else if (req.accept_html) {
+      resp.headers["Content-Type"] = "text/html; charset=utf-8";
+      resp.body = "<!html><title>" + what + "</title><h1>" + what + "</h1>";
     } else {
       resp.headers["Content-Type"] = "text/plain; charset=utf-8";
       resp.body = what;
@@ -358,7 +393,7 @@ void WebServer::logResponse(const HttpResponse& resp, const ComboAddress& remote
   }
 }
 
-void WebServer::serveConnection(std::shared_ptr<Socket> client) const {
+void WebServer::serveConnection(const std::shared_ptr<Socket>& client) const {
   const string logprefix = d_logprefix + to_string(getUniqueID()) + " ";
 
   HttpRequest req(logprefix);
@@ -412,7 +447,7 @@ void WebServer::serveConnection(std::shared_ptr<Socket> client) const {
     g_log<<Logger::Error<<logprefix<<"HTTP Exception: "<<e.reason<<endl;
   }
   catch(std::exception &e) {
-    if(strstr(e.what(), "timeout")==0)
+    if(strstr(e.what(), "timeout")==nullptr)
       g_log<<Logger::Error<<logprefix<<"HTTP STL Exception: "<<e.what()<<endl;
   }
   catch(...) {
@@ -424,8 +459,8 @@ void WebServer::serveConnection(std::shared_ptr<Socket> client) const {
   }
 }
 
-WebServer::WebServer(const string &listenaddress, int port) :
-  d_listenaddress(listenaddress),
+WebServer::WebServer(string listenaddress, int port) :
+  d_listenaddress(std::move(listenaddress)),
   d_port(port),
   d_server(nullptr),
   d_maxbodysize(2*1024*1024)

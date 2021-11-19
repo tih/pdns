@@ -1,14 +1,15 @@
-AC_PREREQ([2.61])
+AC_PREREQ([2.69])
 
 AC_INIT([dnsdist], m4_esyscmd(build-aux/gen-version))
-AM_INIT_AUTOMAKE([foreign dist-bzip2 no-dist-gzip parallel-tests 1.11 subdir-objects])
+AM_INIT_AUTOMAKE([foreign tar-ustar dist-bzip2 no-dist-gzip parallel-tests 1.11 subdir-objects])
 AM_SILENT_RULES([yes])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CXX
 AC_LANG([C++])
-AC_GNU_SOURCE
+
+PDNS_CHECK_TIME_T
 
 AC_DEFINE([DNSDIST], [1],
   [This is dnsdist]
@@ -18,7 +19,7 @@ LT_PREREQ([2.2.2])
 LT_INIT([disable-static])
 
 CFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter $CFLAGS"
-CXXFLAGS="-std=c++11 -g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls $CXXFLAGS"
+CXXFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls $CXXFLAGS"
 
 PDNS_WITH_LIBSODIUM
 PDNS_CHECK_DNSTAP([auto])
@@ -31,9 +32,6 @@ PTHREAD_SET_NAME
 PDNS_CHECK_NETWORK_LIBS
 PDNS_CHECK_PTHREAD_NP
 PDNS_CHECK_SECURE_MEMSET
-
-
-PDNS_WITH_PROTOBUF
 
 BOOST_REQUIRE([1.42])
 
@@ -72,15 +70,15 @@ AM_CONDITIONAL([HAVE_CDB], [false])
 
 PDNS_CHECK_LIBCRYPTO
 
-DNSDIST_ENABLE_DNS_OVER_TLS
+PDNS_ENABLE_DNS_OVER_TLS
 DNSDIST_ENABLE_DNS_OVER_HTTPS
 
 AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xno"], [
-  DNSDIST_WITH_LIBSSL
+  PDNS_WITH_LIBSSL
 ])
 
 AS_IF([test "x$enable_dns_over_tls" != "xno"], [
-  DNSDIST_WITH_GNUTLS
+  PDNS_WITH_GNUTLS
 
   AS_IF([test "x$HAVE_GNUTLS" != "x1" -a "x$HAVE_LIBSSL" != "x1"], [
     AC_MSG_ERROR([DNS over TLS support requested but neither GnuTLS nor OpenSSL are available])
@@ -98,10 +96,12 @@ AS_IF([test "x$enable_dns_over_https" != "xno"], [
   ])
 ])
 
+PDNS_WITH_NGHTTP2
+
 PDNS_CHECK_CDB
 PDNS_CHECK_LMDB
 
-AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
+AX_CXX_COMPILE_STDCXX_17([noext], [mandatory])
 
 AC_MSG_CHECKING([whether we will enable compiler security checks])
 AC_ARG_ENABLE([hardening],
@@ -121,12 +121,19 @@ AS_IF([test "x$enable_hardening" != "xno"], [
 
 PDNS_ENABLE_SANITIZERS
 
-PDNS_CHECK_VIRTUALENV
+PDNS_CHECK_PYTHON_VENV
+
+AM_CONDITIONAL([HAVE_MANPAGES], [test -e "$srcdir/dnsdist.1"])
+AM_COND_IF([HAVE_MANPAGES],[],[
+  AM_COND_IF([HAVE_VENV],[],[
+    AC_MSG_WARN([Python 3 and/or venv module are not available, documentation will not be built.])
+  ])
+])
 
 LDFLAGS="$RELRO_LDFLAGS $LDFLAGS"
 
-CFLAGS="$PIE_CFLAGS $CFLAGS"
-CXXFLAGS="$PIE_CFLAGS $CXXFLAGS"
+CFLAGS="$SANITIZER_FLAGS $PIE_CFLAGS $CFLAGS"
+CXXFLAGS="$SANITIZER_FLAGS $PIE_CFLAGS $CXXFLAGS"
 
 PROGRAM_LDFLAGS="$PIE_LDFLAGS $PROGRAM_LDFLAGS"
 AC_SUBST([PROGRAM_LDFLAGS])
@@ -170,10 +177,7 @@ AC_MSG_NOTICE([])
 AC_MSG_NOTICE([Features enabled])
 AC_MSG_NOTICE([----------------])
 AC_MSG_NOTICE([Lua: $LUAPC])
-AS_IF([test "x$PROTOBUF_LIBS" != "x" -a x"$PROTOC" != "x"],
-  [AC_MSG_NOTICE([Protobuf: yes])],
-  [AC_MSG_NOTICE([Protobuf: no])]
-)
+AC_MSG_NOTICE([Protobuf: yes])
 AS_IF([test "x$systemd" != "xn"],
   [AC_MSG_NOTICE([systemd: yes])],
   [AC_MSG_NOTICE([systemd: no])]
@@ -221,6 +225,10 @@ AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xn
     [AC_MSG_NOTICE([OpenSSL: yes])],
     [AC_MSG_NOTICE([OpenSSL: no])]
   )]
+)
+AS_IF([test "x$NGHTTP2_LIBS" != "x"],
+  [AC_MSG_NOTICE([nghttp2: yes])],
+  [AC_MSG_NOTICE([nghttp2: no])]
 )
 AS_IF([test "x$CDB_LIBS" != "x"],
   [AC_MSG_NOTICE([cdb: yes])],

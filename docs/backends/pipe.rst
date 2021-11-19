@@ -5,11 +5,11 @@ Pipe Backend
 * Master: No
 * Slave: No
 * Superslave: No
-* Autoserial: No
 * Case: Depends
 * DNSSEC: Partial, no delegation, no key storage
 * Disabled data: No
 * Comments: No
+* Zone caching: No
 * Module name: pipe
 * Launch name: ``pipe``
 

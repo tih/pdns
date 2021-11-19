@@ -10,6 +10,7 @@
 #include "dnsname.hh"
 #include "dnswriter.hh"
 #include "ednscookies.hh"
+#include "ednsextendederror.hh"
 #include "ednsoptions.hh"
 #include "ednssubnet.hh"
 #include "iputils.hh"
@@ -21,17 +22,15 @@ static void getRawQueryWithECSAndCookie(const DNSName& name, const Netmask& ecs,
   DNSPacketWriter pw(query, name, QType::A, QClass::IN, 0);
   pw.commit();
 
-  EDNSCookiesOpt cookiesOpt;
-  cookiesOpt.client = clientCookie;
-  cookiesOpt.server = serverCookie;
-  string cookiesOptionStr = makeEDNSCookiesOptString(cookiesOpt);
+  EDNSCookiesOpt cookiesOpt(clientCookie + serverCookie);
+  string cookiesOptionStr = cookiesOpt.makeOptString();
   EDNSSubnetOpts ecsOpts;
   ecsOpts.source = ecs;
   string origECSOptionStr = makeEDNSSubnetOptsString(ecsOpts);
   DNSPacketWriter::optvect_t opts;
-  opts.push_back(make_pair(EDNSOptionCode::COOKIE, cookiesOptionStr));
-  opts.push_back(make_pair(EDNSOptionCode::ECS, origECSOptionStr));
-  opts.push_back(make_pair(EDNSOptionCode::COOKIE, cookiesOptionStr));
+  opts.emplace_back(EDNSOptionCode::COOKIE, cookiesOptionStr);
+  opts.emplace_back(EDNSOptionCode::ECS, origECSOptionStr);
+  opts.emplace_back(EDNSOptionCode::COOKIE, cookiesOptionStr);
   pw.addOpt(512, 0, 0, opts);
   pw.commit();
 }
@@ -57,13 +56,13 @@ BOOST_AUTO_TEST_CASE(test_getEDNSOption)
   BOOST_REQUIRE_EQUAL(query.at(pos), 0);
   BOOST_REQUIRE(query.at(pos + 2) == QType::OPT);
 
-  char* ecsStart = nullptr;
+  size_t ecsStartPosition = 0;
   size_t ecsLen = 0;
-  int res = getEDNSOption(reinterpret_cast<char*>(query.data()) + pos + 9, questionLen - pos - 9, EDNSOptionCode::ECS, &ecsStart, &ecsLen);
+  int res = getEDNSOption(reinterpret_cast<const char*>(&query.at(pos + 9)), questionLen - pos - 9, EDNSOptionCode::ECS, &ecsStartPosition, &ecsLen);
   BOOST_CHECK_EQUAL(res, 0);
 
   EDNSSubnetOpts eso;
-  BOOST_REQUIRE(getEDNSSubnetOptsFromString(ecsStart + 4, ecsLen - 4, &eso));
+  BOOST_REQUIRE(getEDNSSubnetOptsFromString(reinterpret_cast<const char*>(&query.at(pos + 9 + ecsStartPosition + 4)), ecsLen - 4, &eso));
 
   BOOST_CHECK(eso.source == ecs);
 }
@@ -162,7 +161,6 @@ static void checkECSOptionValidity(const std::string& sourceStr, uint8_t sourceM
 
 BOOST_AUTO_TEST_CASE(test_makeEDNSSubnetOptsString)
 {
-
   checkECSOptionValidity("192.0.2.255", 0, 0);
   checkECSOptionValidity("192.0.2.255", 8, 0);
   checkECSOptionValidity("255.255.255.255", 9, 0);
@@ -172,6 +170,44 @@ BOOST_AUTO_TEST_CASE(test_makeEDNSSubnetOptsString)
   checkECSOptionValidity("2001:DB8::FFFF", 32, 0);
   checkECSOptionValidity("2001:DB8::FFFF", 127, 0);
   checkECSOptionValidity("2001:DB8::FFFF", 128, 0);
+}
+
+static void checkExtendedErrorOptionValidity(EDNSExtendedError::code code, const std::string& extra)
+{
+  EDNSExtendedError eee;
+  eee.infoCode = static_cast<uint16_t>(code);
+  eee.extraText = extra;
+
+  const auto optionStr = makeEDNSExtendedErrorOptString(eee);
+  BOOST_REQUIRE_EQUAL(optionStr.size(), sizeof(code) + extra.size());
+
+  uint16_t u;
+  memcpy(&u, optionStr.c_str(), sizeof(u));
+  BOOST_CHECK_EQUAL(ntohs(u), static_cast<uint16_t>(code));
+  BOOST_CHECK_EQUAL(optionStr.substr(2), extra);
+
+  EDNSExtendedError parsed;
+  BOOST_REQUIRE(getEDNSExtendedErrorOptFromString(optionStr, parsed));
+  BOOST_CHECK_EQUAL(parsed.infoCode, static_cast<uint16_t>(code));
+  BOOST_CHECK_EQUAL(parsed.extraText, extra);
+}
+
+BOOST_AUTO_TEST_CASE(test_makeEDNSExtendedErrorOptString)
+{
+  checkExtendedErrorOptionValidity(EDNSExtendedError::code::Other, "");
+  checkExtendedErrorOptionValidity(static_cast<EDNSExtendedError::code>(255), "");
+
+  checkExtendedErrorOptionValidity(EDNSExtendedError::code::UnsupportedDNSKEYAlgorithm, "");
+  checkExtendedErrorOptionValidity(EDNSExtendedError::code::UnsupportedDSDigestType, "The digest type of this DS is not supported!");
+
+  std::string extra;
+  /* the size of an EDNS option is limited to 2^16-1, and in this case the code already adds 2 bytes */
+  extra.resize(65534);
+  BOOST_CHECK_THROW(checkExtendedErrorOptionValidity(EDNSExtendedError::code::Other, extra), std::runtime_error);
+
+  EDNSExtendedError parsed;
+  std::string empty;
+  BOOST_CHECK(!getEDNSExtendedErrorOptFromString(empty, parsed));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

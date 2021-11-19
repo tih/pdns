@@ -47,7 +47,7 @@ This state can be modified from the various hooks.
   .. attribute:: DNSQuestion.qtype
 
     QType (as an unsigned integer) of this question.
-    Can be compared against the pre-defined :ref:`constants <DNSQType>` like ``DNSQType.A``, DNSQType.AAAA``.
+    Can be compared against the pre-defined :ref:`constants <DNSQType>` like ``DNSQType.A``, ``DNSQType.AAAA``.
 
   .. attribute:: DNSQuestion.remoteaddr
 
@@ -76,17 +76,22 @@ This state can be modified from the various hooks.
 
   It also supports the following methods:
 
-  .. method:: DNSQuestion:getDO() -> bool
+  .. method:: DNSQuestion:addProxyProtocolValue(type, value)
 
-    .. versionadded:: 1.2.0
+    .. versionadded:: 1.6.0
+
+    Add a proxy protocol TLV entry of type ``type`` and ``value`` to the current query.
+
+    :param int type: The type of the new value, ranging from 0 to 255 (both included)
+    :param str value: The binary-safe value
+
+  .. method:: DNSQuestion:getDO() -> bool
 
     Get the value of the DNSSEC OK bit.
 
     :returns: true if the DO bit was set, false otherwise
 
   .. method:: DNSQuestion:getEDNSOptions() -> table
-
-    .. versionadded:: 1.3.3
 
     Return the list of EDNS Options, if any.
 
@@ -132,6 +137,29 @@ This state can be modified from the various hooks.
 
     :returns: The scheme of the DoH query, for example ``http`` or ``https``
 
+  .. method:: DNSQuestion:getProtocol() -> string
+
+    .. versionadded:: 1.7.0
+
+    Return the transport protocol this query was received over, as a string. The possible values are:
+
+    * "Do53 UDP"
+    * "Do53 TCP"
+    * "DNSCrypt UDP"
+    * "DNSCrypt TCP"
+    * "DNS over TLS"
+    * "DNS over HTTPS"
+
+    :returns: A string
+
+  .. method:: DNSQuestion:getProxyProtocolValues() -> table
+
+    .. versionadded:: 1.6.0
+
+    Return a table of the Proxy Protocol values currently set for this query.
+
+    :returns: A table whose keys are types and values are binary-safe strings
+
   .. method:: DNSQuestion:getServerNameIndication() -> string
 
     .. versionadded:: 1.4.0
@@ -143,16 +171,12 @@ This state can be modified from the various hooks.
 
   .. method:: DNSQuestion:getTag(key) -> string
 
-    .. versionadded:: 1.2.0
-
     Get the value of a tag stored into the DNSQuestion object.
 
     :param string key: The tag's key
     :returns: The tag's value if it was set, an empty string otherwise
 
   .. method:: DNSQuestion:getTagArray() -> table
-
-    .. versionadded:: 1.2.0
 
     Get all the tags stored into the DNSQuestion object.
 
@@ -167,8 +191,6 @@ This state can be modified from the various hooks.
     :returns: The trailing data as a null-safe string
 
   .. method:: DNSQuestion:sendTrap(reason)
-
-    .. versionadded:: 1.2.0
 
     Send an SNMP trap.
 
@@ -214,19 +236,21 @@ This state can be modified from the various hooks.
 
   .. method:: DNSQuestion:setTag(key, value)
 
-    .. versionadded:: 1.2.0
+    .. versionchanged:: 1.7.0
+      Prior to 1.7.0 calling :func:`DNSQuestion:setTag` would not overwrite an existing tag value if already set.
 
-    Set a tag into the DNSQuestion object.
-
+    Set a tag into the DNSQuestion object. Overwrites the value if any already exists.
+  
     :param string key: The tag's key
     :param string value: The tag's value
 
   .. method:: DNSQuestion:setTagArray(tags)
 
-    .. versionadded:: 1.2.0
+    .. versionchanged:: 1.7.0
+      Prior to 1.7.0 calling :func:`DNSQuestion:setTagArray` would not overwrite existing tag values if already set.
 
-    Set an array of tags into the DNSQuestion object.
-
+    Set an array of tags into the DNSQuestion object. Overwrites the values if any already exist.
+  
     :param table tags: A table of tags, using strings as keys and values
 
   .. method:: DNSQuestion:setTrailingData(tail) -> bool
@@ -238,6 +262,17 @@ This state can be modified from the various hooks.
     :param string tail: The new data
     :returns: true if the operation succeeded, false otherwise
 
+  .. method:: DNSQuestion:spoof(ip|ips|raw|raws)
+
+    .. versionadded:: 1.6.0
+
+    Forge a response with the specified record data as raw bytes. If you specify list of raws (it is assumed they match the query type), all will get spoofed in.
+
+    :param ComboAddress ip: The `ComboAddress` to be spoofed, e.g. `newCA("192.0.2.1")`.
+    :param table ComboAddresses ips: The `ComboAddress`es to be spoofed, e.g. `{ newCA("192.0.2.1"), newCA("192.0.2.2") }`.
+    :param string raw: The raw string to be spoofed, e.g. `"\\192\\000\\002\\001"`.
+    :param table raws: The raw strings to be spoofed, e.g. `{ "\\192\\000\\002\\001", "\\192\\000\\002\\002" }`.
+
 .. _DNSResponse:
 
 DNSResponse object
@@ -245,7 +280,27 @@ DNSResponse object
 
 .. class:: DNSResponse
 
-  This object has all the functions and members of a :ref:`DNSQuestion <DNSQuestion>` and some more
+  This object has almost all the functions and members of a :ref:`DNSQuestion <DNSQuestion>`, except for the following ones which are not available on a response:
+
+  - ``addProxyProtocolValue``
+  - ``ecsOverride``
+  - ``ecsPrefixLength``
+  - ``getProxyProtocolValues``
+  - ``getHTTPHeaders``
+  - ``getHTTPHost``
+  - ``getHTTPPath``
+  - ``getHTTPQueryString``
+  - ``setHTTPResponse``
+  - ``getHTTPScheme``
+  - ``getServerNameIndication``
+  - ``setNegativeAndAdditionalSOA``
+  - ``setProxyProtocolValues``
+  - ``spoof``
+  - ``tempFailureTTL``
+  - ``useECS``
+
+  If the value is really needed while the response is being processed, it is possible to set a tag while the query is processed, as tags will be passed to the response object.
+  It also has one additional method:
 
   .. method:: DNSResponse:editTTLs(func)
 
@@ -343,8 +398,6 @@ EDNSOptionView object
 =====================
 
 .. class:: EDNSOptionView
-
-  .. versionadded:: 1.3.3
 
   An object that represents the values of a single EDNS option received in a query.
 

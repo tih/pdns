@@ -1,11 +1,51 @@
 Tuning related functions
 ========================
 
+.. function:: setDoHDownstreamCleanupInterval(interval)
+
+  .. versionadded:: 1.7.0
+
+  Set how often, in seconds, the outgoing DoH connections to backends of a given worker thread are scanned to expunge the ones that are no longer usable. The default is 60 so once per minute and per worker thread.
+  :param int interval: The interval in seconds.
+
+.. function:: setDoHDownstreamMaxIdleTime(max)
+
+  .. versionadded:: 1.7.0
+
+  Set how long, in seconds, an outgoing DoH connection to a backend might stay idle before being closed. The default is 300 so 5 minutes.
+
+  :param int max: The maximum time in seconds.
+
+.. function:: setMaxIdleDoHConnectionsPerDownstream(max)
+
+  .. versionadded:: 1.7.0
+
+  Set the maximum number of inactive DoH connections to a backend cached by each DoH worker thread. These connections can be reused when a new query comes in, instead of having to establish a new connection. dnsdist regularly checks whether the other end has closed any cached connection, closing them in that case.
+
+  :param int max: The maximum number of inactive connections to keep. Default is 10, so 10 connections per backend and per DoH worker thread.
+
+.. function:: setMaxCachedTCPConnectionsPerDownstream(max)
+
+  .. versionadded:: 1.6.0
+
+  Set the maximum number of inactive TCP connections to a backend cached by each TCP worker thread. These connections can be reused when a new query comes in, instead of having to establish a new connection. dnsdist regularly checks whether the other end has closed any cached connection, closing them in that case.
+
+  :param int max: The maximum number of inactive connections to keep. Default is 10, so 10 connections per backend and per TCP worker thread.
+
 .. function:: setMaxTCPClientThreads(num)
+
+  .. versionchanged:: 1.6.0
+    Before 1.6.0 the default value was 10.
+  .. versionchanged:: 1.7.0
+    The default value has been set back to 10.
 
   Set the maximum of TCP client threads, handling TCP connections. Before 1.4.0 a TCP thread could only handle a single incoming TCP connection at a time, while after 1.4.0 it can handle a larger number of them simultaneously.
 
-  :param int num:
+  Note that before 1.6.0 the TCP worker threads were created at runtime, adding a new thread when the existing ones seemed to struggle with the load, until the maximum number of threads had been reached. Starting with 1.6.0 the configured number of worker threads are immediately created at startup.
+
+  In 1.6.0 the default value was at least 10 TCP workers, but could be more if there is more than 10 TCP listeners (added via :func:`addDNSCryptBind`, :func:`addLocal`, or :func:`addTLSLocal`). In that last case there would have been as many TCP workers as TCP listeners. This led to issues in setups with a large number of TCP listeners and was therefore reverted back to 10 in 1.7.0.
+
+  :param int num: The number of TCP worker threads.
 
 .. function:: setMaxTCPConnectionDuration(num)
 
@@ -27,7 +67,10 @@ Tuning related functions
 
 .. function:: setMaxTCPQueuedConnections(num)
 
-  Set the maximum number of TCP connections queued (waiting to be picked up by a client thread), defaults to 1000. 0 means unlimited
+  .. versionchanged:: 1.6.0
+    Before 1.6.0 the default value was 1000 on all systems.
+
+  Set the maximum number of TCP connections queued (waiting to be picked up by a client thread), defaults to 1000 (10000 on Linux since 1.6.0). 0 means unlimited
 
   :param int num:
 
@@ -42,7 +85,7 @@ Tuning related functions
 
 .. function:: setCacheCleaningDelay(num)
 
-  Set the interval in seconds between two runs of the cache cleaning algorithm, removing expired entries
+  Set the interval in seconds between two runs of the cache cleaning algorithm, removing expired entries. Default is every 60s
 
   :param int num:
 
@@ -52,15 +95,48 @@ Tuning related functions
 
   :param int num:
 
+.. function:: setOutgoingDoHWorkerThreads(num)
+
+  .. versionadded:: 1.7.0
+
+  Set the number of worker threads to use for outgoing DoH. That number defaults to 0 but is automatically raised to 1 when DoH is enabled on at least one backend.
+
 .. function:: setStaleCacheEntriesTTL(num)
 
   Allows using cache entries expired for at most n seconds when no backend available to answer for a query
 
   :param int num:
 
+.. function:: setTCPDownstreamCleanupInterval(interval)
+
+  .. versionadded:: 1.6.0
+
+  Set how often, in seconds, the outgoing TCP connections to backends of a given worker thread are scanned to expunge the ones that are no longer usable. The default is 60 so once per minute and per worker thread.
+
+  :param int interval: The interval in seconds.
+
+.. function:: setDoHDownstreamMaxIdleTime(max)
+
+  .. versionadded:: 1.7.0
+
+  Set how long, in seconds, an outgoing DoH connection to a backend might stay idle before being closed. The default is 300 so 5 minutes.
+
+  :param int max: The maximum time in seconds.
+
+
+.. function:: setTCPInternalPipeBufferSize(size)
+
+  .. versionadded:: 1.6.0
+
+  Set the size in bytes of the internal buffer of the pipes used internally to distribute connections to TCP (and DoT) workers threads. Requires support for ``F_SETPIPE_SZ`` which is present in Linux since 2.6.35. The actual size might be rounded up to a multiple of a page size. 0 means that the OS default size is used. The default value is 0, except on Linux where it is 1048576 since 1.6.0.
+
+  :param int size: The size in bytes.
+
 .. function:: setTCPUseSinglePipe(val)
 
-  Whether the incoming TCP connections should be put into a single queue instead of using per-thread queues. Defaults to false
+  .. deprecated:: 1.6.0
+
+  Whether the incoming TCP connections should be put into a single queue instead of using per-thread queues. Defaults to false. That option was useful before 1.4.0 when a single TCP connection could block a TCP worker thread, but should not be used in recent versions where the per-thread queues model avoids waking up all idle workers when a new connection arrives. This option will be removed in 1.7.0.
 
   :param bool val:
 
@@ -77,8 +153,6 @@ Tuning related functions
   :param int num:
 
 .. function:: setUDPMultipleMessagesVectorSize(num)
-
-  .. versionadded:: 1.3.0
 
   Set the maximum number of UDP queries messages to accept in a single ``recvmmsg()`` call. Only available if the underlying OS
   support ``recvmmsg()`` with the ``MSG_WAITFORONE`` option. Defaults to 1, which means only query at a time is accepted, using

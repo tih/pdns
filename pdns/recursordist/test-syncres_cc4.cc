@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(test_auth_zone_nx)
 BOOST_AUTO_TEST_CASE(test_auth_zone_delegation)
 {
   std::unique_ptr<SyncRes> sr;
-  initSR(sr, true, false);
+  initSR(sr, true);
 
   primeHints();
 
@@ -146,7 +146,7 @@ BOOST_AUTO_TEST_CASE(test_auth_zone_delegation)
   sr->setAsyncCallback([&queriesCount, target, targetAddr, nsAddr, authZone, keys, fixedNow](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
     queriesCount++;
     if (type == QType::DS || type == QType::DNSKEY) {
-      return genericDSAndDNSKEYHandler(res, domain, DNSName("."), type, keys, domain == authZone, fixedNow);
+      return genericDSAndDNSKEYHandler(res, domain, DNSName("."), type, keys, domain == DNSName("com.") || domain == authZone, fixedNow);
     }
 
     if (ip == ComboAddress(nsAddr.toString(), 53) && domain == target) {
@@ -164,7 +164,7 @@ BOOST_AUTO_TEST_CASE(test_auth_zone_delegation)
   BOOST_CHECK_EQUAL(res, RCode::NoError);
   BOOST_REQUIRE_EQUAL(ret.size(), 1U);
   BOOST_CHECK(ret[0].d_type == QType::A);
-  BOOST_CHECK_EQUAL(queriesCount, 4U);
+  BOOST_CHECK_EQUAL(queriesCount, 1U);
   BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Indeterminate);
 }
 
@@ -437,12 +437,12 @@ BOOST_AUTO_TEST_CASE(test_dnssec_rrsig)
 {
   initSR();
 
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   // cerr<<dcke->convertToISC()<<endl;
   DNSSECPrivateKey dpk;
   dpk.d_flags = 256;
-  dpk.setKey(dcke);
+  dpk.setKey(std::move(dcke));
 
   sortedRecords_t recordcontents;
   recordcontents.insert(getRecordContent(QType::A, "192.0.2.1"));
@@ -460,7 +460,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_rrsig)
   std::vector<std::shared_ptr<RRSIGRecordContent>> sigs;
   sigs.push_back(std::make_shared<RRSIGRecordContent>(rrc));
 
-  BOOST_CHECK(validateWithKeySet(now, qname, recordcontents, sigs, keyset));
+  BOOST_CHECK(validateWithKeySet(now, qname, recordcontents, sigs, keyset) == vState::Secure);
 }
 
 BOOST_AUTO_TEST_CASE(test_dnssec_root_validation_csk)
@@ -543,18 +543,18 @@ BOOST_AUTO_TEST_CASE(test_dnssec_root_validation_ksk_zsk)
   testkeysset_t kskeys;
 
   /* Generate key material for "." */
-  auto dckeZ = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dckeZ = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dckeZ->create(dckeZ->getBits());
   DNSSECPrivateKey ksk;
   ksk.d_flags = 257;
-  ksk.setKey(dckeZ);
+  ksk.setKey(std::move(dckeZ));
   DSRecordContent kskds = makeDSFromDNSKey(target, ksk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
-  auto dckeK = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dckeK = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dckeK->create(dckeK->getBits());
   DNSSECPrivateKey zsk;
   zsk.d_flags = 256;
-  zsk.setKey(dckeK);
+  zsk.setKey(std::move(dckeK));
   DSRecordContent zskds = makeDSFromDNSKey(target, zsk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
   kskeys[target] = std::pair<DNSSECPrivateKey, DSRecordContent>(ksk, kskds);
@@ -670,7 +670,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_no_dnskey)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusMissingNegativeIndication);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -679,7 +679,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_no_dnskey)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusMissingNegativeIndication);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -696,11 +696,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_without_zone_flag)
   testkeysset_t keys;
 
   /* Generate key material for "." */
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   DNSSECPrivateKey csk;
   csk.d_flags = 0;
-  csk.setKey(dcke);
+  csk.setKey(std::move(dcke));
   DSRecordContent ds = makeDSFromDNSKey(target, csk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
   keys[target] = std::pair<DNSSECPrivateKey, DSRecordContent>(csk, ds);
@@ -747,7 +747,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_without_zone_flag)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoZoneKeyBitSet);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -756,7 +756,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_without_zone_flag)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoZoneKeyBitSet);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -773,11 +773,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_revoked)
   testkeysset_t keys;
 
   /* Generate key material for "." */
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   DNSSECPrivateKey csk;
   csk.d_flags = 257 | 128;
-  csk.setKey(dcke);
+  csk.setKey(std::move(dcke));
   DSRecordContent ds = makeDSFromDNSKey(target, csk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
   keys[target] = std::pair<DNSSECPrivateKey, DSRecordContent>(csk, ds);
@@ -824,7 +824,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_revoked)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusRevokedDNSKEY);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -833,7 +833,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_revoked)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusRevokedDNSKEY);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -850,18 +850,18 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_doesnt_match_ds)
   testkeysset_t keys;
 
   /* Generate key material for "." */
-  auto dckeDS = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dckeDS = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dckeDS->create(dckeDS->getBits());
   DNSSECPrivateKey dskey;
   dskey.d_flags = 257;
-  dskey.setKey(dckeDS);
+  dskey.setKey(std::move(dckeDS));
   DSRecordContent drc = makeDSFromDNSKey(target, dskey.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   DNSSECPrivateKey dpk;
   dpk.d_flags = 256;
-  dpk.setKey(dcke);
+  dpk.setKey(std::move(dcke));
   DSRecordContent uselessdrc = makeDSFromDNSKey(target, dpk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
   dskeys[target] = std::pair<DNSSECPrivateKey, DSRecordContent>(dskey, drc);
@@ -912,7 +912,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_doesnt_match_ds)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidDNSKEY);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -921,14 +921,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_doesnt_match_ds)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidDNSKEY);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 
   /* === first without validation, then with (just-in-time validation) === */
   /* clear the caches */
-  g_recCache = std::unique_ptr<MemRecursorCache>(new MemRecursorCache());
-  g_negCache = std::unique_ptr<NegCache>(new NegCache());
+  g_recCache = std::make_unique<MemRecursorCache>();
+  g_negCache = std::make_unique<NegCache>();
   sr->setDNSSECValidationRequested(false);
   primeHints();
 
@@ -954,7 +954,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_dnskey_doesnt_match_ds)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidDNSKEY);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 4U);
 }
@@ -976,11 +976,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_rrsig_signed_with_unknown_dnskey)
   generateKeyMaterial(target, DNSSECKeeper::ECDSA256, DNSSECKeeper::DIGEST_SHA256, keys, luaconfsCopy.dsAnchors);
   g_luaconfs.setState(luaconfsCopy);
 
-  auto dckeRRSIG = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dckeRRSIG = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dckeRRSIG->create(dckeRRSIG->getBits());
   DNSSECPrivateKey rrsigkey;
   rrsigkey.d_flags = 257;
-  rrsigkey.setKey(dckeRRSIG);
+  rrsigkey.setKey(std::move(dckeRRSIG));
   DSRecordContent rrsigds = makeDSFromDNSKey(target, rrsigkey.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
 
   rrsigkeys[target] = std::pair<DNSSECPrivateKey, DSRecordContent>(rrsigkey, rrsigds);
@@ -1022,7 +1022,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_rrsig_signed_with_unknown_dnskey)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -1031,7 +1031,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_rrsig_signed_with_unknown_dnskey)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -1092,7 +1092,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_no_rrsig)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   /* 13 NS + 0 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 13U);
   /* no RRSIG so no query for DNSKEYs */
@@ -1102,7 +1102,83 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_no_rrsig)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
+  BOOST_REQUIRE_EQUAL(ret.size(), 13U);
+  /* check that we capped the TTL to max-cache-bogus-ttl */
+  for (const auto& record : ret) {
+    BOOST_CHECK_LE(record.d_ttl, SyncRes::s_maxbogusttl);
+  }
+  BOOST_CHECK_EQUAL(queriesCount, 1U);
+}
+
+BOOST_AUTO_TEST_CASE(test_dnssec_bogus_no_rrsig_noaa)
+{
+  std::unique_ptr<SyncRes> sr;
+  initSR(sr, true);
+
+  setDNSSECValidation(sr, DNSSECMode::ValidateAll);
+
+  primeHints();
+  const DNSName target(".");
+  testkeysset_t keys;
+
+  auto luaconfsCopy = g_luaconfs.getCopy();
+  luaconfsCopy.dsAnchors.clear();
+  generateKeyMaterial(target, DNSSECKeeper::ECDSA256, DNSSECKeeper::DIGEST_SHA256, keys, luaconfsCopy.dsAnchors);
+  g_luaconfs.setState(luaconfsCopy);
+
+  size_t queriesCount = 0;
+
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+    queriesCount++;
+
+    if (domain == target && type == QType::NS) {
+
+      /* We are not setting AA! */
+      setLWResult(res, 0, false, false, true);
+      char addr[] = "a.root-servers.net.";
+      for (char idx = 'a'; idx <= 'm'; idx++) {
+        addr[0] = idx;
+        addRecordToLW(res, domain, QType::NS, std::string(addr), DNSResourceRecord::ANSWER, 86400);
+      }
+
+      /* No RRSIG */
+
+      addRecordToLW(res, "a.root-servers.net.", QType::A, "198.41.0.4", DNSResourceRecord::ADDITIONAL, 3600);
+      addRecordToLW(res, "a.root-servers.net.", QType::AAAA, "2001:503:ba3e::2:30", DNSResourceRecord::ADDITIONAL, 3600);
+
+      return LWResult::Result::Success;
+    }
+    else if (domain == target && type == QType::DNSKEY) {
+
+      setLWResult(res, 0, true, false, true);
+
+      addDNSKEY(keys, domain, 300, res->d_records);
+      addRRSIG(keys, res->d_records, domain, 300);
+
+      return LWResult::Result::Success;
+    }
+
+    return LWResult::Result::Timeout;
+  });
+
+  SyncRes::s_maxcachettl = 86400;
+  SyncRes::s_maxbogusttl = 3600;
+
+  vector<DNSRecord> ret;
+  int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
+  BOOST_CHECK_EQUAL(res, RCode::NoError);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
+  /* 13 NS + 0 RRSIG */
+  BOOST_REQUIRE_EQUAL(ret.size(), 13U);
+  /* no RRSIG so no query for DNSKEYs */
+  BOOST_CHECK_EQUAL(queriesCount, 1U);
+
+  /* again, to test the cache */
+  ret.clear();
+  res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
+  BOOST_CHECK_EQUAL(res, RCode::NoError);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 13U);
   /* check that we capped the TTL to max-cache-bogus-ttl */
   for (const auto& record : ret) {
@@ -1123,11 +1199,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_insecure_unknown_ds_algorithm)
   testkeysset_t keys;
 
   /* Generate key material for "." */
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   DNSSECPrivateKey dpk;
   dpk.d_flags = 256;
-  dpk.setKey(dcke);
+  dpk.setKey(std::move(dcke));
   /* Fake algorithm number (private) */
   dpk.d_algorithm = 253;
 
@@ -1206,11 +1282,11 @@ BOOST_AUTO_TEST_CASE(test_dnssec_insecure_unknown_ds_digest)
   testkeysset_t keys;
 
   /* Generate key material for "." */
-  auto dcke = std::shared_ptr<DNSCryptoKeyEngine>(DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256));
+  auto dcke = DNSCryptoKeyEngine::make(DNSSECKeeper::ECDSA256);
   dcke->create(dcke->getBits());
   DNSSECPrivateKey dpk;
   dpk.d_flags = 256;
-  dpk.setKey(dcke);
+  dpk.setKey(std::move(dcke));
   DSRecordContent drc = makeDSFromDNSKey(target, dpk.getDNSKEY(), DNSSECKeeper::DIGEST_SHA256);
   /* Fake digest number (reserved) */
   drc.d_digesttype = 0;
@@ -1291,10 +1367,14 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_sig)
   generateKeyMaterial(g_rootdnsname, DNSSECKeeper::RSASHA512, DNSSECKeeper::DIGEST_SHA384, keys, luaconfsCopy.dsAnchors);
 
   g_luaconfs.setState(luaconfsCopy);
+  /* make sure that the signature inception and validity times are computed
+     based on the SyncRes time, not the current one, in case the function
+     takes too long. */
+  const time_t fixedNow = sr->getNow().tv_sec;
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys, fixedNow](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
     queriesCount++;
 
     if (domain == target && type == QType::NS) {
@@ -1306,7 +1386,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_sig)
         addRecordToLW(res, domain, QType::NS, std::string(addr), DNSResourceRecord::ANSWER, 3600);
       }
 
-      addRRSIG(keys, res->d_records, domain, 300, true);
+      addRRSIG(keys, res->d_records, domain, 300, true, boost::none, boost::none, fixedNow);
 
       addRecordToLW(res, "a.root-servers.net.", QType::A, "198.41.0.4", DNSResourceRecord::ADDITIONAL, 3600);
       addRecordToLW(res, "a.root-servers.net.", QType::AAAA, "2001:503:ba3e::2:30", DNSResourceRecord::ADDITIONAL, 3600);
@@ -1318,7 +1398,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_sig)
       setLWResult(res, 0, true, false, true);
 
       addDNSKEY(keys, domain, 300, res->d_records);
-      addRRSIG(keys, res->d_records, domain, 300);
+      addRRSIG(keys, res->d_records, domain, 300, false, boost::none, boost::none, fixedNow);
 
       return LWResult::Result::Success;
     }
@@ -1329,7 +1409,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_sig)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -1338,7 +1418,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_sig)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -1398,7 +1478,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_algo)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   /* 13 NS + 1 RRSIG */
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
@@ -1407,7 +1487,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_bad_algo)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::NS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoValidRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 14U);
   BOOST_CHECK_EQUAL(queriesCount, 2U);
 }
@@ -1473,7 +1553,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_unsigned_ds)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   BOOST_CHECK_EQUAL(queriesCount, 3U);
 
@@ -1481,7 +1561,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_unsigned_ds)
   ret.clear();
   res = sr->beginResolve(target, QType(QType::A), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 2U);
   BOOST_CHECK_EQUAL(queriesCount, 3U);
 
@@ -1489,7 +1569,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_unsigned_ds)
   ret.clear();
   res = sr->beginResolve(DNSName("com."), QType(QType::DS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 1U);
   BOOST_CHECK_EQUAL(queriesCount, 3U);
 }
@@ -1547,7 +1627,7 @@ BOOST_AUTO_TEST_CASE(test_dnssec_bogus_unsigned_ds_direct)
   vector<DNSRecord> ret;
   int res = sr->beginResolve(DNSName("com."), QType(QType::DS), QClass::IN, ret);
   BOOST_CHECK_EQUAL(res, RCode::NoError);
-  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::Bogus);
+  BOOST_CHECK_EQUAL(sr->getValidationState(), vState::BogusNoRRSIG);
   BOOST_REQUIRE_EQUAL(ret.size(), 1U);
   BOOST_CHECK_EQUAL(queriesCount, 1U);
 }

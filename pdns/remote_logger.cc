@@ -23,7 +23,7 @@ bool CircularWriteBuffer::hasRoomFor(const std::string& str) const
 
 bool CircularWriteBuffer::write(const std::string& str)
 {
-  if (!hasRoomFor(str)) {
+  if (str.size() > std::numeric_limits<uint16_t>::max() || !hasRoomFor(str)) {
     return false;
   }
 
@@ -97,7 +97,7 @@ bool CircularWriteBuffer::flush(int fd)
   return true;
 }
 
-RemoteLogger::RemoteLogger(const ComboAddress& remote, uint16_t timeout, uint64_t maxQueuedBytes, uint8_t reconnectWaitTime, bool asyncConnect): d_writer(maxQueuedBytes), d_remote(remote), d_timeout(timeout), d_reconnectWaitTime(reconnectWaitTime), d_asyncConnect(asyncConnect)
+RemoteLogger::RemoteLogger(const ComboAddress& remote, uint16_t timeout, uint64_t maxQueuedBytes, uint8_t reconnectWaitTime, bool asyncConnect): d_remote(remote), d_timeout(timeout), d_reconnectWaitTime(reconnectWaitTime), d_asyncConnect(asyncConnect), d_runtime({CircularWriteBuffer(maxQueuedBytes), nullptr})
 {
   if (!d_asyncConnect) {
     reconnect();
@@ -116,8 +116,8 @@ bool RemoteLogger::reconnect()
     {
       /* we are now successfully connected, time to take the lock and update the
          socket */
-      std::unique_lock<std::mutex> lock(d_mutex);
-      d_socket = std::move(newSock);
+      auto runtime = d_runtime.lock();
+      runtime->d_socket = std::move(newSock);
     }
   }
   catch (const std::exception& e) {
@@ -134,24 +134,28 @@ bool RemoteLogger::reconnect()
 
 void RemoteLogger::queueData(const std::string& data)
 {
-  std::unique_lock<std::mutex> lock(d_mutex);
+  if (data.size() > std::numeric_limits<uint16_t>::max()) {
+    throw std::runtime_error("Got a request to write an object of size " + std::to_string(data.size()));
+  }
 
-  if (!d_writer.hasRoomFor(data)) {
+  auto runtime = d_runtime.lock();
+
+  if (!runtime->d_writer.hasRoomFor(data)) {
     /* not connected, queue is full, just drop */
-    if (!d_socket) {
+    if (!runtime->d_socket) {
       ++d_drops;
       return;
     }
     try {
       /* we try to flush some data */
-      if (!d_writer.flush(d_socket->getHandle())) {
+      if (!runtime->d_writer.flush(runtime->d_socket->getHandle())) {
         /* but failed, let's just drop */
         ++d_drops;
         return;
       }
 
       /* see if we freed enough data */
-      if (!d_writer.hasRoomFor(data)) {
+      if (!runtime->d_writer.hasRoomFor(data)) {
         /* we didn't */
         ++d_drops;
         return;
@@ -160,71 +164,72 @@ void RemoteLogger::queueData(const std::string& data)
     catch(const std::exception& e) {
       //      cout << "Got exception writing: "<<e.what()<<endl;
       ++d_drops;
-      d_socket.reset();
+      runtime->d_socket.reset();
       return;
     }
   }
 
-  d_writer.write(data);
-  ++d_queued;
+  runtime->d_writer.write(data);
+  ++d_processed;
 }
 
-void RemoteLogger::maintenanceThread()
-try
+void RemoteLogger::maintenanceThread() 
 {
+  try {
 #ifdef WE_ARE_RECURSOR
-  string threadName = "pdns-r/remLog";
+    string threadName = "pdns-r/remLog";
 #else
-  string threadName = "dnsdist/remLog";
+    string threadName = "dnsdist/remLog";
 #endif
-  setThreadName(threadName);
+    setThreadName(threadName);
 
-  for (;;) {
-    if (d_exiting) {
-      break;
-    }
+    for (;;) {
+      if (d_exiting) {
+        break;
+      }
 
-    bool connected = true;
-    if (d_socket == nullptr) {
-      // if it was unset, it will remain so, we are the only ones setting it!
-      connected = reconnect();
-    }
+      bool connected = true;
+      if (d_runtime.lock()->d_socket == nullptr) {
+        // if it was unset, it will remain so, we are the only ones setting it!
+        connected = reconnect();
+      }
 
-    /* we will just go to sleep if the reconnection just failed */
-    if (connected) {
-      try {
-        /* we don't want to take the lock while trying to reconnect */
-        std::unique_lock<std::mutex> lock(d_mutex);
-        if (d_socket) { // check if it is set
-          /* if flush() returns false, it means that we couldn't flush anything yet
-             either because there is nothing to flush, or because the outgoing TCP
-             buffer is full. That's fine by us */
-          d_writer.flush(d_socket->getHandle());
+      /* we will just go to sleep if the reconnection just failed */
+      if (connected) {
+        try {
+          /* we don't want to take the lock while trying to reconnect */
+          auto runtime = d_runtime.lock();
+          if (runtime->d_socket) { // check if it is set
+            /* if flush() returns false, it means that we couldn't flush anything yet
+               either because there is nothing to flush, or because the outgoing TCP
+               buffer is full. That's fine by us */
+            runtime->d_writer.flush(runtime->d_socket->getHandle());
+          }
+          else {
+            connected = false;
+          }
         }
-        else {
+        catch (const std::exception& e) {
+          d_runtime.lock()->d_socket.reset();
           connected = false;
         }
-      }
-      catch(const std::exception& e) {
-        d_socket.reset();
-        connected = false;
+
+        if (!connected) {
+          /* let's try to reconnect right away, we are about to sleep anyway */
+          reconnect();
+        }
       }
 
-      if (!connected) {
-        /* let's try to reconnect right away, we are about to sleep anyway */
-        reconnect();
-      }
+      sleep(d_reconnectWaitTime);
     }
-
-    sleep(d_reconnectWaitTime);
   }
-}
-catch(const std::exception& e)
-{
-  cerr << "Remote Logger's maintenance thead died on: " << e.what() << endl;
-}
-catch(...) {
-  cerr << "Remote Logger's maintenance thead died on unknown exception" << endl;
+  catch (const std::exception& e)
+  {
+    cerr << "Remote Logger's maintenance thead died on: " << e.what() << endl;
+  }
+  catch (...) {
+    cerr << "Remote Logger's maintenance thead died on unknown exception" << endl;
+  }
 }
 
 RemoteLogger::~RemoteLogger()

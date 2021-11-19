@@ -221,6 +221,12 @@ class RPZRecursorTest(RecursorTest):
     _wsPassword = 'secretpassword'
     _apiKey = 'secretapikey'
     _confdir = 'RPZ'
+    _auth_zones = {
+        '8': {'threads': 1,
+              'zones': ['ROOT']},
+        '10': {'threads': 1,
+               'zones': ['example']},
+    }
     _lua_dns_script_file = """
 
     function prerpz(dq)
@@ -241,22 +247,6 @@ webserver-password=%s
 api-key=%s
 log-rpz-changes=yes
 """ % (_confdir, _wsPort, _wsPassword, _apiKey)
-
-    @classmethod
-    def setUpClass(cls):
-
-        cls.setUpSockets()
-        cls.startResponders()
-
-        confdir = os.path.join('configs', cls._confdir)
-        cls.createConfigDir(confdir)
-
-        cls.generateRecursorConfig(confdir)
-        cls.startRecursor(confdir, cls._recursorPort)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tearDownRecursor()
 
     def checkBlocked(self, name, shouldBeBlocked=True, adQuery=False, singleCheck=False):
         query = dns.message.make_query(name, 'A', want_dnssec=True)
@@ -338,7 +328,7 @@ log-rpz-changes=yes
         url = 'http://127.0.0.1:' + str(self._wsPort) + '/api/v1/servers/localhost/rpzstatistics'
         r = requests.get(url, headers=headers, timeout=self._wsTimeout)
         self.assertTrue(r)
-        self.assertEquals(r.status_code, 200)
+        self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json())
         content = r.json()
         self.assertIn('zone.rpz.', content)
@@ -346,10 +336,10 @@ log-rpz-changes=yes
         for key in ['last_update', 'records', 'serial', 'transfers_failed', 'transfers_full', 'transfers_success']:
             self.assertIn(key, zone)
 
-        self.assertEquals(zone['serial'], serial)
-        self.assertEquals(zone['records'], recordsCount)
-        self.assertEquals(zone['transfers_full'], fullXFRCount)
-        self.assertEquals(zone['transfers_success'], totalXFRCount)
+        self.assertEqual(zone['serial'], serial)
+        self.assertEqual(zone['records'], recordsCount)
+        self.assertEqual(zone['transfers_full'], fullXFRCount)
+        self.assertEqual(zone['transfers_success'], totalXFRCount)
 
 rpzServerPort = 4250
 rpzServer = RPZServer(rpzServerPort)
@@ -939,27 +929,6 @@ class RPZCNameChainCustomTest(RPZRecursorTest):
     _config_template = ""
 
     @classmethod
-    def setUpClass(cls):
-
-        cls.setUpSockets()
-        cls.startResponders()
-
-        confdir = os.path.join('configs', cls._confdir)
-        cls.createConfigDir(confdir)
-
-        cls.generateAllAuthConfig(confdir)
-        cls.startAuth(os.path.join(confdir, "auth-8"), cls._PREFIX + '.8')
-        cls.startAuth(os.path.join(confdir, "auth-10"), cls._PREFIX + '.10')
-
-        cls.generateRecursorConfig(confdir)
-        cls.startRecursor(confdir, cls._recursorPort)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tearDownAuth()
-        cls.tearDownRecursor()
-
-    @classmethod
     def generateRecursorConfig(cls, confdir):
         rpzFilePath = os.path.join(confdir, 'zone.rpz')
         with open(rpzFilePath, 'w') as rpzZone:
@@ -984,7 +953,7 @@ class RPZCNameChainCustomTest(RPZRecursorTest):
                 sender = getattr(self, method)
                 res = sender(query)
                 self.assertRcodeEqual(res, dns.rcode.NXDOMAIN)
-                self.assertEquals(len(res.answer), 0)
+                self.assertEqual(len(res.answer), 0)
 
     def testRPZChainNODATA(self):
         # we should match the A at the end of the CNAME chain and
@@ -998,7 +967,7 @@ class RPZCNameChainCustomTest(RPZRecursorTest):
                 sender = getattr(self, method)
                 res = sender(query)
                 self.assertRcodeEqual(res, dns.rcode.NOERROR)
-                self.assertEquals(len(res.answer), 0)
+                self.assertEqual(len(res.answer), 0)
 
     def testRPZChainCustom(self):
         # we should match the A at the end of the CNAME chain and
@@ -1013,6 +982,86 @@ class RPZCNameChainCustomTest(RPZRecursorTest):
                 res = sender(query)
                 self.assertRcodeEqual(res, dns.rcode.NOERROR)
                 # the original CNAME record is signed
-                self.assertEquals(len(res.answer), 3)
+                self.assertEqual(len(res.answer), 3)
                 self.assertRRsetInAnswer(res, dns.rrset.from_text('cname-custom-a.example.', 0, dns.rdataclass.IN, 'CNAME', 'cname-custom-a-target.example.'))
                 self.assertRRsetInAnswer(res, dns.rrset.from_text('cname-custom-a-target.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.103'))
+
+class RPZFileModByLuaRecursorTest(RPZRecursorTest):
+    """
+    This test makes sure that we correctly load RPZ zones from a file while being modified by Lua callbacks
+    """
+
+    _confdir = 'RPZFileModByLua'
+    _lua_dns_script_file = """
+    function preresolve(dq)
+      if dq.qname:equal('zmod.example.') then
+        dq.appliedPolicy.policyKind = pdns.policykinds.Drop
+        return true
+      end
+      return false
+    end
+    function nxdomain(dq)
+      if dq.qname:equal('nxmod.example.') then
+        dq.appliedPolicy.policyKind = pdns.policykinds.Drop
+        return true
+      end
+      return false
+    end
+    function nodata(dq)
+      print("NODATA")
+      if dq.qname:equal('nodatamod.example.') then
+        dq.appliedPolicy.policyKind = pdns.policykinds.Drop
+        return true
+      end
+      return false
+    end
+    """
+    _lua_config_file = """
+    rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz." })
+    """ % (_confdir)
+    _config_template = """
+auth-zones=example=configs/%s/example.zone
+""" % (_confdir)
+
+    @classmethod
+    def generateRecursorConfig(cls, confdir):
+        authzonepath = os.path.join(confdir, 'example.zone')
+        with open(authzonepath, 'w') as authzone:
+            authzone.write("""$ORIGIN example.
+@ 3600 IN SOA {soa}
+a 3600 IN A 192.0.2.42
+b 3600 IN A 192.0.2.42
+c 3600 IN A 192.0.2.42
+d 3600 IN A 192.0.2.42
+e 3600 IN A 192.0.2.42
+z 3600 IN A 192.0.2.42
+""".format(soa=cls._SOA))
+
+        rpzFilePath = os.path.join(confdir, 'zone.rpz')
+        with open(rpzFilePath, 'w') as rpzZone:
+            rpzZone.write("""$ORIGIN zone.rpz.
+@ 3600 IN SOA {soa}
+a.example.zone.rpz. 60 IN A 192.0.2.42
+a.example.zone.rpz. 60 IN A 192.0.2.43
+a.example.zone.rpz. 60 IN TXT "some text"
+drop.example.zone.rpz. 60 IN CNAME rpz-drop.
+zmod.example.zone.rpz. 60 IN A 192.0.2.1
+tc.example.zone.rpz. 60 IN CNAME rpz-tcp-only.
+nxmod.exmaple.zone.rpz. 60 in CNAME .
+nodatamod.example.zone.rpz. 60 in CNAME *.
+""".format(soa=cls._SOA))
+        super(RPZFileModByLuaRecursorTest, cls).generateRecursorConfig(confdir)
+
+    def testRPZ(self):
+        self.checkCustom('a.example.', 'A', dns.rrset.from_text('a.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.42', '192.0.2.43'))
+        self.checkCustom('a.example.', 'TXT', dns.rrset.from_text('a.example.', 0, dns.rdataclass.IN, 'TXT', '"some text"'))
+        self.checkDropped('zmod.example.')
+        self.checkDropped('nxmod.example.')
+        self.checkDropped('nodatamod.example.')
+        self.checkNotBlocked('b.example.')
+        self.checkNotBlocked('c.example.')
+        self.checkNotBlocked('d.example.')
+        self.checkNotBlocked('e.example.')
+        # check non-custom policies
+        self.checkTruncated('tc.example.')
+        self.checkDropped('drop.example.')

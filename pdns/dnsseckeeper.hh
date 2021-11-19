@@ -246,6 +246,7 @@ private:
   bool getFromMetaNoCache(const DNSName& name, const std::string& kind, std::string& value);
 
   int64_t d_metaCacheCleanAction{0};
+  bool d_metaUpdate{false};
 
   struct KeyCacheEntry
   {
@@ -295,22 +296,12 @@ private:
 
   void cleanup();
 
-  static keycache_t s_keycache;
-  static metacache_t s_metacache;
+  static SharedLockGuarded<keycache_t> s_keycache;
+  static SharedLockGuarded<metacache_t> s_metacache;
   static int64_t s_metaCacheCleanActions;
-  static ReadWriteLock s_metacachelock;
-  static ReadWriteLock s_keycachelock;
   static AtomicCounter s_ops;
   static time_t s_last_prune;
   static size_t s_maxEntries;
-
-public:
-  void preRemoval(const KeyCacheEntry&)
-  {
-  }
-  void preRemoval(const METACacheEntry&)
-  {
-  }
 };
 
 class DNSPacket;

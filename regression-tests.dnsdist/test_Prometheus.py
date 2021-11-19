@@ -11,11 +11,14 @@ class TestPrometheus(DNSDistTest):
     _webTimeout = 2.0
     _webServerPort = 8083
     _webServerBasicAuthPassword = 'secret'
+    _webServerBasicAuthPasswordHashed = '$scrypt$ln=10,p=1,r=8$6DKLnvUYEeXWh3JNOd3iwg==$kSrhdHaRbZ7R74q3lGBqO1xetgxRxhmWzYJ2Qvfm7JM='
     _webServerAPIKey = 'apisecret'
-    _config_params = ['_testServerPort', '_webServerPort', '_webServerBasicAuthPassword', '_webServerAPIKey']
+    _webServerAPIKeyHashed = '$scrypt$ln=10,p=1,r=8$9v8JxDfzQVyTpBkTbkUqYg==$bDQzAOHeK1G9UvTPypNhrX48w974ZXbFPtRKS34+aso='
+    _config_params = ['_testServerPort', '_webServerPort', '_webServerBasicAuthPasswordHashed', '_webServerAPIKeyHashed']
     _config_template = """
     newServer{address="127.0.0.1:%s"}
-    webserver("127.0.0.1:%s", "%s", "%s")
+    webserver("127.0.0.1:%s")
+    setWebserverConfig({password="%s", apiKey="%s"})
     """
 
     def checkPrometheusContentBasic(self, content):
@@ -25,11 +28,11 @@ class TestPrometheus(DNSDistTest):
                 self.assertGreaterEqual(len(tokens), 4)
             elif line.startswith('# TYPE'):
                 tokens = line.split(' ')
-                self.assertEquals(len(tokens), 4)
+                self.assertEqual(len(tokens), 4)
                 self.assertIn(tokens[3], ['counter', 'gauge', 'histogram'])
             elif not line.startswith('#'):
                 tokens = line.split(' ')
-                self.assertEquals(len(tokens), 2)
+                self.assertEqual(len(tokens), 2)
                 if not line.startswith('dnsdist_'):
                     raise AssertionError('Expecting prometheus metric to be prefixed by \'dnsdist_\', got: "%s"' % (line))
 
@@ -58,6 +61,6 @@ class TestPrometheus(DNSDistTest):
         url = 'http://127.0.0.1:' + str(self._webServerPort) + '/metrics'
         r = requests.get(url, auth=('whatever', self._webServerBasicAuthPassword), timeout=self._webTimeout)
         self.assertTrue(r)
-        self.assertEquals(r.status_code, 200)
+        self.assertEqual(r.status_code, 200)
         self.checkPrometheusContentBasic(r.text)
         self.checkPrometheusContentPromtool(r.content)

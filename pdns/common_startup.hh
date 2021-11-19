@@ -22,6 +22,7 @@
 #pragma once
 #include "auth-packetcache.hh"
 #include "auth-querycache.hh"
+#include "auth-zonecache.hh"
 #include "utility.hh"
 #include "arguments.hh"
 #include "communicator.hh"
@@ -43,7 +44,7 @@ extern std::unique_ptr<DynListener> dl;
 extern CommunicatorClass Communicator;
 extern std::shared_ptr<UDPNameserver> N;
 extern vector<std::shared_ptr<UDPNameserver> > g_udpReceivers;
-extern int avg_latency;
+extern double avg_latency;
 extern std::unique_ptr<TCPNameserver> TN;
 extern void declareArguments();
 extern void declareStats();
@@ -52,6 +53,8 @@ extern int isGuarded( char ** );
 void carbonDumpThread();
 extern bool g_anyToTcp;
 extern bool g_8bitDNS;
+extern NetmaskGroup g_proxyProtocolACL;
+extern size_t g_proxyProtocolMaximumSize;
 #ifdef HAVE_LUA_RECORDS
 extern bool g_doLuaRecord;
 extern bool g_LuaRecordSharedState;

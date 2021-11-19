@@ -24,19 +24,20 @@
 #include <cstdio>
 #include <stdexcept>
 #include <stack>
+#include <deque>
 
 #include "namespaces.hh"
 
 class ZoneParserTNG
 {
 public:
-  ZoneParserTNG(const string& fname, const DNSName& zname=g_rootdnsname, const string& reldir="", bool upgradeContent=false);
-  ZoneParserTNG(const vector<string> zonedata, const DNSName& zname, bool upgradeContent=false);
+  ZoneParserTNG(const string& fname, DNSName  zname=g_rootdnsname, string  reldir="", bool upgradeContent=false);
+  ZoneParserTNG(const vector<string>& zonedata, DNSName  zname, bool upgradeContent=false);
 
   ~ZoneParserTNG();
   bool get(DNSResourceRecord& rr, std::string* comment=0);
   typedef runtime_error exception;
-  typedef deque<pair<string::size_type, string::size_type> > parts_t;
+  typedef std::deque<pair<string::size_type, string::size_type> > parts_t;
   DNSName getZoneName();
   string getLineOfFile(); // for error reporting purposes
   pair<string,int> getLineNumAndFile(); // idem
@@ -47,6 +48,10 @@ public:
   void setMaxGenerateSteps(size_t max)
   {
     d_maxGenerateSteps = max;
+  }
+  void setMaxIncludes(size_t max)
+  {
+    d_maxIncludes = max;
   }
 private:
   bool getLine();
@@ -72,10 +77,12 @@ private:
   std::stack<filestate> d_filestates;
   parts_t d_templateparts;
   size_t d_maxGenerateSteps{0};
+  size_t d_maxIncludes{20};
   int d_defaultttl;
   uint32_t d_templatecounter, d_templatestop, d_templatestep;
   bool d_havedollarttl;
   bool d_fromfile;
   bool d_generateEnabled{true};
   bool d_upgradeContent;
+  bool d_templateCounterWrapped{false};
 };

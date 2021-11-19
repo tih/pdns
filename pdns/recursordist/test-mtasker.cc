@@ -14,7 +14,7 @@ static int g_result;
 static void doSomething(void* p)
 {
   MTasker<>* mt = reinterpret_cast<MTasker<>*>(p);
-  int i = 12, o;
+  int i = 12, o = 0;
   if (mt->waitEvent(i, &o) == 1)
     g_result = o;
 }
@@ -56,6 +56,6 @@ BOOST_AUTO_TEST_CASE(test_MtaskerException)
       mt.schedule(&now);
     }
   },
-    std::exception);
+                    std::exception);
 }
 BOOST_AUTO_TEST_SUITE_END()

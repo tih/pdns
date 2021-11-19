@@ -1,4 +1,4 @@
-PowerDNS is copyright © 2001-2019 by PowerDNS.COM BV and lots of
+PowerDNS is copyright © 2001-2021 by PowerDNS.COM BV and lots of
 contributors, using the GNU GPLv2 license (see NOTICE for the
 exact license and exception used).
 
@@ -14,6 +14,12 @@ To file bugs, head towards:
 https://github.com/PowerDNS/pdns/issues
 
 But please check if the issue is already reported there first.
+
+DOCKER
+------
+
+This README is mirrored from GitHub to dockerhub.
+For information about our Docker images, please refer to https://github.com/PowerDNS/pdns/blob/master/Docker-README.md
 
 SOURCE CODE / GIT
 -----------------
@@ -48,7 +54,7 @@ compiler with C++-2011 support.
 On Debian 9, the following is useful:
 
 ```sh
-apt install g++ libboost-all-dev libtool make pkg-config default-libmysqlclient-dev libssl-dev virtualenv libluajit-5.1-dev
+apt install g++ libboost-all-dev libtool make pkg-config default-libmysqlclient-dev libssl-dev libluajit-5.1-dev python3-venv
 ```
 
 When building from git, the following packages are also required:
@@ -60,7 +66,7 @@ apt install autoconf automake ragel bison flex
 For Ubuntu 18.04 (Bionic Beaver), the following packages should be installed:
 
 ```sh
-apt install libcurl4-openssl-dev luajit lua-yaml-dev libyaml-cpp-dev libtolua-dev lua5.3 autoconf automake ragel bison flex g++ libboost-all-dev libtool make pkg-config libssl-dev virtualenv lua-yaml-dev libyaml-cpp-dev libluajit-5.1-dev libcurl4 gawk libsqlite3-dev
+apt install libcurl4-openssl-dev luajit lua-yaml-dev libyaml-cpp-dev libtolua-dev lua5.3 autoconf automake ragel bison flex g++ libboost-all-dev libtool make pkg-config libssl-dev lua-yaml-dev libyaml-cpp-dev libluajit-5.1-dev libcurl4 gawk libsqlite3-dev python3-venv
 # For DNSSEC ed25519 (algorithm 15) support with --with-libsodium
 apt install libsodium-dev
 # If using the gmysql (Generic MySQL) backend

@@ -5,11 +5,11 @@ BIND zone file backend
 * Master: Yes
 * Slave: Yes
 * Superslave: Experimental
-* Autoserial: No
 * DNSSEC: Yes
 * Disabled data: No
 * Comments: No
 * API: Read-only
+* Zone caching: Yes (except in hybrid mode)
 * Module name: bind
 * Launch: ``bind``
 

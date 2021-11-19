@@ -159,7 +159,7 @@ public:
   }
 
 private:
-  deque<uint16_t> d_available;
+  std::deque<uint16_t> d_available;
   
 } s_idmanager;
 
@@ -379,8 +379,8 @@ static void measureResultAndClean(qids_t::const_iterator iter)
       if(!g_quiet)
         cout<<"\t* orig better *"<<endl;
       s_origbetter++;
-      if(!g_quiet) 
-        if(s_origbetterset.insert(make_pair(qd.d_qi.d_qname, qd.d_qi.d_qtype)).second) {
+      if (!g_quiet)
+        if (s_origbetterset.emplace(qd.d_qi.d_qname, qd.d_qi.d_qtype).second) {
           cout<<"orig better: " << qd.d_qi.d_qname<<" "<< qd.d_qi.d_qtype<<endl;
         }
     }
@@ -493,8 +493,8 @@ static void pruneQids()
 
 static void printStats(uint64_t origWaitingFor=0, uint64_t weWaitingFor=0)
 {
-  format headerfmt   ("%|9t|Questions - Pend. - Drop = Answers = (On time + Late) = (Err + Ok)\n");
-  format datafmt("%s%|9t|%d %|21t|%d %|29t|%d %|36t|%d %|47t|%d %|57t|%d %|66t|%d %|72t|%d\n");
+  boost::format headerfmt   ("%|9t|Questions - Pend. - Drop = Answers = (On time + Late) = (Err + Ok)\n");
+  boost::format datafmt("%s%|9t|%d %|21t|%d %|29t|%d %|36t|%d %|47t|%d %|57t|%d %|66t|%d %|72t|%d\n");
 
   cerr<<headerfmt;
   cerr<<(datafmt % "Orig"   % s_questions % origWaitingFor  % s_orignever  % s_origanswers % 0 % s_origtimedout  % 0 % 0);
@@ -627,7 +627,7 @@ static bool sendPacketFromPR(PcapPacketReader& pr, const ComboAddress& remote, i
       uint16_t dlen = pr.d_len;
 
       if (stamp >= 0) {
-        static_assert(sizeof(pr.d_buffer) >= 1500, "The size of the underlying buffer should be at least 1500 bytes");
+        static_assert(sizeof(pr.d_readbuffer) >= 1500, "The size of the underlying buffer should be at least 1500 bytes");
         if (dlen > 1500) {
           /* the existing packet is larger than the maximum size we are willing to send, and it won't get better by adding ECS */
           return false;

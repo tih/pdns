@@ -55,7 +55,10 @@ version_generated.h
 /pubsuffix.cc
 /calidns
 /dumresp
-/htmlfiles.h
+/apidocfiles.h
+/api-swagger.yaml
+/api-swagger.json
+/.venv
 effective_tld_names.dat
 /dnsmessage.pb.cc
 /dnsmessage.pb.h
@@ -67,3 +70,4 @@ effective_tld_names.dat
 /fuzz_target_packetcache
 /fuzz_target_proxyprotocol
 /fuzz_target_zoneparsertng
+/fuzz_target_dnslabeltext_parseRFC1035CharString

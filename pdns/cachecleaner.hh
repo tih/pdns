@@ -21,7 +21,9 @@
  */
 #pragma once
 
-#include <mutex>
+#include <boost/multi_index_container.hpp>
+
+#include "dnsname.hh"
 #include "lock.hh"
 
 // this function can clean any cache that has a getTTD() method on its entries, a preRemoval() method and a 'sequence' index as its second index
@@ -47,7 +49,6 @@ template <typename S, typename C, typename T> void pruneCollection(C& container,
 
   for (auto iter = sidx.begin(); iter != sidx.end() && tried < lookAt ; ++tried) {
     if (iter->getTTD() < now) {
-      container.preRemoval(*iter);
       iter = sidx.erase(iter);
       erased++;
     }
@@ -69,7 +70,6 @@ template <typename S, typename C, typename T> void pruneCollection(C& container,
   // just lob it off from the beginning
   auto iter = sidx.begin();
   for (size_t i = 0; i < toTrim && iter != sidx.end(); i++) {
-    container.preRemoval(*iter);
     iter = sidx.erase(iter);
   }
 }
@@ -96,18 +96,18 @@ template <typename S, typename T> void moveCacheItemToBack(T& collection, typena
   moveCacheItemToFrontOrBack<S>(collection, iter, false);
 }
 
-template <typename S, typename T> uint64_t pruneLockedCollectionsVector(vector<T>& maps)
+template <typename S, typename T> uint64_t pruneLockedCollectionsVector(std::vector<T>& maps)
 {
   uint64_t totErased = 0;
   time_t now = time(nullptr);
 
   for(auto& mc : maps) {
-    WriteLock wl(&mc.d_mut);
+    auto map = mc.d_map.write_lock();
 
-    uint64_t lookAt = (mc.d_map.size() + 9) / 10; // Look at 10% of this shard
+    uint64_t lookAt = (map->size() + 9) / 10; // Look at 10% of this shard
     uint64_t erased = 0;
 
-    auto& sidx = boost::multi_index::get<S>(mc.d_map);
+    auto& sidx = boost::multi_index::get<S>(*map);
     for(auto i = sidx.begin(); i != sidx.end() && lookAt > 0; lookAt--) {
       if(i->ttd < now) {
         i = sidx.erase(i);
@@ -122,7 +122,7 @@ template <typename S, typename T> uint64_t pruneLockedCollectionsVector(vector<T
   return totErased;
 }
 
-template <typename S, typename C, typename T> uint64_t pruneMutexCollectionsVector(C& container, vector<T>& maps, uint64_t maxCached, uint64_t cacheSize)
+template <typename S, typename C, typename T> uint64_t pruneMutexCollectionsVector(C& container, std::vector<T>& maps, uint64_t maxCached, uint64_t cacheSize)
 {
   time_t now = time(nullptr);
   uint64_t totErased = 0;
@@ -139,20 +139,21 @@ template <typename S, typename C, typename T> uint64_t pruneMutexCollectionsVect
   }
 
   uint64_t maps_size = maps.size();
-  if (maps_size == 0)
-      return 0;
+  if (maps_size == 0) {
+    return 0;
+  }
 
-  for (auto& mc : maps) {
-    const typename C::lock l(mc);
-    mc.invalidate();
-    auto& sidx = boost::multi_index::get<S>(mc.d_map);
+  for (auto& content : maps) {
+    auto mc = content.lock();
+    mc->invalidate();
+    auto& sidx = boost::multi_index::get<S>(mc->d_map);
     uint64_t erased = 0, lookedAt = 0;
     for (auto i = sidx.begin(); i != sidx.end(); lookedAt++) {
       if (i->getTTD() < now) {
-        container.preRemoval(*i);
+        container.preRemoval(*mc, *i);
         i = sidx.erase(i);
         erased++;
-        mc.d_entriesCount--;
+        --content.d_entriesCount;
       } else {
         ++i;
       }
@@ -174,17 +175,17 @@ template <typename S, typename C, typename T> uint64_t pruneMutexCollectionsVect
 
   toTrim -= totErased;
 
-    while (true) {
+  while (true) {
     size_t pershard = toTrim / maps_size + 1;
-    for (auto& mc : maps) {
-      const typename C::lock l(mc);
-      mc.invalidate();
-      auto& sidx = boost::multi_index::get<S>(mc.d_map);
+    for (auto& content : maps) {
+      auto mc = content.lock();
+      mc->invalidate();
+      auto& sidx = boost::multi_index::get<S>(mc->d_map);
       size_t removed = 0;
       for (auto i = sidx.begin(); i != sidx.end() && removed < pershard; removed++) {
-        container.preRemoval(*i);
+        container.preRemoval(*mc, *i);
         i = sidx.erase(i);
-        mc.d_entriesCount--;
+        --content.d_entriesCount;
         totErased++;
         toTrim--;
         if (toTrim == 0) {
@@ -197,28 +198,28 @@ template <typename S, typename C, typename T> uint64_t pruneMutexCollectionsVect
   return totErased;
 }
 
-template <typename T> uint64_t purgeLockedCollectionsVector(vector<T>& maps)
+template <typename T> uint64_t purgeLockedCollectionsVector(std::vector<T>& maps)
 {
   uint64_t delcount=0;
 
   for(auto& mc : maps) {
-    WriteLock wl(&mc.d_mut);
-    delcount += mc.d_map.size();
-    mc.d_map.clear();
+    auto map = mc.d_map.write_lock();
+    delcount += map->size();
+    map->clear();
   }
 
   return delcount;
 }
 
-template <typename N, typename T> uint64_t purgeLockedCollectionsVector(vector<T>& maps, const std::string& match)
+template <typename N, typename T> uint64_t purgeLockedCollectionsVector(std::vector<T>& maps, const std::string& match)
 {
   uint64_t delcount=0;
-  string prefix(match);
+  std::string prefix(match);
   prefix.resize(prefix.size()-1);
   DNSName dprefix(prefix);
   for(auto& mc : maps) {
-    WriteLock wl(&mc.d_mut);
-    auto& idx = boost::multi_index::get<N>(mc.d_map);
+    auto map = mc.d_map.write_lock();
+    auto& idx = boost::multi_index::get<N>(*map);
     auto iter = idx.lower_bound(dprefix);
     auto start = iter;
 
@@ -237,8 +238,8 @@ template <typename N, typename T> uint64_t purgeLockedCollectionsVector(vector<T
 template <typename N, typename T> uint64_t purgeExactLockedCollection(T& mc, const DNSName& qname)
 {
   uint64_t delcount=0;
-  WriteLock wl(&mc.d_mut);
-  auto& idx = boost::multi_index::get<N>(mc.d_map);
+  auto map = mc.d_map.write_lock();
+  auto& idx = boost::multi_index::get<N>(*map);
   auto range = idx.equal_range(qname);
   if(range.first != range.second) {
     delcount += distance(range.first, range.second);
