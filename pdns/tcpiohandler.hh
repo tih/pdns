@@ -9,7 +9,8 @@
 #include "misc.hh"
 #include "noinitvector.hh"
 
-enum class IOState : uint8_t { Done, NeedRead, NeedWrite };
+/* Async is only returned for TLS connections, if OpenSSL's async mode has been enabled */
+enum class IOState : uint8_t { Done, NeedRead, NeedWrite, Async };
 
 class TLSSession
 {
@@ -39,6 +40,7 @@ public:
   virtual std::vector<std::unique_ptr<TLSSession>> getSessions() = 0;
   virtual void setSession(std::unique_ptr<TLSSession>& session) = 0;
   virtual bool isUsable() const = 0;
+  virtual std::vector<int> getAsyncFDs() = 0;
   virtual void close() = 0;
 
   void setUnknownTicketKey()
@@ -76,7 +78,7 @@ public:
   }
   virtual ~TLSCtx() {}
   virtual std::unique_ptr<TLSConnection> getConnection(int socket, const struct timeval& timeout, time_t now) = 0;
-  virtual std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, int socket, const struct timeval& timeout) = 0;
+  virtual std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout) = 0;
   virtual void rotateTicketsKey(time_t now) = 0;
   virtual void loadTicketsKeys(const std::string& file)
   {
@@ -231,10 +233,10 @@ class TCPIOHandler
 public:
   enum class Type : uint8_t { Client, Server };
 
-  TCPIOHandler(const std::string& host, int socket, const struct timeval& timeout, std::shared_ptr<TLSCtx> ctx, time_t now): d_socket(socket)
+  TCPIOHandler(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout, std::shared_ptr<TLSCtx> ctx, time_t now): d_socket(socket)
   {
     if (ctx) {
-      d_conn = ctx->getClientConnection(host, d_socket, timeout);
+      d_conn = ctx->getClientConnection(host, hostIsAddr, d_socket, timeout);
     }
   }
 
@@ -545,6 +547,14 @@ public:
       return isTCPSocketUsable(d_socket);
     }
     return d_conn->isUsable();
+  }
+
+  std::vector<int> getAsyncFDs()
+  {
+    if (!d_conn) {
+      return {};
+    }
+    return d_conn->getAsyncFDs();
   }
 
   const static bool s_disableConnectForUnitTests;

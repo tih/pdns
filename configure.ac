@@ -39,6 +39,7 @@ LT_INIT([disable-static dlopen])
 
 PDNS_CHECK_OS
 PTHREAD_SET_NAME
+AC_FUNC_STRERROR_R
 
 PDNS_WITH_LUA([mandatory])
 PDNS_CHECK_LUA_HPP
@@ -105,6 +106,8 @@ AS_IF([test "x$enable_dns_over_tls" != "xno"], [
     AC_MSG_ERROR([DNS over TLS support requested but neither GnuTLS nor OpenSSL are available])
   ])
 ])
+
+PDNS_ENABLE_IPCIPHER
 
 PDNS_CHECK_RAGEL([pdns/dnslabeltext.cc], [www.powerdns.com])
 PDNS_CHECK_CLOCK_GETTIME

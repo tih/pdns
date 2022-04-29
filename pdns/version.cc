@@ -67,7 +67,7 @@ string productTypeApiType() {
 
 void showProductVersion()
 {
-  g_log<<Logger::Warning<<productName()<<" "<< VERSION << " (C) 2001-2021 "
+  g_log<<Logger::Warning<<productName()<<" "<< VERSION << " (C) 2001-2022 "
     "PowerDNS.COM BV" << endl;
   g_log<<Logger::Warning<<"Using "<<(sizeof(unsigned long)*8)<<"-bits mode. "
     "Built using " << compilerVersion()
@@ -137,6 +137,12 @@ void showBuildConfiguration()
 #endif
 #ifdef HAVE_LIBCURL
     "curl " <<
+#endif
+#ifdef HAVE_DNS_OVER_TLS
+    "DoT " <<
+#endif
+#ifdef HAVE_EVP_PKEY_CTX_SET1_SCRYPT_SALT
+    "scrypt " <<
 #endif
 #ifdef VERBOSELOG
     "verboselog" <<

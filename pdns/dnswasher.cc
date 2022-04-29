@@ -37,15 +37,18 @@ otherwise, obfuscate the response IP address
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include "namespaces.hh"
 #include "statbag.hh"
+StatBag S;
+
+#ifdef HAVE_IPCIPHER
 #include "dnspcap.hh"
 #include "iputils.hh"
 #include "ipcipher.hh"
-#include "namespaces.hh"
 #include <boost/program_options.hpp>
 #include "base64.hh"
 
-StatBag S;
 
 namespace po = boost::program_options;
 po::variables_map g_vm;
@@ -272,3 +275,11 @@ catch(std::exception& e)
 {
   cerr<<"Fatal: "<<e.what()<<endl;
 }
+
+#else
+int main()
+{
+  cerr<<"dnswasher requires ipcipher support, which is not available"<<endl;
+  exit(1);
+}
+#endif /* HAVE_IPCIPHER */

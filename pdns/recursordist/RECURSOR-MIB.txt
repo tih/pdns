@@ -45,6 +45,9 @@ rec MODULE-IDENTITY
     REVISION "202111090000Z"
     DESCRIPTION "Added NOTIFY-related metrics."
 
+    REVISION "202201310000Z"
+    DESCRIPTION "Added non-resolving NS name metric."
+
     ::= { powerdns 2 }
 
 powerdns		OBJECT IDENTIFIER ::= { enterprises 43315 }
@@ -464,7 +467,7 @@ failedHostEntries OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of failed host entries"
+        "Number of entries in the failed NS cache"
     ::= { stats 52 }
 
 concurrentQueries OBJECT-TYPE
@@ -688,7 +691,7 @@ dnssecValidations OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC validations"
+        "Number of responses sent, packet-cache hits excluded, for which a DNSSEC validation was requested by either the client or the configuration"
     ::= { stats 80 }
 
 dnssecResultInsecure OBJECT-TYPE
@@ -696,7 +699,7 @@ dnssecResultInsecure OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC insecure results"
+        "Number of responses sent, excluding packet-cache hits, that were in the DNSSEC insecure state"
     ::= { stats 81 }
 
 dnssecResultSecure OBJECT-TYPE
@@ -704,7 +707,7 @@ dnssecResultSecure OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC secure results"
+        "Number of responses sent, excluding packet-cache hits, that were in the DNSSEC secure state"
     ::= { stats 82 }
 
 dnssecResultBogus OBJECT-TYPE
@@ -712,7 +715,7 @@ dnssecResultBogus OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC bogus results"
+        "Number of responses sent, excluding packet-cache hits, that were in the DNSSEC bogus state"
     ::= { stats 83 }
 
 dnssecResultIndeterminate OBJECT-TYPE
@@ -720,7 +723,7 @@ dnssecResultIndeterminate OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC indeterminate results"
+        "Number of responses sent, excluding packet-cache hits, that were in the DNSSEC indeterminate state"
     ::= { stats 84 }
 
 dnssecResultNta OBJECT-TYPE
@@ -728,7 +731,7 @@ dnssecResultNta OBJECT-TYPE
     MAX-ACCESS read-only
     STATUS current
     DESCRIPTION
-        "Number of DNSSEC NTA results"
+        "Number of responses sent, excluding packet-cache hits, that were in the DNSSEC NTA state"
     ::= { stats 85 }
 
 policyResultNoaction OBJECT-TYPE
@@ -1050,6 +1053,15 @@ zoneDisallowedNotify OBJECT-TYPE
     DESCRIPTION
         "Number of NOTIFY operations not allowed by allow-notify-for"
     ::= { stats 125 }
+
+nonResolvingNameserverEntries OBJECT-TYPE
+    SYNTAX CounterBasedGauge64
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Number of entries in the non-resolving NS name cache"
+    ::= { stats 126 }
+
 ---
 --- Traps / Notifications
 ---
@@ -1220,7 +1232,10 @@ recGroup OBJECT-GROUP
         udp6SndbufErrors,
         udp6NoportErrors,
         udp6inErrors,
-        udp6InCsumErrors
+        udp6InCsumErrors,
+        sourceDisallowedNotify,
+        zoneDisallowedNotify,
+        nonResolvingNameserverEntries
     }
     STATUS current
     DESCRIPTION "Objects conformance group for PowerDNS Recursor"

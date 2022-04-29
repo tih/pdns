@@ -2,6 +2,214 @@ Changelog
 =========
 
 .. changelog::
+  :version: 1.7.1
+  :released: 25th of April 2022
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11195
+
+    Fix compilation with OpenSSL 3.0.0
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11094
+    :tickets: 11081
+
+    Docker images: remove capability requirements
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11292
+    :tickets: 11290
+
+    Docker image: install ca-certificates
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11335
+    :tickets: 11330
+
+    Fix a use-after-free in case of a network error in the middle of a XFR query
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11550
+    :tickets: 11504
+
+    Properly use eBPF when the DynBlock is not set
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11176
+    :tickets: 11113
+
+    Work around a compiler bug seen on OpenBSD/amd64 using clang-13
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11197
+
+    Stop using the now deprecated and useless std::binary_function
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, DNS over TLS
+    :pullreq: 11251
+    :tickets: 11249
+
+    Set Server Name Indication on outgoing TLS connections (DoT, DoH)
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 11253
+    :tickets: 11250
+
+    Fix the health-check timeout for outgoing DoH connections
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11255
+    :tickets: 11254
+
+    Fix 'inConfigCheck()'
+
+  .. change::
+    :tags: Bug Fixes, Metrics
+    :pullreq: 11323
+    :tickets: 11239
+
+    Fix the latency-count metric
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 11324
+    :tickets: 11201
+
+    Remove the leak warning with GnuTLS >= 3.7.3
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11545
+    :tickets: 11501
+
+    Use the correct outgoing protocol in our ring buffers
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11546
+    :tickets: 11383
+
+    Raise the number of entries in a packet cache to at least 1
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11547
+    :tickets: 11434
+
+    Add a 'getAddressAndPort()' method to DOHFrontend and TLSFrontend objects
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11565
+
+    Fix wrong eBPF values (qtype, counter) being inserted for qnames
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11572
+    :tickets: 11375
+
+    The check interval applies to health-check, not timeouts
+
+.. changelog::
+  :version: 1.7.0
+  :released: 17th of January 2022
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11156
+    :tickets: 11131
+
+    Test the correct member in DynBlockRatioRule::warningRatioExceeded (Doug Freed)
+
+.. changelog::
+  :version: 1.7.0-rc1
+  :released: 22nd of December 2021
+
+  .. change::
+    :tags: Improvements, DNS over TLS, Performance
+    :pullreq: 11037
+
+    Reuse and save the TLS session tickets in DoT healthchecks
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, Security
+    :pullreq: 11075
+
+    Fix a double-free when a DoH cross-protocol response is dropped
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS
+    :pullreq: 11079
+
+    Check the size of the query when re-sending a DoH query
+
+.. changelog::
+  :version: 1.7.0-beta2
+  :released: 29th of November 2021
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 10993
+    :tickets: 10988
+
+    Fix compiler/static analyzer warnings
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 10997
+
+    Add a function to know how many TLS sessions are currently cached
+
+  .. change::
+    :tags: Bug Fixes, DNS over HTTPS, DNS over TLS
+    :pullreq: 10999
+
+    Fix a memory leak when reusing TLS tickets for outgoing connections
+
+  .. change::
+    :tags: Improvements, DNS over HTTPS, DNS over TLS
+    :pullreq: 11001
+
+    Warn that GnuTLS 3.7.x leaks memory when validating certs
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11006
+    :tickets: 10135
+
+    Add 'showWebserverConfig'
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11007
+
+    Fix Lua parameters bound checks
+
+  .. change::
+    :tags: Improvements, Performance
+    :pullreq: 11008
+    :tickets: 10898
+
+    Add a function to set the UDP recv/snd buffer sizes
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11031
+
+    Add missing visibility attribute on `dnsdist_ffi_dnsquestion_get_qname_hash`
+
+.. changelog::
   :version: 1.7.0-beta1
   :released: 16th of November 2021
 

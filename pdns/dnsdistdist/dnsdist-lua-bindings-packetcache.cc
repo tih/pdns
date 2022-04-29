@@ -33,7 +33,7 @@
 void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
 {
   /* PacketCache */
-  luaCtx.writeFunction("newPacketCache", [client](size_t maxEntries, boost::optional<std::unordered_map<std::string, boost::variant<bool, size_t, std::vector<std::pair<int, uint16_t>>>>> vars) {
+  luaCtx.writeFunction("newPacketCache", [client](size_t maxEntries, boost::optional<LuaAssociativeTable<boost::variant<bool, size_t, LuaArray<uint16_t>>>> vars) {
 
       bool keepStaleData = false;
       size_t maxTTL = 86400;
@@ -95,10 +95,16 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
           }
         }
         if (vars->count("skipOptions")) {
-          for (auto option: boost::get<std::vector<std::pair<int, uint16_t>>>(vars->at("skipOptions"))) {
+          for (auto option: boost::get<LuaArray<uint16_t>>(vars->at("skipOptions"))) {
             optionsToSkip.insert(option.second);
           }
         }
+      }
+
+      if (maxEntries == 0) {
+        warnlog("The number of entries in the packet cache is set to 0, raising to 1");
+        g_outputBuffer += "The number of entries in the packet cache is set to 0, raising to 1";
+        maxEntries = 1;
       }
 
       if (maxEntries < numberOfShards) {
@@ -119,6 +125,8 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
 
       return res;
     });
+
+#ifndef DISABLE_PACKETCACHE_BINDINGS
   luaCtx.registerFunction<std::string(std::shared_ptr<DNSDistPacketCache>::*)()const>("toString", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
       if (cache) {
         return cache->toString();
@@ -173,8 +181,8 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
         g_outputBuffer+="TTL Too Shorts: " + std::to_string(cache->getTTLTooShorts()) + "\n";
       }
     });
-  luaCtx.registerFunction<std::unordered_map<std::string, uint64_t>(std::shared_ptr<DNSDistPacketCache>::*)()const>("getStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
-      std::unordered_map<std::string, uint64_t> stats;
+  luaCtx.registerFunction<LuaAssociativeTable<uint64_t>(std::shared_ptr<DNSDistPacketCache>::*)()const>("getStats", [](const std::shared_ptr<DNSDistPacketCache>& cache) {
+      LuaAssociativeTable<uint64_t> stats;
       if (cache) {
         stats["entries"] = cache->getEntriesCount();
         stats["maxEntries"] = cache->getMaxEntries();
@@ -211,4 +219,5 @@ void setupLuaBindingsPacketCache(LuaContext& luaCtx, bool client)
         g_outputBuffer += "Dumped " + std::to_string(records) + " records\n";
       }
     });
+#endif /* DISABLE_PACKETCACHE_BINDINGS */
 }

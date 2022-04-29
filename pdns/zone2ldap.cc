@@ -33,7 +33,6 @@
 #include "arguments.hh"
 #include "bindparserclasses.hh"
 #include "statbag.hh"
-#include <boost/function.hpp>
 #include "dnsrecords.hh"
 #include "misc.hh"
 #include "dns.hh"
@@ -274,7 +273,7 @@ int main( int argc, char* argv[] )
 
                 g_basedn = args["basedn"];
                 g_dnsttl = args.mustDo( "dnsttl" );
-                typedef boost::function<void(unsigned int, const DNSName &, const string &, const string &, int)> callback_t;
+                typedef std::function<void(unsigned int, const DNSName &, const string &, const string &, int)> callback_t;
                 callback_t callback = callback_simple;
                 if( args["layout"] == "tree" )
                 {
@@ -294,7 +293,7 @@ int main( int argc, char* argv[] )
                 }
 
                 if ( !args["domainid"].empty() )
-                        g_domainid = pdns_stou( args["domainid"] );
+                        pdns::checked_stoi_into(g_domainid, args["domainid"]);
                 else
                         g_domainid = 1;
 

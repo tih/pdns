@@ -45,6 +45,7 @@ auth_build_deps = [    # FIXME: perhaps we should be stealing these from the deb
     'ruby-bundler',
     'ruby-dev',
     'sqlite3',
+    'unixodbc-dev',
 ]
 rec_build_deps = [
     'libcap-dev',
@@ -131,9 +132,25 @@ def install_clang_runtime(c):
     # this gives us the symbolizer, for symbols in asan/ubsan traces
     c.sudo('apt-get -qq -y --no-install-recommends install clang-12')
 
+def install_libdecaf(c, product):
+    c.run('git clone https://git.code.sf.net/p/ed448goldilocks/code /tmp/libdecaf')
+    with c.cd('/tmp/libdecaf'):
+        c.run('git checkout 41f349')
+        c.run('cmake -B build '
+              '-DCMAKE_INSTALL_PREFIX=/usr/local '
+              '-DCMAKE_INSTALL_LIBDIR=lib '
+              '-DENABLE_STATIC=OFF '
+              '-DENABLE_TESTS=OFF '
+              '-DCMAKE_C_FLAGS="-Wno-sizeof-array-div -Wno-array-parameter" .')
+        c.run('make -C build')
+        c.run('sudo make -C build install')
+    c.sudo(f'mkdir -p /opt/{product}/libdecaf')
+    c.sudo(f'cp /usr/local/lib/libdecaf.so* /opt/{product}/libdecaf/.')
+
 @task
 def install_auth_build_deps(c):
     c.sudo('apt-get install -qq -y --no-install-recommends ' + ' '.join(all_build_deps + git_build_deps + auth_build_deps))
+    install_libdecaf(c, 'pdns-auth')
 
 def setup_authbind(c):
     c.sudo('touch /etc/authbind/byport/53')
@@ -169,6 +186,10 @@ def install_auth_test_deps(c, backend): # FIXME: rename this, we do way more tha
     c.run('touch regression-tests/tests/verify-dnssec-zone/allow-missing regression-tests.nobackend/rectify-axfr/allow-missing') # FIXME: can this go?
     # FIXME we may want to start a background recursor here to make ALIAS tests more robust
     setup_authbind(c)
+
+    # Copy libdecaf out
+    c.sudo('mkdir -p /usr/local/lib')
+    c.sudo('cp /opt/pdns-auth/libdecaf/libdecaf.so* /usr/local/lib/.')
 
 @task
 def install_rec_bulk_deps(c): # FIXME: rename this, we do way more than apt-get
@@ -209,6 +230,7 @@ def install_dnsdist_test_deps(c): # FIXME: rename this, we do way more than apt-
               libssl-dev \
               libsystemd0 \
               libsodium23 \
+              lua-socket \
               patch \
               protobuf-compiler \
               python3-venv snmpd prometheus')
@@ -236,6 +258,7 @@ def ci_auth_configure(c):
                    ./configure \
                       CC='clang-12' \
                       CXX='clang++-12' \
+                      LDFLAGS='-L/usr/local/lib -Wl,-rpath,/usr/local/lib' \
                       --enable-option-checking=fatal \
                       --with-modules='bind geoip gmysql godbc gpgsql gsqlite3 ldap lmdb lua2 pipe remote tinydns' \
                       --enable-systemd \
@@ -247,6 +270,7 @@ def ci_auth_configure(c):
                       --enable-remotebackend-zeromq \
                       --with-lmdb=/usr \
                       --with-libsodium \
+                      --with-libdecaf \
                       --prefix=/opt/pdns-auth \
                       --enable-ixfrdist \
                       --enable-asan \
@@ -277,27 +301,74 @@ def ci_rec_configure(c):
         raise UnexpectedExit(res)
 
 @task
-def ci_dnsdist_configure(c):
+def ci_dnsdist_configure(c, features):
+    additional_flags = ''
+    if features == 'full':
+      features_set = '--enable-dnstap \
+                      --enable-dnscrypt \
+                      --enable-dns-over-tls \
+                      --enable-dns-over-https \
+                      --enable-systemd \
+                      --prefix=/opt/dnsdist \
+                      --with-gnutls \
+                      --with-libsodium \
+                      --with-lua=luajit \
+                      --with-libcap \
+                      --with-nghttp2 \
+                      --with-re2 '
+    else:
+      features_set = '--disable-dnstap \
+                      --disable-dnscrypt \
+                      --disable-ipcipher \
+                      --disable-systemd \
+                      --without-cdb \
+                      --without-ebpf \
+                      --without-gnutls \
+                      --without-libedit \
+                      --without-libsodium \
+                      --without-lmdb \
+                      --without-net-snmp \
+                      --without-nghttp2 \
+                      --without-re2 '
+      additional_flags = '-DDISABLE_COMPLETION \
+                          -DDISABLE_PROMETHEUS \
+                          -DDISABLE_PROTOBUF \
+                          -DDISABLE_BUILTIN_HTML \
+                          -DDISABLE_CARBON \
+                          -DDISABLE_SECPOLL \
+                          -DDISABLE_DEPRECATED_DYNBLOCK \
+                          -DDISABLE_LUA_WEB_HANDLERS \
+                          -DDISABLE_NON_FFI_DQ_BINDINGS \
+                          -DDISABLE_POLICIES_BINDINGS \
+                          -DDISABLE_PACKETCACHE_BINDINGS \
+                          -DDISABLE_DOWNSTREAM_BINDINGS \
+                          -DDISABLE_COMBO_ADDR_BINDINGS \
+                          -DDISABLE_CLIENT_STATE_BINDINGS \
+                          -DDISABLE_QPS_LIMITER_BINDINGS \
+                          -DDISABLE_SUFFIX_MATCH_BINDINGS \
+                          -DDISABLE_NETMASK_BINDINGS \
+                          -DDISABLE_DNSNAME_BINDINGS \
+                          -DDISABLE_DNSHEADER_BINDINGS \
+                          -DDISABLE_RECVMMSG \
+                          -DDISABLE_WEB_CONFIG \
+                          -DDISABLE_RULES_ALTERING_QUERIES \
+                          -DDISABLE_ECS_ACTIONS \
+                          -DDISABLE_TOP_N_BINDINGS \
+                          -DDISABLE_OCSP_STAPLING \
+                          -DDISABLE_HASHED_CREDENTIALS \
+                          -DDISABLE_FALSE_SHARING_PADDING \
+                          -DDISABLE_NPN'
     sanitizers = ' '.join('--enable-'+x for x in os.getenv('SANITIZERS').split('+'))
-    res = c.run('''CFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int" \
-                   CXXFLAGS="-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int -Wp,-D_GLIBCXX_ASSERTIONS" \
+    cflags = '-O1 -Werror=vla -Werror=shadow -Wformat=2 -Werror=format-security -Werror=string-plus-int'
+    cxxflags = cflags + ' -Wp,-D_GLIBCXX_ASSERTIONS ' + additional_flags
+    res = c.run('''CFLAGS="%s" \
+                   CXXFLAGS="%s" \
                    ./configure \
                      CC='clang-12' \
                      CXX='clang++-12' \
                      --enable-option-checking=fatal \
                      --enable-unit-tests \
-                     --enable-dnstap \
-                     --enable-dnscrypt \
-                     --enable-dns-over-tls \
-                     --enable-dns-over-https \
-                     --enable-systemd \
-                     --prefix=/opt/dnsdist \
-                     --with-gnutls \
-                     --with-libsodium \
-                     --with-lua=luajit \
-                     --with-libcap \
-                     --with-nghttp2 \
-                     --with-re2 ''' + sanitizers, warn=True)
+                     --prefix=/opt/dnsdist %s %s''' % (cflags, cxxflags, features_set, sanitizers), warn=True)
     if res.exited != 0:
         c.run('cat config.log')
         raise UnexpectedExit(res)
@@ -315,10 +386,11 @@ def ci_dnsdist_make(c):
     c.run('make -j4 -k V=1')
 
 @task
-def ci_auth_install_remotebackend_ruby_deps(c):
+def ci_auth_install_remotebackend_test_deps(c):
     with c.cd('modules/remotebackend'):
       # c.run('bundle config set path vendor/bundle')
       c.run('sudo ruby -S bundle install')
+    c.sudo('apt-get install -qq -y socat')
 
 @task
 def ci_auth_run_unit_tests(c):
@@ -420,7 +492,7 @@ backend_regress_tests = dict(
 @task
 def test_auth_backend(c, backend):
     if backend == 'remote':
-        ci_auth_install_remotebackend_ruby_deps(c)
+        ci_auth_install_remotebackend_test_deps(c)
 
     if backend == 'authpy':
         with c.cd('regression-tests.auth-py'):
@@ -456,8 +528,7 @@ def test_dnsdist(c):
 @task
 def test_regression_recursor(c):
     c.run('/opt/pdns-recursor/sbin/pdns_recursor --version')
-    c.run('PDNSRECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control SKIP_IPV6_TESTS=y LIBFAKETIME=/bin/false ./build-scripts/test-recursor test_RecDnstap.py')
-    c.run('PDNSRECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control SKIP_IPV6_TESTS=y ./build-scripts/test-recursor -I test_RecDnstap.py')
+    c.run('PDNSRECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control SKIP_IPV6_TESTS=y ./build-scripts/test-recursor')
 
 @task
 def test_bulk_recursor(c, threads, mthreads, shards):
@@ -467,6 +538,14 @@ def test_bulk_recursor(c, threads, mthreads, shards):
         c.run('unzip top-1m.csv.zip -d .')
         c.run('chmod +x /opt/pdns-recursor/bin/* /opt/pdns-recursor/sbin/*')
         c.run(f'DNSBULKTEST=/usr/bin/dnsbulktest RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control THRESHOLD=95 TRACE=no ./timestamp ./recursor-test 5300 100 {threads} {mthreads} {shards}')
+
+@task
+def install_swagger_tools(c):
+    c.run('npm install -g api-spec-converter')
+
+@task
+def swagger_syntax_check(c):
+    c.run('api-spec-converter docs/http-api/swagger/authoritative-api-swagger.yaml -f swagger_2 -t openapi_3 -s json -c')
 
 # this is run always
 def setup():

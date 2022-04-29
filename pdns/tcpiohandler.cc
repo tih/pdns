@@ -102,7 +102,7 @@ public:
   }
 
   /* client-side connection */
-  OpenSSLTLSConnection(const std::string& hostname, int socket, const struct timeval& timeout, std::shared_ptr<SSL_CTX>& tlsCtx): d_tlsCtx(tlsCtx), d_conn(std::unique_ptr<SSL, void(*)(SSL*)>(SSL_new(tlsCtx.get()), SSL_free)), d_hostname(hostname), d_timeout(timeout)
+  OpenSSLTLSConnection(const std::string& hostname, bool hostIsAddr, int socket, const struct timeval& timeout, std::shared_ptr<SSL_CTX>& tlsCtx): d_tlsCtx(tlsCtx), d_conn(std::unique_ptr<SSL, void(*)(SSL*)>(SSL_new(tlsCtx.get()), SSL_free)), d_hostname(hostname), d_timeout(timeout)
   {
     d_socket = socket;
 
@@ -126,22 +126,66 @@ public:
       throw std::runtime_error("Error assigning socket");
     }
 
-#if (OPENSSL_VERSION_NUMBER >= 0x1010000fL) && HAVE_SSL_SET_HOSTFLAGS // grrr libressl
-    SSL_set_hostflags(d_conn.get(), X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-    if (SSL_set1_host(d_conn.get(), d_hostname.c_str()) != 1) {
-      throw std::runtime_error("Error setting TLS hostname for certificate validation");
+    /* set outgoing Server Name Indication */
+    if (!d_hostname.empty() && SSL_set_tlsext_host_name(d_conn.get(), d_hostname.c_str()) != 1) {
+      throw std::runtime_error("Error setting TLS SNI to " + d_hostname);
     }
-#elif (OPENSSL_VERSION_NUMBER >= 0x10002000L)
-    X509_VERIFY_PARAM *param = SSL_get0_param(d_conn.get());
-    /* Enable automatic hostname checks */
-    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-    if (X509_VERIFY_PARAM_set1_host(param, d_hostname.c_str(), d_hostname.size()) != 1) {
-      throw std::runtime_error("Error setting TLS hostname for certificate validation");
-    }
+
+    if (hostIsAddr) {
+#if (OPENSSL_VERSION_NUMBER >= 0x10002000L)
+      X509_VERIFY_PARAM *param = SSL_get0_param(d_conn.get());
+      /* Enable automatic IP checks */
+      X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+      if (X509_VERIFY_PARAM_set1_ip_asc(param, d_hostname.c_str()) != 1) {
+        throw std::runtime_error("Error setting TLS IP for certificate validation");
+      }
 #else
-    /* no hostname validation for you, see https://wiki.openssl.org/index.php/Hostname_validation */
+      /* no validation for you, see https://wiki.openssl.org/index.php/Hostname_validation */
 #endif
+    }
+    else {
+#if (OPENSSL_VERSION_NUMBER >= 0x1010000fL) && HAVE_SSL_SET_HOSTFLAGS // grrr libressl
+      SSL_set_hostflags(d_conn.get(), X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+      if (SSL_set1_host(d_conn.get(), d_hostname.c_str()) != 1) {
+        throw std::runtime_error("Error setting TLS hostname for certificate validation");
+      }
+#elif (OPENSSL_VERSION_NUMBER >= 0x10002000L)
+      X509_VERIFY_PARAM *param = SSL_get0_param(d_conn.get());
+      /* Enable automatic hostname checks */
+      X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+      if (X509_VERIFY_PARAM_set1_host(param, d_hostname.c_str(), d_hostname.size()) != 1) {
+        throw std::runtime_error("Error setting TLS hostname for certificate validation");
+      }
+#else
+      /* no hostname validation for you, see https://wiki.openssl.org/index.php/Hostname_validation */
+#endif
+    }
+
     SSL_set_ex_data(d_conn.get(), s_tlsConnIndex, this);
+  }
+
+  std::vector<int> getAsyncFDs() override
+  {
+    std::vector<int> results;
+#ifdef SSL_MODE_ASYNC
+    if (SSL_waiting_for_async(d_conn.get()) != 1) {
+      return results;
+    }
+
+    OSSL_ASYNC_FD fds[32];
+    size_t numfds = sizeof(fds)/sizeof(*fds);
+    SSL_get_all_async_fds(d_conn.get(), nullptr, &numfds);
+    if (numfds == 0) {
+      return results;
+    }
+
+    SSL_get_all_async_fds(d_conn.get(), fds, &numfds);
+    results.reserve(numfds);
+    for (size_t idx = 0; idx < numfds; idx++) {
+      results.push_back(fds[idx]);
+    }
+#endif
+    return results;
   }
 
   IOState convertIORequestToIOState(int res) const
@@ -164,6 +208,11 @@ public:
     else if (error == SSL_ERROR_ZERO_RETURN) {
       throw std::runtime_error("TLS connection closed by remote end");
     }
+#ifdef SSL_MODE_ASYNC
+    else if (error == SSL_ERROR_WANT_ASYNC) {
+      return IOState::Async;
+    }
+#endif
     else {
       if (g_verbose) {
         throw std::runtime_error("Error while processing TLS connection: (" + std::to_string(error) + ") " + libssl_get_error_string());
@@ -440,14 +489,16 @@ public:
 
     const unsigned char* alpn = nullptr;
     unsigned int alpnLen  = 0;
+#ifndef DISABLE_NPN
 #ifdef HAVE_SSL_GET0_NEXT_PROTO_NEGOTIATED
     SSL_get0_next_proto_negotiated(d_conn.get(), &alpn, &alpnLen);
-#endif
+#endif /* HAVE_SSL_GET0_NEXT_PROTO_NEGOTIATED */
+#endif /* DISABLE_NPN */
 #ifdef HAVE_SSL_GET0_ALPN_SELECTED
     if (alpn == nullptr) {
       SSL_get0_alpn_selected(d_conn.get(), &alpn, &alpnLen);
     }
-#endif
+#endif /* HAVE_SSL_GET0_ALPN_SELECTED */
     if (alpn != nullptr && alpnLen > 0) {
       result.insert(result.end(), alpn, alpn + alpnLen);
     }
@@ -498,7 +549,7 @@ public:
     if (ret != 1) {
       throw std::runtime_error("Error setting up session: " + libssl_get_error_string());
     }
-    native.release();
+    session.reset();
   }
 
   void addNewTicket(SSL_SESSION* session)
@@ -538,10 +589,12 @@ public:
       libssl_set_ticket_key_callback_data(d_feContext->d_tlsCtx.get(), d_feContext.get());
     }
 
+#ifndef DISABLE_OCSP_STAPLING
     if (!d_feContext->d_ocspResponses.empty()) {
       SSL_CTX_set_tlsext_status_cb(d_feContext->d_tlsCtx.get(), &OpenSSLTLSIOCtx::ocspStaplingCb);
       SSL_CTX_set_tlsext_status_arg(d_feContext->d_tlsCtx.get(), &d_feContext->d_ocspResponses);
     }
+#endif /* DISABLE_OCSP_STAPLING */
 
     libssl_set_error_counters_callback(d_feContext->d_tlsCtx, &fe.d_tlsCounters);
 
@@ -673,6 +726,7 @@ public:
     return ret;
   }
 
+#ifndef DISABLE_OCSP_STAPLING
   static int ocspStaplingCb(SSL* ssl, void* arg)
   {
     if (ssl == nullptr || arg == nullptr) {
@@ -681,6 +735,7 @@ public:
     const auto ocspMap = reinterpret_cast<std::map<int, std::string>*>(arg);
     return libssl_ocsp_stapling_callback(ssl, *ocspMap);
   }
+#endif /* DISABLE_OCSP_STAPLING */
 
   static int newTicketFromServerCb(SSL* ssl, SSL_SESSION* session)
   {
@@ -700,9 +755,9 @@ public:
     return std::make_unique<OpenSSLTLSConnection>(socket, timeout, d_feContext);
   }
 
-  std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, int socket, const struct timeval& timeout) override
+  std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout) override
   {
-    return std::make_unique<OpenSSLTLSConnection>(host, socket, timeout, d_tlsCtx);
+    return std::make_unique<OpenSSLTLSConnection>(host, hostIsAddr, socket, timeout, d_tlsCtx);
   }
 
   void rotateTicketsKey(time_t now) override
@@ -746,15 +801,18 @@ public:
     return false;
   }
 
+#ifndef DISABLE_NPN
   bool setNextProtocolSelectCallback(bool(*cb)(unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen)) override
   {
     d_nextProtocolSelectCallback = cb;
     libssl_set_npn_select_callback(d_tlsCtx.get(), npnSelectCallback, this);
     return true;
   }
+#endif /* DISABLE_NPN */
 
 private:
   /* called in a client context, if the client advertised more than one ALPN values and the server returned more than one as well, to select the one to use. */
+#ifndef DISABLE_NPN
   static int npnSelectCallback(SSL* s, unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen, void* arg)
   {
     if (!arg) {
@@ -767,6 +825,7 @@ private:
 
     return SSL_TLSEXT_ERR_OK;
   }
+#endif /* NPN */
 
   static int alpnServerSelectCallback(SSL*, const unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen, void* arg)
   {
@@ -916,12 +975,9 @@ public:
     d_sess.data = nullptr;
   }
 
-  gnutls_datum_t getNative()
+  const gnutls_datum_t& getNative()
   {
-    auto ret = d_sess;
-    d_sess.data = nullptr;
-    d_sess.size = 0;
-    return ret;
+    return d_sess;
   }
 
 private:
@@ -1424,8 +1480,7 @@ public:
     if (ret != GNUTLS_E_SUCCESS) {
       throw std::runtime_error("Error setting up GnuTLS session: " + std::string(gnutls_strerror(ret)));
     }
-
-    session.release();
+    session.reset();
   }
 
   void close() override
@@ -1452,6 +1507,11 @@ public:
     flags |= GNUTLS_ALPN_MAND;
 #endif
     return gnutls_alpn_set_protocols(d_conn.get(), values.data(), values.size(), flags);
+  }
+
+  std::vector<int> getAsyncFDs() override
+  {
+    return {};
   }
 
 private:
@@ -1483,20 +1543,22 @@ public:
     creds = nullptr;
 
     for (const auto& pair : fe.d_tlsConfig.d_certKeyPairs) {
-      rc = gnutls_certificate_set_x509_key_file(d_creds.get(), pair.first.c_str(), pair.second.c_str(), GNUTLS_X509_FMT_PEM);
+      rc = gnutls_certificate_set_x509_key_file(d_creds.get(), pair.d_cert.c_str(), pair.d_key->c_str(), GNUTLS_X509_FMT_PEM);
       if (rc != GNUTLS_E_SUCCESS) {
-        throw std::runtime_error("Error loading certificate ('" + pair.first + "') and key ('" + pair.second + "') for TLS context on " + fe.d_addr.toStringWithPort() + ": " + gnutls_strerror(rc));
+        throw std::runtime_error("Error loading certificate ('" + pair.d_cert + "') and key ('" + pair.d_key.value() + "') for TLS context on " + fe.d_addr.toStringWithPort() + ": " + gnutls_strerror(rc));
       }
     }
 
+#ifndef DISABLE_OCSP_STAPLING
     size_t count = 0;
     for (const auto& file : fe.d_tlsConfig.d_ocspFiles) {
       rc = gnutls_certificate_set_ocsp_status_request_file(d_creds.get(), file.c_str(), count);
       if (rc != GNUTLS_E_SUCCESS) {
-        throw std::runtime_error("Error loading OCSP response from file '" + file + "' for certificate ('" + fe.d_tlsConfig.d_certKeyPairs.at(count).first + "') and key ('" + fe.d_tlsConfig.d_certKeyPairs.at(count).second + "') for TLS context on " + fe.d_addr.toStringWithPort() + ": " + gnutls_strerror(rc));
+        throw std::runtime_error("Error loading OCSP response from file '" + file + "' for certificate ('" + fe.d_tlsConfig.d_certKeyPairs.at(count).d_cert + "') and key ('" + fe.d_tlsConfig.d_certKeyPairs.at(count).d_key.value() + "') for TLS context on " + fe.d_addr.toStringWithPort() + ": " + gnutls_strerror(rc));
       }
       ++count;
     }
+#endif /* DISABLE_OCSP_STAPLING */
 
 #if GNUTLS_VERSION_NUMBER >= 0x030600
     rc = gnutls_certificate_set_known_dh_params(d_creds.get(), GNUTLS_SEC_PARAM_HIGH);
@@ -1539,6 +1601,10 @@ public:
 
     if (params.d_validateCertificates) {
       if (params.d_caStore.empty()) {
+#if GNUTLS_VERSION_NUMBER >= 0x030700 && GNUTLS_VERSION_NUMBER < 0x030703
+        /* see https://gitlab.com/gnutls/gnutls/-/issues/1277 */
+        std::cerr<<"Warning: GnuTLS 3.7.0 - 3.7.2 have a memory leak when validating server certificates in some configurations (PKCS11 support enabled, and a default PKCS11 trust store), please consider upgrading GnuTLS, using the OpenSSL provider for outgoing connections, or explicitly setting a CA store"<<std::endl;
+#endif /* GNUTLS_VERSION_NUMBER >= 0x030700 && GNUTLS_VERSION_NUMBER < 0x030703 */
         rc = gnutls_certificate_set_x509_system_trust(d_creds.get());
         if (rc < 0) {
           throw std::runtime_error("Error adding the system's default trusted CAs: " + std::string(gnutls_strerror(rc)));
@@ -1615,7 +1681,7 @@ public:
     return entry;
   }
 
-  std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, int socket, const struct timeval& timeout) override
+  std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, bool, int socket, const struct timeval& timeout) override
   {
     auto creds = getPerThreadCredentials(d_contextParameters->d_validateCertificates, d_contextParameters->d_caStore);
     auto connection = std::make_unique<GnuTLSConnection>(host, socket, timeout, creds, d_priorityCache, d_validateCerts);
@@ -1757,13 +1823,14 @@ std::shared_ptr<TLSCtx> getTLSContext(const TLSContextParameters& params)
     }
 #endif /* HAVE_LIBSSL */
   }
-#ifdef HAVE_GNUTLS
-  return std::make_shared<GnuTLSIOCtx>(params);
-#else /* HAVE_GNUTLS */
+
 #ifdef HAVE_LIBSSL
   return std::make_shared<OpenSSLTLSIOCtx>(params);
-#endif /* HAVE_LIBSSL */
+#else /* HAVE_LIBSSL */
+#ifdef HAVE_GNUTLS
+  return std::make_shared<GnuTLSIOCtx>(params);
 #endif /* HAVE_GNUTLS */
+#endif /* HAVE_LIBSSL */
 
 #endif /* HAVE_DNS_OVER_TLS */
   return nullptr;

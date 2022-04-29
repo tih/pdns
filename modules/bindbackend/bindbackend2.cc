@@ -221,7 +221,6 @@ bool Bind2Backend::startTransaction(const DNSName& qname, int id)
     int fd = mkstemp(&d_transaction_tmpname.at(0));
     if (fd == -1) {
       throw DBException("Unable to create a unique temporary zonefile '" + d_transaction_tmpname + "': " + stringerror());
-      return false;
     }
 
     d_of = std::make_unique<ofstream>(d_transaction_tmpname);
@@ -745,6 +744,10 @@ Bind2Backend::Bind2Backend(const string& suffix, bool loadZones)
   setArgPrefix("bind" + suffix);
   d_logprefix = "[bind" + suffix + "backend]";
   d_hybrid = mustDo("hybrid");
+  if (d_hybrid && g_zoneCache.isEnabled()) {
+    throw PDNSException("bind-hybrid and the zone cache currently interoperate badly. Please disable the zone cache or stop using bind-hybrid");
+  }
+
   d_transaction_id = 0;
   s_ignore_broken_records = mustDo("ignore-broken-records");
   d_upgradeContent = ::arg().mustDo("upgrade-unknown-types");
@@ -1328,6 +1331,31 @@ bool Bind2Backend::handle::get_list(DNSResourceRecord& r)
     return true;
   }
   return false;
+}
+
+bool Bind2Backend::autoPrimariesList(std::vector<AutoPrimary>& primaries)
+{
+  if (getArg("supermaster-config").empty())
+    return false;
+
+  ifstream c_if(getArg("supermasters"), std::ios::in);
+  if (!c_if) {
+    g_log << Logger::Error << "Unable to open supermasters file for read: " << stringerror() << endl;
+    return false;
+  }
+
+  string line, sip, saccount;
+  while (getline(c_if, line)) {
+    std::istringstream ii(line);
+    ii >> sip;
+    if (sip.size() != 0) {
+      ii >> saccount;
+      primaries.emplace_back(sip, "", saccount);
+    }
+  }
+
+  c_if.close();
+  return true;
 }
 
 bool Bind2Backend::superMasterBackend(const string& ip, const DNSName& domain, const vector<DNSResourceRecord>& nsset, string* nameserver, string* account, DNSBackend** db)

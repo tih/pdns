@@ -983,8 +983,8 @@ Setting this to any value less than or equal to 0 will set no limit.
 ``master``
 ----------
 
-+.. deprecated:: 4.5.0
-+  Renamed to :ref:`setting-primary`.
+.. deprecated:: 4.5.0
+  Renamed to :ref:`setting-primary`.
  
 -  Boolean
 -  Default: no
@@ -1660,6 +1660,8 @@ Turn on supermaster support. See :ref:`supermaster-operation`.
 - Boolean
 - Default: no
 
+.. versionadded:: 4.5.0
+
 Whether or not to enable IPv4 and IPv6 :ref:`autohints <svc-autohints>`.
 
 .. _setting-tcp-control-address:
@@ -1783,6 +1785,11 @@ Disable after record contents have been upgraded.
 
 This option is supported by the bind and Generic SQL backends. 
 
+.. note::
+  When using a generic SQL backend, records with an unknown record type (see :doc:`../appendices/types`) can be identified with the following SQL query::
+  
+      SELECT * from records where type like 'TYPE%';
+
 .. _setting-version-string:
 
 ``version-string``
@@ -1834,7 +1841,7 @@ Webserver/API access is only allowed from these subnets.
 
 ``webserver-hash-plaintext-credentials``
 ----------------------------------------
-..versionadded:: 4.6.0
+.. versionadded:: 4.6.0
 
 -  Boolean
 -  Default: no

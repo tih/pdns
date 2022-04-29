@@ -28,8 +28,8 @@
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/ordered_index.hpp>
 #include <boost/multi_index/hashed_index.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
+#include <boost/multi_index/key_extractors.hpp>
 #include <boost/optional.hpp>
 
 #include "packetcache.hh"
@@ -59,7 +59,11 @@ public:
   };
   typedef boost::optional<PBData> OptPBData;
 
-  RecursorPacketCache();
+  RecursorPacketCache(size_t maxsize) :
+    d_maxSize(maxsize)
+  {
+  }
+
   bool getResponsePacket(unsigned int tag, const std::string& queryPacket, time_t now, std::string* responsePacket, uint32_t* age, uint32_t* qhash);
   bool getResponsePacket(unsigned int tag, const std::string& queryPacket, const DNSName& qname, uint16_t qtype, uint16_t qclass, time_t now, std::string* responsePacket, uint32_t* age, uint32_t* qhash);
   bool getResponsePacket(unsigned int tag, const std::string& queryPacket, const DNSName& qname, uint16_t qtype, uint16_t qclass, time_t now, std::string* responsePacket, uint32_t* age, vState* valState, uint32_t* qhash, OptPBData* pbdata, bool tcp);
@@ -70,10 +74,19 @@ public:
   uint64_t doDump(int fd);
   int doWipePacketCache(const DNSName& name, uint16_t qtype = 0xffff, bool subtree = false);
 
-  void prune();
-  uint64_t d_hits, d_misses;
-  uint64_t size();
-  uint64_t bytes();
+  void setMaxSize(size_t sz)
+  {
+    d_maxSize = sz;
+  }
+
+  uint64_t size() const
+  {
+    return d_packetCache.size();
+  }
+  uint64_t bytes() const;
+
+  uint64_t d_hits{0};
+  uint64_t d_misses{0};
 
 private:
   struct HashTag
@@ -84,8 +97,9 @@ private:
   };
   struct Entry
   {
-    Entry(const DNSName& qname, std::string&& packet, std::string&& query, bool tcp) :
-      d_name(qname), d_packet(std::move(packet)), d_query(std::move(query)), d_tcp(tcp)
+    Entry(const DNSName& qname, uint16_t qtype, uint16_t qclass, std::string&& packet, std::string&& query, bool tcp,
+          uint32_t qhash, time_t ttd, time_t now, uint32_t tag, vState vstate) :
+      d_name(qname), d_packet(std::move(packet)), d_query(std::move(query)), d_ttd(ttd), d_creation(now), d_qhash(qhash), d_tag(tag), d_type(qtype), d_class(qclass), d_vstate(vstate), d_tcp(tcp)
     {
     }
 
@@ -131,6 +145,7 @@ private:
     packetCache_t;
 
   packetCache_t d_packetCache;
+  size_t d_maxSize;
 
   static bool qrMatch(const packetCache_t::index<HashTag>::type::iterator& iter, const std::string& queryPacket, const DNSName& qname, uint16_t qtype, uint16_t qclass);
   bool checkResponseMatches(std::pair<packetCache_t::index<HashTag>::type::iterator, packetCache_t::index<HashTag>::type::iterator> range, const std::string& queryPacket, const DNSName& qname, uint16_t qtype, uint16_t qclass, time_t now, std::string* responsePacket, uint32_t* age, vState* valState, OptPBData* pbdata);

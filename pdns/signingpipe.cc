@@ -100,12 +100,12 @@ namespace {
 bool
 dedupLessThan(const DNSZoneRecord& a, const DNSZoneRecord &b)
 {
-  return make_tuple(a.dr.d_content->getZoneRepresentation(), a.dr.d_ttl) < make_tuple(b.dr.d_content->getZoneRepresentation(), b.dr.d_ttl);  // XXX SLOW SLOW SLOW
+  return std::make_tuple(a.dr.d_content->getZoneRepresentation(), a.dr.d_ttl) < std::make_tuple(b.dr.d_content->getZoneRepresentation(), b.dr.d_ttl);  // XXX SLOW SLOW SLOW
 }
 
 bool dedupEqual(const DNSZoneRecord& a, const DNSZoneRecord &b)
 {
-  return make_tuple(a.dr.d_content->getZoneRepresentation(), a.dr.d_ttl) == make_tuple(b.dr.d_content->getZoneRepresentation(), b.dr.d_ttl);  // XXX SLOW SLOW SLOW
+  return std::make_tuple(a.dr.d_content->getZoneRepresentation(), a.dr.d_ttl) == std::make_tuple(b.dr.d_content->getZoneRepresentation(), b.dr.d_ttl);  // XXX SLOW SLOW SLOW
 }
 }
 
@@ -199,13 +199,15 @@ void ChunkedSigningPipe::sendRRSetToWorker() // it sounds so socialist!
   
   if(wantWrite && !rwVect.second.empty()) {
     shuffle(rwVect.second.begin(), rwVect.second.end(), pdns::dns_random_engine()); // pick random available worker
-    auto ptr = d_rrsetToSign.release();
+    auto ptr = d_rrsetToSign.get();
     writen2(*rwVect.second.begin(), &ptr, sizeof(ptr));
+    d_rrsetToSign.release();
     d_rrsetToSign = make_unique<rrset_t>();
     d_outstandings[*rwVect.second.begin()]++;
     d_outstanding++;
     d_queued++;
     wantWrite=false;
+    // coverity[leaked_storage]
   } 
   
   if(wantRead) {
@@ -248,12 +250,14 @@ void ChunkedSigningPipe::sendRRSetToWorker() // it sounds so socialist!
   if(wantWrite) {  // our optimization above failed, we now wait synchronously
     rwVect = waitForRW(false, wantWrite, -1); // wait for something to happen
     shuffle(rwVect.second.begin(), rwVect.second.end(), pdns::dns_random_engine()); // pick random available worker
-    auto ptr = d_rrsetToSign.release();
+    auto ptr = d_rrsetToSign.get();
     writen2(*rwVect.second.begin(), &ptr, sizeof(ptr));
+    d_rrsetToSign.release();
     d_rrsetToSign = make_unique<rrset_t>();
     d_outstandings[*rwVect.second.begin()]++;
     d_outstanding++;
     d_queued++;
+    // coverity[leaked_storage]
   }
   
 }

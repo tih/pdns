@@ -28,7 +28,8 @@
 
 #include "statnode.hh"
 
-static std::unordered_map<unsigned int, vector<boost::variant<string,double>>> getGenResponses(unsigned int top, boost::optional<int> labels, std::function<bool(const Rings::Response&)> pred)
+#ifndef DISABLE_TOP_N_BINDINGS
+static LuaArray<std::vector<boost::variant<string,double>>> getGenResponses(uint64_t top, boost::optional<int> labels, std::function<bool(const Rings::Response&)> pred)
 {
   setLuaNoSideEffect();
   map<DNSName, unsigned int> counts;
@@ -61,7 +62,7 @@ static std::unordered_map<unsigned int, vector<boost::variant<string,double>>> g
   //      cout<<"Looked at "<<total<<" responses, "<<counts.size()<<" different ones"<<endl;
   vector<pair<unsigned int, DNSName>> rcounts;
   rcounts.reserve(counts.size());
-  for(const auto& c : counts)
+  for (const auto& c : counts)
     rcounts.emplace_back(c.second, c.first.makeLowerCase());
 
   sort(rcounts.begin(), rcounts.end(), [](const decltype(rcounts)::value_type& a,
@@ -69,24 +70,31 @@ static std::unordered_map<unsigned int, vector<boost::variant<string,double>>> g
          return b.first < a.first;
        });
 
-  std::unordered_map<unsigned int, vector<boost::variant<string,double>>> ret;
-  unsigned int count=1, rest=0;
-  for(const auto& rc : rcounts) {
-    if(count==top+1)
+  LuaArray<vector<boost::variant<string,double>>> ret;
+  ret.reserve(std::min(rcounts.size(), static_cast<size_t>(top + 1U)));
+  uint64_t count = 1;
+  unsigned int rest = 0;
+  for (const auto& rc : rcounts) {
+    if (count == top+1) {
       rest+=rc.first;
-    else
-      ret.insert({count++, {rc.second.toString(), rc.first, 100.0*rc.first/total}});
+    }
+    else {
+      ret.push_back({count++, {rc.second.toString(), rc.first, 100.0*rc.first/total}});
+    }
   }
 
   if (total > 0) {
-    ret.insert({count, {"Rest", rest, 100.0*rest/total}});
+    ret.push_back({count, {"Rest", rest, 100.0*rest/total}});
   }
   else {
-    ret.insert({count, {"Rest", rest, 100.0 }});
+    ret.push_back({count, {"Rest", rest, 100.0 }});
   }
 
   return ret;
 }
+#endif /* DISABLE_TOP_N_BINDINGS */
+
+#ifndef DISABLE_DEPRECATED_DYNBLOCK
 
 typedef std::unordered_map<ComboAddress, unsigned int, ComboAddress::addressOnlyHash, ComboAddress::addressOnlyEqual> counts_t;
 
@@ -105,10 +113,9 @@ static counts_t filterScore(const counts_t& counts,
   return ret;
 }
 
-
 typedef std::function<void(const StatNode&, const StatNode::Stat&, const StatNode::Stat&)> statvisitor_t;
 
-static void statNodeRespRing(statvisitor_t visitor, unsigned int seconds)
+static void statNodeRespRing(statvisitor_t visitor, uint64_t seconds)
 {
   struct timespec cutoff, now;
   gettime(&now);
@@ -135,22 +142,23 @@ static void statNodeRespRing(statvisitor_t visitor, unsigned int seconds)
       visitor(*node_, self, children);},  node);
 }
 
-static vector<pair<unsigned int, std::unordered_map<string,string> > > getRespRing(boost::optional<int> rcode)
+static LuaArray<LuaAssociativeTable<std::string>> getRespRing(boost::optional<int> rcode)
 {
-  typedef std::unordered_map<string,string>  entry_t;
-  vector<pair<unsigned int, entry_t > > ret;
+  typedef LuaAssociativeTable<std::string> entry_t;
+  LuaArray<entry_t> ret;
 
   for (const auto& shard : g_rings.d_shards) {
     auto rl = shard->respRing.lock();
 
-    entry_t e;
-    unsigned int count=1;
-    for(const auto& c : *rl) {
-      if(rcode && (rcode.get() != c.dh.rcode))
+    int count = 1;
+    for (const auto& c : *rl) {
+      if (rcode && (rcode.get() != c.dh.rcode)) {
         continue;
-      e["qname"]=c.name.toString();
-      e["rcode"]=std::to_string(c.dh.rcode);
-      ret.emplace_back(count, e);
+      }
+      entry_t e;
+      e["qname"] = c.name.toString();
+      e["rcode"] = std::to_string(c.dh.rcode);
+      ret.emplace_back(count, std::move(e));
       count++;
     }
   }
@@ -232,9 +240,12 @@ static counts_t exceedRespByterate(unsigned int rate, int seconds)
 		   });
 }
 
+#endif /* DISABLE_DEPRECATED_DYNBLOCK */
+
 void setupLuaInspection(LuaContext& luaCtx)
 {
-  luaCtx.writeFunction("topClients", [](boost::optional<unsigned int> top_) {
+#ifndef DISABLE_TOP_N_BINDINGS
+  luaCtx.writeFunction("topClients", [](boost::optional<uint64_t> top_) {
       setLuaNoSideEffect();
       auto top = top_.get_value_or(10);
       map<ComboAddress, unsigned int,ComboAddress::addressOnlyLessThan > counts;
@@ -268,7 +279,7 @@ void setupLuaInspection(LuaContext& luaCtx)
       g_outputBuffer += (fmt % (count) % "Rest" % rest % (total > 0 ? 100.0*rest/total : 100.0)).str();
     });
 
-  luaCtx.writeFunction("getTopQueries", [](unsigned int top, boost::optional<int> labels) {
+  luaCtx.writeFunction("getTopQueries", [](uint64_t top, boost::optional<int> labels) {
       setLuaNoSideEffect();
       map<DNSName, unsigned int> counts;
       unsigned int total=0;
@@ -352,26 +363,27 @@ void setupLuaInspection(LuaContext& luaCtx)
       return ret;
     });
 
-  luaCtx.writeFunction("getTopResponses", [](unsigned int top, unsigned int kind, boost::optional<int> labels) {
+  luaCtx.writeFunction("getTopResponses", [](uint64_t top, uint64_t kind, boost::optional<int> labels) {
       return getGenResponses(top, labels, [kind](const Rings::Response& r) { return r.dh.rcode == kind; });
     });
 
   luaCtx.executeCode(R"(function topResponses(top, kind, labels) top = top or 10; kind = kind or 0; for k,v in ipairs(getTopResponses(top, kind, labels)) do show(string.format("%4d  %-40s %4d %4.1f%%",k,v[1],v[2],v[3])) end end)");
 
 
-  luaCtx.writeFunction("getSlowResponses", [](unsigned int top, unsigned int msec, boost::optional<int> labels) {
+  luaCtx.writeFunction("getSlowResponses", [](uint64_t top, uint64_t msec, boost::optional<int> labels) {
       return getGenResponses(top, labels, [msec](const Rings::Response& r) { return r.usec > msec*1000; });
     });
 
 
   luaCtx.executeCode(R"(function topSlow(top, msec, labels) top = top or 10; msec = msec or 500; for k,v in ipairs(getSlowResponses(top, msec, labels)) do show(string.format("%4d  %-40s %4d %4.1f%%",k,v[1],v[2],v[3])) end end)");
 
-  luaCtx.writeFunction("getTopBandwidth", [](unsigned int top) {
+  luaCtx.writeFunction("getTopBandwidth", [](uint64_t top) {
       setLuaNoSideEffect();
       return g_rings.getTopBandwidth(top);
     });
 
   luaCtx.executeCode(R"(function topBandwidth(top) top = top or 10; for k,v in ipairs(getTopBandwidth(top)) do show(string.format("%4d  %-40s %4d %4.1f%%",k,v[1],v[2],v[3])) end end)");
+#endif /* DISABLE_TOP_N_BINDINGS */
 
   luaCtx.writeFunction("delta", []() {
       setLuaNoSideEffect();
@@ -386,7 +398,7 @@ void setupLuaInspection(LuaContext& luaCtx)
       }
     });
 
-  luaCtx.writeFunction("grepq", [](boost::variant<string, vector<pair<int,string> > > inp, boost::optional<unsigned int> limit) {
+  luaCtx.writeFunction("grepq", [](LuaTypeOrArrayOf<std::string> inp, boost::optional<unsigned int> limit) {
       setLuaNoSideEffect();
       boost::optional<Netmask>  nm;
       boost::optional<DNSName> dn;
@@ -397,7 +409,7 @@ void setupLuaInspection(LuaContext& luaCtx)
       if(str)
         vec.push_back(*str);
       else {
-        auto v = boost::get<vector<pair<int, string> > >(inp);
+        auto v = boost::get<LuaArray<std::string>>(inp);
         for(const auto& a: v)
           vec.push_back(a.second);
       }
@@ -617,7 +629,7 @@ void setupLuaInspection(LuaContext& luaCtx)
       auto states = g_dstates.getLocal();
       counter = 0;
       for(const auto& s : *states) {
-        ret << (fmt % counter % s->getName() % s->remote.toStringWithPort() % s->tcpCurrentConnections % s->tcpMaxConcurrentConnections % s->tcpDiedSendingQuery % s->tcpDiedReadingResponse % s->tcpGaveUp % s->tcpReadTimeouts % s->tcpWriteTimeouts % s->tcpConnectTimeouts % s->tcpNewConnections % s->tcpReusedConnections % s->tlsResumptions % s->tcpAvgQueriesPerConnection % s->tcpAvgConnectionDuration) << endl;
+        ret << (fmt % counter % s->getName() % s->d_config.remote.toStringWithPort() % s->tcpCurrentConnections % s->tcpMaxConcurrentConnections % s->tcpDiedSendingQuery % s->tcpDiedReadingResponse % s->tcpGaveUp % s->tcpReadTimeouts % s->tcpWriteTimeouts % s->tcpConnectTimeouts % s->tcpNewConnections % s->tcpReusedConnections % s->tlsResumptions % s->tcpAvgQueriesPerConnection % s->tcpAvgConnectionDuration) << endl;
         ++counter;
       }
 
@@ -710,6 +722,7 @@ void setupLuaInspection(LuaContext& luaCtx)
       }
     });
 
+#ifndef DISABLE_DEPRECATED_DYNBLOCK
   luaCtx.writeFunction("exceedServFails", [](unsigned int rate, int seconds) {
       setLuaNoSideEffect();
       return exceedRCode(rate, seconds, RCode::ServFail);
@@ -755,9 +768,10 @@ void setupLuaInspection(LuaContext& luaCtx)
   luaCtx.registerMember("drops", &StatNode::Stat::drops);
   luaCtx.registerMember("bytes", &StatNode::Stat::bytes);
 
-  luaCtx.writeFunction("statNodeRespRing", [](statvisitor_t visitor, boost::optional<unsigned int> seconds) {
-      statNodeRespRing(visitor, seconds ? *seconds : 0);
+  luaCtx.writeFunction("statNodeRespRing", [](statvisitor_t visitor, boost::optional<uint64_t> seconds) {
+      statNodeRespRing(visitor, seconds ? *seconds : 0U);
     });
+#endif /* DISABLE_DEPRECATED_DYNBLOCK */
 
   /* DynBlockRulesGroup */
   luaCtx.writeFunction("dynBlockRulesGroup", []() { return std::make_shared<DynBlockRulesGroup>(); });
@@ -813,9 +827,9 @@ void setupLuaInspection(LuaContext& luaCtx)
         group->setMasks(v4, v6, port);
       }
     });
-  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(boost::variant<std::string, std::vector<std::pair<int, std::string>>, NetmaskGroup>)>("excludeRange", [](std::shared_ptr<DynBlockRulesGroup>& group, boost::variant<std::string, std::vector<std::pair<int, std::string>>, NetmaskGroup> ranges) {
-      if (ranges.type() == typeid(std::vector<std::pair<int, std::string>>)) {
-        for (const auto& range : *boost::get<std::vector<std::pair<int, std::string>>>(&ranges)) {
+  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(boost::variant<std::string, LuaArray<std::string>, NetmaskGroup>)>("excludeRange", [](std::shared_ptr<DynBlockRulesGroup>& group, boost::variant<std::string, LuaArray<std::string>, NetmaskGroup> ranges) {
+      if (ranges.type() == typeid(LuaArray<std::string>)) {
+        for (const auto& range : *boost::get<LuaArray<std::string>>(&ranges)) {
           group->excludeRange(Netmask(range.second));
         }
       }
@@ -826,9 +840,9 @@ void setupLuaInspection(LuaContext& luaCtx)
         group->excludeRange(Netmask(*boost::get<std::string>(&ranges)));
       }
     });
-  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(boost::variant<std::string, std::vector<std::pair<int, std::string>>, NetmaskGroup>)>("includeRange", [](std::shared_ptr<DynBlockRulesGroup>& group, boost::variant<std::string, std::vector<std::pair<int, std::string>>, NetmaskGroup> ranges) {
-      if (ranges.type() == typeid(std::vector<std::pair<int, std::string>>)) {
-        for (const auto& range : *boost::get<std::vector<std::pair<int, std::string>>>(&ranges)) {
+  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(boost::variant<std::string, LuaArray<std::string>, NetmaskGroup>)>("includeRange", [](std::shared_ptr<DynBlockRulesGroup>& group, boost::variant<std::string, LuaArray<std::string>, NetmaskGroup> ranges) {
+      if (ranges.type() == typeid(LuaArray<std::string>)) {
+        for (const auto& range : *boost::get<LuaArray<std::string>>(&ranges)) {
           group->includeRange(Netmask(range.second));
         }
       }
@@ -839,9 +853,9 @@ void setupLuaInspection(LuaContext& luaCtx)
         group->includeRange(Netmask(*boost::get<std::string>(&ranges)));
       }
     });
-  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(boost::variant<std::string, std::vector<std::pair<int, std::string>>>)>("excludeDomains", [](std::shared_ptr<DynBlockRulesGroup>& group, boost::variant<std::string, std::vector<std::pair<int, std::string>>> domains) {
-      if (domains.type() == typeid(std::vector<std::pair<int, std::string>>)) {
-        for (const auto& range : *boost::get<std::vector<std::pair<int, std::string>>>(&domains)) {
+  luaCtx.registerFunction<void(std::shared_ptr<DynBlockRulesGroup>::*)(LuaTypeOrArrayOf<std::string>)>("excludeDomains", [](std::shared_ptr<DynBlockRulesGroup>& group, LuaTypeOrArrayOf<std::string> domains) {
+      if (domains.type() == typeid(LuaArray<std::string>)) {
+        for (const auto& range : *boost::get<LuaArray<std::string>>(&domains)) {
           group->excludeDomain(DNSName(range.second));
         }
       }

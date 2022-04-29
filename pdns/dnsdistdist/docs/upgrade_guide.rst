@@ -1,6 +1,13 @@
 Upgrade Guide
 =============
 
+1.7.0 to 1.7.1
+--------------
+
+In our Docker image, our binaries are no longer granted the ``net_bind_service`` capability, as this is unnecessary in many deployments.
+For more information, see the section `"Privileged ports" in Docker-README <https://github.com/PowerDNS/pdns/blob/master/Docker-README.md#privileged-ports>`__.
+(This note was in the 1.6.x to 1.7.0 upgrade guide before, but the change was not present in 1.7.0.)
+
 1.6.x to 1.7.0
 --------------
 

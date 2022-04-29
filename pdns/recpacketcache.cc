@@ -10,11 +10,6 @@
 #include "namespaces.hh"
 #include "rec-taskqueue.hh"
 
-RecursorPacketCache::RecursorPacketCache()
-{
-  d_hits = d_misses = 0;
-}
-
 unsigned int RecursorPacketCache::s_refresh_ttlperc{0};
 
 int RecursorPacketCache::doWipePacketCache(const DNSName& name, uint16_t qtype, bool subtree)
@@ -97,7 +92,8 @@ bool RecursorPacketCache::checkResponseMatches(std::pair<packetCache_t::index<Ha
       return true;
     }
     else {
-      moveCacheItemToFront<SequencedTag>(d_packetCache, iter);
+      // We used to move the item to the front of "the to be deleted" sequence,
+      // but we very likely will update the entry very soon, so leave it
       d_misses++;
       break;
     }
@@ -129,7 +125,7 @@ bool RecursorPacketCache::getResponsePacket(unsigned int tag, const std::string&
 {
   *qhash = canHashPacket(queryPacket, s_skipOptions);
   const auto& idx = d_packetCache.get<HashTag>();
-  auto range = idx.equal_range(tie(tag, *qhash, tcp));
+  auto range = idx.equal_range(std::tie(tag, *qhash, tcp));
 
   if (range.first == range.second) {
     d_misses++;
@@ -144,7 +140,7 @@ bool RecursorPacketCache::getResponsePacket(unsigned int tag, const std::string&
 {
   *qhash = canHashPacket(queryPacket, s_skipOptions);
   const auto& idx = d_packetCache.get<HashTag>();
-  auto range = idx.equal_range(tie(tag, *qhash, tcp));
+  auto range = idx.equal_range(std::tie(tag, *qhash, tcp));
 
   if (range.first == range.second) {
     d_misses++;
@@ -159,7 +155,7 @@ bool RecursorPacketCache::getResponsePacket(unsigned int tag, const std::string&
 void RecursorPacketCache::insertResponsePacket(unsigned int tag, uint32_t qhash, std::string&& query, const DNSName& qname, uint16_t qtype, uint16_t qclass, std::string&& responsePacket, time_t now, uint32_t ttl, const vState& valState, OptPBData&& pbdata, bool tcp)
 {
   auto& idx = d_packetCache.get<HashTag>();
-  auto range = idx.equal_range(tie(tag, qhash, tcp));
+  auto range = idx.equal_range(std::tie(tag, qhash, tcp));
   auto iter = range.first;
 
   for (; iter != range.second; ++iter) {
@@ -178,32 +174,23 @@ void RecursorPacketCache::insertResponsePacket(unsigned int tag, uint32_t qhash,
       iter->d_pbdata = std::move(*pbdata);
     }
 
-    break;
+    return;
   }
 
-  if (iter == range.second) { // nothing to refresh
-    struct Entry e(qname, std::move(responsePacket), std::move(query), tcp);
-    e.d_qhash = qhash;
-    e.d_type = qtype;
-    e.d_class = qclass;
-    e.d_ttd = now + ttl;
-    e.d_creation = now;
-    e.d_tag = tag;
-    e.d_vstate = valState;
-    if (pbdata) {
-      e.d_pbdata = std::move(*pbdata);
-    }
+  struct Entry e(qname, qtype, qclass, std::move(responsePacket), std::move(query), tcp, qhash, now + ttl, now, tag, valState);
+  if (pbdata) {
+    e.d_pbdata = std::move(*pbdata);
+  }
 
-    d_packetCache.insert(e);
+  d_packetCache.insert(e);
+
+  if (d_packetCache.size() > d_maxSize) {
+    auto& seq_idx = d_packetCache.get<SequencedTag>();
+    seq_idx.erase(seq_idx.begin());
   }
 }
 
-uint64_t RecursorPacketCache::size()
-{
-  return d_packetCache.size();
-}
-
-uint64_t RecursorPacketCache::bytes()
+uint64_t RecursorPacketCache::bytes() const
 {
   uint64_t sum = 0;
   for (const auto& e : d_packetCache) {

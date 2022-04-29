@@ -39,6 +39,10 @@ if LIBSODIUM
 AM_CPPFLAGS +=$(LIBSODIUM_CFLAGS)
 endif
 
+if LIBDECAF
+AM_CPPFLAGS += $(LIBDECAF_CFLAGS)
+endif
+
 EXTRA_DIST = \
 	dnslabeltext.rl \
 	dnslabeltext.cc \
@@ -378,6 +382,8 @@ pdnsutil_SOURCES = \
 	tsigutils.hh tsigutils.cc \
 	ueberbackend.cc \
 	unix_utility.cc \
+	uuid-utils.hh uuid-utils.cc \
+	zonemd.hh zonemd.cc \
 	zoneparser-tng.cc
 
 pdnsutil_LDFLAGS = \
@@ -940,8 +946,8 @@ speedtest_SOURCES = \
 	speedtest.cc \
 	statbag.cc \
 	svc-records.cc svc-records.hh \
-        unix_utility.cc \
-        uuid-utils.cc
+	unix_utility.cc \
+	uuid-utils.cc
 
 speedtest_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
 speedtest_LDADD = $(LIBCRYPTO_LIBS) \
@@ -962,8 +968,8 @@ dnswasher_SOURCES = \
 	statbag.cc \
 	unix_utility.cc
 
-dnswasher_LDFLAGS = 	$(AM_LDFLAGS) $(BOOST_PROGRAM_OPTIONS_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
-dnswasher_LDADD = 	$(BOOST_PROGRAM_OPTIONS_LIBS) $(LIBCRYPTO_LIBS) $(IPCRYPT_LIBS)
+dnswasher_LDFLAGS =	$(AM_LDFLAGS) $(BOOST_PROGRAM_OPTIONS_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
+dnswasher_LDADD =	$(BOOST_PROGRAM_OPTIONS_LIBS) $(LIBCRYPTO_LIBS) $(IPCRYPT_LIBS)
 
 dnsbulktest_SOURCES = \
 	arguments.cc arguments.hh \
@@ -1405,6 +1411,7 @@ testrunner_SOURCES = \
 	test-trusted-notification-proxy_cc.cc \
 	test-tsig.cc \
 	test-ueberbackend_cc.cc \
+	test-zonemd_cc.cc \
 	test-zoneparser_tng_cc.cc \
 	testrunner.cc \
 	threadname.hh threadname.cc \
@@ -1412,12 +1419,13 @@ testrunner_SOURCES = \
 	tsigverifier.cc tsigverifier.hh \
 	ueberbackend.cc ueberbackend.hh \
 	unix_utility.cc \
+	zonemd.cc zonemd.hh \
 	zoneparser-tng.cc zoneparser-tng.hh
 
 testrunner_LDFLAGS = \
 	$(AM_LDFLAGS) \
 	$(LIBCRYPTO_LDFLAGS) \
-	$(BOOST_UNIT_TEST_FRAMEWORK_LDFLAGS) 
+	$(BOOST_UNIT_TEST_FRAMEWORK_LDFLAGS)
 
 testrunner_LDADD = \
 	$(LIBCRYPTO_LIBS) \
@@ -1664,7 +1672,9 @@ if HAVE_SYSTEMD
 pdns.service: pdns.service.in
 	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' -e 's![@]service_user[@]!$(service_user)!' -e 's![@]service_group[@]!$(service_group)!' < $< > $@
 if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
+if HAVE_SYSTEMD_PERCENT_T
 	$(AM_V_GEN)sed -e 's!/pdns_server!& --socket-dir=%t/pdns!' -i $@
+endif
 endif
 if !HAVE_SYSTEMD_LOCK_PERSONALITY
 	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
@@ -1724,11 +1734,13 @@ endif
 pdns@.service: pdns.service
 	$(AM_V_GEN)sed -e 's!/pdns_server!& --config-name=%i!' \
 	  -e 's!Authoritative Server!& %i!' \
-	  -e 's!RuntimeDirectory=.*!&-%i!' \
 	  -e 's!SyslogIdentifier=.*!&-%i!' \
 	  < $< > $@
+if HAVE_SYSTEMD_PERCENT_T
+	$(AM_V_GEN)sed -e 's!RuntimeDirectory=.*!&-%i!' -i $@
 if !HAVE_SYSTEMD_WITH_RUNTIME_DIR_ENV
 	$(AM_V_GEN)sed -e 's!--socket-dir=[^ ]\+!&-%i !' -i $@
+endif
 endif
 
 systemdsystemunitdir = $(SYSTEMD_DIR)

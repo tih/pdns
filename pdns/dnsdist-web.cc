@@ -38,9 +38,7 @@
 #include "dnsdist-web.hh"
 #include "dolog.hh"
 #include "gettime.hh"
-#include "htmlfiles.h"
 #include "threadname.hh"
-#include "sodcrypto.hh"
 #include "sstuff.hh"
 
 struct WebserverConfig
@@ -53,16 +51,46 @@ struct WebserverConfig
   NetmaskGroup acl;
   std::unique_ptr<CredentialsHolder> password;
   std::unique_ptr<CredentialsHolder> apiKey;
-  boost::optional<std::map<std::string, std::string> > customHeaders;
+  boost::optional<std::unordered_map<std::string, std::string> > customHeaders;
+  bool apiRequiresAuthentication{true};
   bool statsRequireAuthentication{true};
 };
 
 bool g_apiReadWrite{false};
 LockGuarded<WebserverConfig> g_webserverConfig;
 std::string g_apiConfigDirectory;
-static const MetricDefinitionStorage s_metricDefinitions;
 
 static ConcurrentConnectionManager s_connManager(100);
+
+std::string getWebserverConfig()
+{
+  ostringstream out;
+
+  {
+    auto config = g_webserverConfig.lock();
+    out << "Current web server configuration:" << endl;
+    out << "ACL: " << config->acl.toString() << endl;
+    out << "Custom headers: ";
+    if (config->customHeaders) {
+      out << endl;
+      for (const auto& header : *config->customHeaders) {
+        out << " - " << header.first << ": " << header.second << endl;
+      }
+    }
+    else {
+      out << "None" << endl;
+    }
+    out << "API requires authentication: " << (config->apiRequiresAuthentication ? "yes" : "no") << endl;
+    out << "Statistics require authentication: " << (config->statsRequireAuthentication ? "yes" : "no") << endl;
+    out << "Password: " << (config->password ? "set" : "unset") << endl;
+    out << "API key: " << (config->apiKey ? "set" : "unset") << endl;
+  }
+  out << "API writable: " << (g_apiReadWrite ? "yes" : "no") << endl;
+  out << "API configuration directory: " << g_apiConfigDirectory << endl;
+  out << "Maximum concurrent connections: " << s_connManager.getMaxConcurrentConnections() << endl;
+
+  return out.str();
+}
 
 class WebClientConnection
 {
@@ -101,6 +129,9 @@ private:
   ComboAddress d_client;
   Socket d_socket;
 };
+
+#ifndef DISABLE_PROMETHEUS
+static const MetricDefinitionStorage s_metricDefinitions;
 
 const std::map<std::string, MetricDefinition> MetricDefinitionStorage::metrics{
   { "responses",              MetricDefinition(PrometheusMetricType::counter, "Number of responses received from backends") },
@@ -161,7 +192,9 @@ const std::map<std::string, MetricDefinition> MetricDefinitionStorage::metrics{
   { "tcp-listen-overflows",   MetricDefinition(PrometheusMetricType::counter, "From /proc/net/netstat ListenOverflows") },
   { "proxy-protocol-invalid", MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of an invalid Proxy Protocol header") },
 };
+#endif /* DISABLE_PROMETHEUS */
 
+#ifndef DISABLE_WEB_CONFIG
 static bool apiWriteConfigFile(const string& filebasename, const string& content)
 {
   if (!g_apiReadWrite) {
@@ -202,6 +235,7 @@ static void apiSaveACL(const NetmaskGroup& nmg)
   string content = "setACL({" + acl + "})";
   apiWriteConfigFile("acl", content);
 }
+#endif /* DISABLE_WEB_CONFIG */
 
 static bool checkAPIKey(const YaHTTP::Request& req, const std::unique_ptr<CredentialsHolder>& apiKey)
 {
@@ -272,7 +306,7 @@ static bool handleAuthorization(const YaHTTP::Request& req)
 
   if (isAnAPIRequest(req)) {
     /* Access to the API requires a valid API key */
-    if (checkAPIKey(req, config->apiKey)) {
+    if (!config->apiRequiresAuthentication  || checkAPIKey(req, config->apiKey)) {
       return true;
     }
 
@@ -323,7 +357,7 @@ static void handleCORS(const YaHTTP::Request& req, YaHTTP::Response& resp)
   }
 }
 
-static void addSecurityHeaders(YaHTTP::Response& resp, const boost::optional<std::map<std::string, std::string> >& customHeaders)
+static void addSecurityHeaders(YaHTTP::Response& resp, const boost::optional<std::unordered_map<std::string, std::string> >& customHeaders)
 {
   static const std::vector<std::pair<std::string, std::string> > headers = {
     { "X-Content-Type-Options", "nosniff" },
@@ -344,7 +378,7 @@ static void addSecurityHeaders(YaHTTP::Response& resp, const boost::optional<std
   }
 }
 
-static void addCustomHeaders(YaHTTP::Response& resp, const boost::optional<std::map<std::string, std::string> >& customHeaders)
+static void addCustomHeaders(YaHTTP::Response& resp, const boost::optional<std::unordered_map<std::string, std::string> >& customHeaders)
 {
   if (!customHeaders)
     return;
@@ -378,6 +412,7 @@ static json11::Json::array someResponseRulesToJson(GlobalStateHolder<vector<T>>*
   return responseRules;
 }
 
+#ifndef DISABLE_PROMETHEUS
 template<typename T>
 static void addRulesToPrometheusOutput(std::ostringstream& output, GlobalStateHolder<vector<T> >& rules)
 {
@@ -450,7 +485,7 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
   latency_amounts += g_stats.latencySlow; // Should be the same as latency_count
   output << "dnsdist_latency_bucket{le=\"+Inf\"} " << latency_amounts << "\n";
   output << "dnsdist_latency_sum " << g_stats.latencySum << "\n";
-  output << "dnsdist_latency_count " << getLatencyCount(std::string()) << "\n";
+  output << "dnsdist_latency_count " << g_stats.latencyCount << "\n";
 
   auto states = g_dstates.getLocal();
   const string statesbase = "dnsdist_server_";
@@ -503,15 +538,17 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
   for (const auto& state : *states) {
     string serverName;
 
-    if (state->getName().empty())
-      serverName = state->remote.toStringWithPort();
-    else
+    if (state->getName().empty()) {
+      serverName = state->d_config.remote.toStringWithPort();
+    }
+    else {
       serverName = state->getName();
+    }
 
     boost::replace_all(serverName, ".", "_");
 
     const std::string label = boost::str(boost::format("{server=\"%1%\",address=\"%2%\"}")
-                                         % serverName % state->remote.toStringWithPort());
+                                         % serverName % state->d_config.remote.toStringWithPort());
 
     output << statesbase << "status"                       << label << " " << (state->isUp() ? "1" : "0")        << "\n";
     output << statesbase << "queries"                      << label << " " << state->queries.load()              << "\n";
@@ -521,8 +558,8 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
         output << statesbase << "latency"                  << label << " " << state->latencyUsec/1000.0          << "\n";
     output << statesbase << "senderrors"                   << label << " " << state->sendErrors.load()           << "\n";
     output << statesbase << "outstanding"                  << label << " " << state->outstanding.load()          << "\n";
-    output << statesbase << "order"                        << label << " " << state->order                       << "\n";
-    output << statesbase << "weight"                       << label << " " << state->weight                      << "\n";
+    output << statesbase << "order"                        << label << " " << state->d_config.order              << "\n";
+    output << statesbase << "weight"                       << label << " " << state->d_config.d_weight           << "\n";
     output << statesbase << "tcpdiedsendingquery"          << label << " " << state->tcpDiedSendingQuery         << "\n";
     output << statesbase << "tcpdiedreadingresponse"       << label << " " << state->tcpDiedReadingResponse      << "\n";
     output << statesbase << "tcpgaveup"                    << label << " " << state->tcpGaveUp                   << "\n";
@@ -781,9 +818,11 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
   resp.body = output.str();
   resp.headers["Content-Type"] = "text/plain";
 }
+#endif /* DISABLE_PROMETHEUS */
 
 using namespace json11;
 
+#ifndef DISABLE_BUILTIN_HTML
 static void handleJSONStats(const YaHTTP::Request& req, YaHTTP::Response& resp)
 {
   handleCORS(req, resp);
@@ -882,14 +921,15 @@ static void handleJSONStats(const YaHTTP::Request& req, YaHTTP::Response& resp)
     resp.status = 404;
   }
 }
+#endif /* DISABLE_BUILTIN_HTML */
 
 static void addServerToJSON(Json::array& servers, int id, const std::shared_ptr<DownstreamState>& a)
 {
   string status;
-  if (a->availability == DownstreamState::Availability::Up) {
+  if (a->d_config.availability == DownstreamState::Availability::Up) {
     status = "UP";
   }
-  else if (a->availability == DownstreamState::Availability::Down) {
+  else if (a->d_config.availability == DownstreamState::Availability::Down) {
     status = "DOWN";
   }
   else {
@@ -897,21 +937,21 @@ static void addServerToJSON(Json::array& servers, int id, const std::shared_ptr<
   }
 
   Json::array pools;
-  for(const auto& p: a->pools) {
+  for (const auto& p: a->d_config.pools) {
     pools.push_back(p);
   }
 
   Json::object server {
     {"id", id},
     {"name", a->getName()},
-    {"address", a->remote.toStringWithPort()},
+    {"address", a->d_config.remote.toStringWithPort()},
     {"state", status},
     {"qps", (double)a->queryLoad},
     {"qpsLimit", (double)a->qps.getRate()},
     {"outstanding", (double)a->outstanding},
     {"reuseds", (double)a->reuseds},
-    {"weight", (double)a->weight},
-    {"order", (double)a->order},
+    {"weight", (double)a->d_config.d_weight},
+    {"order", (double)a->d_config.order},
     {"pools", pools},
     {"latency", (double)(a->latencyUsec/1000.0)},
     {"queries", (double)a->queries},
@@ -934,7 +974,7 @@ static void addServerToJSON(Json::array& servers, int id, const std::shared_ptr<
   };
 
   /* sending a latency for a DOWN server doesn't make sense */
-  if (a->availability == DownstreamState::Availability::Down) {
+  if (a->d_config.availability == DownstreamState::Availability::Down) {
     server["latency"] = nullptr;
   }
 
@@ -1211,6 +1251,7 @@ static void handleStatsOnly(const YaHTTP::Request& req, YaHTTP::Response& resp)
   resp.headers["Content-Type"] = "application/json";
 }
 
+#ifndef DISABLE_WEB_CONFIG
 static void handleConfigDump(const YaHTTP::Request& req, YaHTTP::Response& resp)
 {
   handleCORS(req, resp);
@@ -1320,6 +1361,7 @@ static void handleAllowFrom(const YaHTTP::Request& req, YaHTTP::Response& resp)
     resp.body = my_json.dump();
   }
 }
+#endif /* DISABLE_WEB_CONFIG */
 
 static std::unordered_map<std::string, std::function<void(const YaHTTP::Request&, YaHTTP::Response&)>> s_webHandlers;
 
@@ -1334,6 +1376,9 @@ void clearWebHandlers()
 {
   s_webHandlers.clear();
 }
+
+#ifndef DISABLE_BUILTIN_HTML
+#include "htmlfiles.h"
 
 static void redirectToIndex(const YaHTTP::Request& req, YaHTTP::Response& resp)
 {
@@ -1369,21 +1414,30 @@ static void handleBuiltInFiles(const YaHTTP::Request& req, YaHTTP::Response& res
 
   resp.status = 200;
 }
+#endif /* DISABLE_BUILTIN_HTML */
 
 void registerBuiltInWebHandlers()
 {
+#ifndef DISABLE_BUILTIN_HTML
   registerWebHandler("/jsonstat", handleJSONStats);
+#endif /* DISABLE_BUILTIN_HTML */
+#ifndef DISABLE_PROMETHEUS
   registerWebHandler("/metrics", handlePrometheus);
+#endif /* DISABLE_PROMETHEUS */
   registerWebHandler("/api/v1/servers/localhost", handleStats);
   registerWebHandler("/api/v1/servers/localhost/pool", handlePoolStats);
   registerWebHandler("/api/v1/servers/localhost/statistics", handleStatsOnly);
+#ifndef DISABLE_WEB_CONFIG
   registerWebHandler("/api/v1/servers/localhost/config", handleConfigDump);
   registerWebHandler("/api/v1/servers/localhost/config/allow-from", handleAllowFrom);
+#endif /* DISABLE_WEB_CONFIG */
+#ifndef DISABLE_BUILTIN_HTML
   registerWebHandler("/", redirectToIndex);
 
   for (const auto& path : s_urlmap) {
     registerWebHandler("/" + path.first, handleBuiltInFiles);
   }
+#endif /* DISABLE_BUILTIN_HTML */
 }
 
 static void connectionThread(WebClientConnection&& conn)
@@ -1496,7 +1550,7 @@ void setWebserverACL(const std::string& acl)
   g_webserverConfig.lock()->acl = std::move(newACL);
 }
 
-void setWebserverCustomHeaders(const boost::optional<std::map<std::string, std::string> > customHeaders)
+void setWebserverCustomHeaders(const boost::optional<std::unordered_map<std::string, std::string> > customHeaders)
 {
   g_webserverConfig.lock()->customHeaders = customHeaders;
 }
@@ -1504,6 +1558,11 @@ void setWebserverCustomHeaders(const boost::optional<std::map<std::string, std::
 void setWebserverStatsRequireAuthentication(bool require)
 {
   g_webserverConfig.lock()->statsRequireAuthentication = require;
+}
+
+void setWebserverAPIRequiresAuthentication(bool require)
+{
+  g_webserverConfig.lock()->apiRequiresAuthentication = require;
 }
 
 void setWebserverMaxConcurrentConnections(size_t max)

@@ -2,6 +2,7 @@
 #include "dnsdist-session-cache.hh"
 #include "dnsdist-tcp-downstream.hh"
 #include "dnsdist-tcp-upstream.hh"
+#include "dnsdist-downstream-connection.hh"
 
 #include "dnsparser.hh"
 
@@ -68,41 +69,41 @@ bool ConnectionToBackend::reconnect()
   d_proxyProtocolPayloadSent = false;
 
   do {
-    vinfolog("TCP connecting to downstream %s (%d)", d_ds->getNameWithAddr(), d_downstreamFailures);
+    DEBUGLOG("TCP connecting to downstream "<<d_ds->getNameWithAddr()<<" ("<<d_downstreamFailures<<")");
     DEBUGLOG("Opening TCP connection to backend "<<d_ds->getNameWithAddr());
     ++d_ds->tcpNewConnections;
     try {
-      auto socket = std::make_unique<Socket>(d_ds->remote.sin4.sin_family, SOCK_STREAM, 0);
+      auto socket = std::make_unique<Socket>(d_ds->d_config.remote.sin4.sin_family, SOCK_STREAM, 0);
       DEBUGLOG("result of socket() is "<<socket->getHandle());
 
-      if (!IsAnyAddress(d_ds->sourceAddr)) {
+      if (!IsAnyAddress(d_ds->d_config.sourceAddr)) {
         SSetsockopt(socket->getHandle(), SOL_SOCKET, SO_REUSEADDR, 1);
 #ifdef IP_BIND_ADDRESS_NO_PORT
-        if (d_ds->ipBindAddrNoPort) {
+        if (d_ds->d_config.ipBindAddrNoPort) {
           SSetsockopt(socket->getHandle(), SOL_IP, IP_BIND_ADDRESS_NO_PORT, 1);
         }
 #endif
 #ifdef SO_BINDTODEVICE
-        if (!d_ds->sourceItfName.empty()) {
-          int res = setsockopt(socket->getHandle(), SOL_SOCKET, SO_BINDTODEVICE, d_ds->sourceItfName.c_str(), d_ds->sourceItfName.length());
+        if (!d_ds->d_config.sourceItfName.empty()) {
+          int res = setsockopt(socket->getHandle(), SOL_SOCKET, SO_BINDTODEVICE, d_ds->d_config.sourceItfName.c_str(), d_ds->d_config.sourceItfName.length());
           if (res != 0) {
             vinfolog("Error setting up the interface on backend TCP socket '%s': %s", d_ds->getNameWithAddr(), stringerror());
           }
         }
 #endif
-        socket->bind(d_ds->sourceAddr, false);
+        socket->bind(d_ds->d_config.sourceAddr, false);
       }
       socket->setNonBlocking();
 
       gettimeofday(&d_connectionStartTime, nullptr);
-      auto handler = std::make_unique<TCPIOHandler>(d_ds->d_tlsSubjectName, socket->releaseHandle(), timeval{0,0}, d_ds->d_tlsCtx, d_connectionStartTime.tv_sec);
+      auto handler = std::make_unique<TCPIOHandler>(d_ds->d_config.d_tlsSubjectName, d_ds->d_config.d_tlsSubjectIsAddr, socket->releaseHandle(), timeval{0,0}, d_ds->d_tlsCtx, d_connectionStartTime.tv_sec);
       if (!tlsSession && d_ds->d_tlsCtx) {
         tlsSession = g_sessionCache.getSession(d_ds->getID(), d_connectionStartTime.tv_sec);
       }
       if (tlsSession) {
         handler->setTLSSession(tlsSession);
       }
-      handler->tryConnect(d_ds->tcpFastOpen && isFastOpenEnabled(), d_ds->remote);
+      handler->tryConnect(d_ds->d_config.tcpFastOpen && isFastOpenEnabled(), d_ds->d_config.remote);
       d_queries = 0;
 
       d_handler = std::move(handler);
@@ -112,12 +113,12 @@ bool ConnectionToBackend::reconnect()
     catch (const std::runtime_error& e) {
       vinfolog("Connection to downstream server %s failed: %s", d_ds->getName(), e.what());
       d_downstreamFailures++;
-      if (d_downstreamFailures >= d_ds->d_retries) {
+      if (d_downstreamFailures >= d_ds->d_config.d_retries) {
         throw;
       }
     }
   }
-  while (d_downstreamFailures < d_ds->d_retries);
+  while (d_downstreamFailures < d_ds->d_config.d_retries);
 
   return false;
 }
@@ -129,8 +130,7 @@ TCPConnectionToBackend::~TCPConnectionToBackend()
   }
 }
 
-void TCPConnectionToBackend::release()
-{
+void TCPConnectionToBackend::release(){
   d_ds->outstanding -= d_pendingResponses.size();
 
   d_pendingResponses.clear();
@@ -337,7 +337,7 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
 
       DEBUGLOG("connection died, number of failures is "<<conn->d_downstreamFailures<<", retries is "<<conn->d_ds->d_retries);
 
-      if (conn->d_downstreamFailures < conn->d_ds->d_retries) {
+      if (conn->d_downstreamFailures < conn->d_ds->d_config.d_retries) {
 
         conn->d_ioState.reset();
         ioGuard.release();
@@ -355,7 +355,10 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
               conn->d_currentQuery = std::move(query);
             }
 
-            for (auto& pending : conn->d_pendingResponses) {
+            /* if we notify the sender it might terminate us so we need to move these first */
+            auto pendingResponses = std::move(conn->d_pendingResponses);
+            conn->d_pendingResponses.clear();
+            for (auto& pending : pendingResponses) {
               --conn->d_ds->outstanding;
 
               if (pending.second.d_query.isXFR() && pending.second.d_query.d_xfrStarted) {
@@ -375,7 +378,6 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
                 conn->d_pendingQueries.push_back(std::move(pending.second));
               }
             }
-            conn->d_pendingResponses.clear();
             conn->d_currentPos = 0;
 
             if (conn->d_state == State::sendingQueryToBackend) {
@@ -515,7 +517,9 @@ void TCPConnectionToBackend::notifyAllQueriesFailed(const struct timeval& now, F
   /* we might be terminated while notifying a query sender */
   d_ds->outstanding -= d_pendingResponses.size();
   auto pendingQueries = std::move(d_pendingQueries);
+  d_pendingQueries.clear();
   auto pendingResponses = std::move(d_pendingResponses);
+  d_pendingResponses.clear();
 
   auto increaseCounters = [reason](std::shared_ptr<TCPQuerySender>& sender) {
     if (reason == FailureReason::timeout) {
@@ -770,4 +774,19 @@ bool TCPConnectionToBackend::isXFRFinished(const TCPResponse& response, TCPQuery
     /* ponder what to do here, shall we close the connection? */
   }
   return done;
+}
+
+void setTCPDownstreamMaxIdleConnectionsPerBackend(uint64_t max)
+{
+  DownstreamTCPConnectionsManager::setMaxIdleConnectionsPerDownstream(max);
+}
+
+void setTCPDownstreamCleanupInterval(uint64_t interval)
+{
+  DownstreamTCPConnectionsManager::setCleanupInterval(interval);
+}
+
+void setTCPDownstreamMaxIdleTime(uint64_t max)
+{
+  DownstreamTCPConnectionsManager::setMaxIdleTime(max);
 }

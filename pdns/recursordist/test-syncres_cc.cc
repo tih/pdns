@@ -16,9 +16,11 @@ GlobalStateHolder<NetmaskGroup> g_dontThrottleNetmasks;
 GlobalStateHolder<SuffixMatchNode> g_DoTToAuthNames;
 std::unique_ptr<MemRecursorCache> g_recCache;
 std::unique_ptr<NegCache> g_negCache;
-unsigned int g_numThreads = 1;
 bool g_lowercaseOutgoing = false;
-
+#if 0
+pdns::TaskQueue g_test_tasks;
+pdns::TaskQueue g_resolve_tasks;
+#endif
 /* Fake some required functions we didn't want the trouble to
    link with */
 ArgvMap& arg()
@@ -27,7 +29,7 @@ ArgvMap& arg()
   return theArg;
 }
 
-void primeRootNSZones(bool, unsigned int)
+void primeRootNSZones(DNSSECMode, unsigned int)
 {
 }
 
@@ -179,6 +181,7 @@ void initSR(bool debug)
   SyncRes::s_nonresolvingnsmaxfails = 0;
   SyncRes::s_nonresolvingnsthrottletime = 0;
   SyncRes::s_refresh_ttlperc = 0;
+  SyncRes::s_save_parent_ns_set = true;
 
   SyncRes::clearNSSpeeds();
   BOOST_CHECK_EQUAL(SyncRes::getNSSpeedsSize(), 0U);
@@ -190,6 +193,8 @@ void initSR(bool debug)
   BOOST_CHECK_EQUAL(SyncRes::getFailedServersSize(), 0U);
   SyncRes::clearNonResolvingNS();
   BOOST_CHECK_EQUAL(SyncRes::getNonResolvingNSSize(), 0U);
+  SyncRes::clearSaveParentsNSSets();
+  BOOST_CHECK_EQUAL(SyncRes::getSaveParentsNSSetsSize(), 0U);
 
   SyncRes::clearECSStats();
 
@@ -208,6 +213,7 @@ void initSR(bool debug)
   g_maxNSEC3Iterations = 2500;
 
   g_aggressiveNSECCache.reset();
+  taskQueueClear();
 
   ::arg().set("version-string", "string reported on version.pdns or version.bind") = "PowerDNS Unit Tests";
   ::arg().set("rng") = "auto";
@@ -551,11 +557,4 @@ LWResult::Result basicRecordsForQnameMinimization(LWResult* res, const DNSName& 
     return LWResult::Result::Success;
   }
   return LWResult::Result::Timeout;
-}
-
-pdns::TaskQueue g_test_tasks;
-
-void pushAlmostExpiredTask(const DNSName& qname, uint16_t qtype, time_t deadline)
-{
-  g_test_tasks.push({qname, qtype, deadline, true, nullptr});
 }

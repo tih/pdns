@@ -26,14 +26,8 @@
 #include <regex.h>
 #include <limits.h>
 #include <type_traits>
-#include <boost/algorithm/string.hpp>
-#include <boost/multi_index_container.hpp>
-#include <boost/multi_index/ordered_index.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
-#include <boost/multi_index/key_extractors.hpp>
-#include <boost/multi_index/sequenced_index.hpp>
 
-using namespace ::boost::multi_index;
+#include <boost/algorithm/string.hpp>
 
 #include "dns.hh"
 #include <atomic>
@@ -42,7 +36,6 @@ using namespace ::boost::multi_index;
 #include <sys/socket.h>
 #include <time.h>
 #include <syslog.h>
-#include <deque>
 #include <stdexcept>
 #include <string>
 #include <ctype.h>
@@ -52,6 +45,22 @@ using namespace ::boost::multi_index;
 #include "dnsname.hh"
 
 typedef enum { TSIG_MD5, TSIG_SHA1, TSIG_SHA224, TSIG_SHA256, TSIG_SHA384, TSIG_SHA512, TSIG_GSS } TSIGHashEnum;
+
+namespace pdns
+{
+/**
+ * \brief Retrieves the errno-based error message in a reentrant way.
+ *
+ * This internally handles the portability issues around using
+ * `strerror_r` and returns a `std::string` that owns the error
+ * message's contents.
+ *
+ * \param[in] errnum The errno value.
+ *
+ * \return The `std::string` error message.
+ */
+auto getMessageFromErrno(int errnum) -> std::string;
+}
 
 string nowTime();
 const string unquotify(const string &item);
@@ -321,16 +330,16 @@ inline uint64_t uSec(const struct timeval& tv)
 
 inline bool operator<(const struct timeval& lhs, const struct timeval& rhs)
 {
-  return tie(lhs.tv_sec, lhs.tv_usec) < tie(rhs.tv_sec, rhs.tv_usec);
+  return std::tie(lhs.tv_sec, lhs.tv_usec) < std::tie(rhs.tv_sec, rhs.tv_usec);
 }
 inline bool operator<=(const struct timeval& lhs, const struct timeval& rhs)
 {
-  return tie(lhs.tv_sec, lhs.tv_usec) <= tie(rhs.tv_sec, rhs.tv_usec);
+  return std::tie(lhs.tv_sec, lhs.tv_usec) <= std::tie(rhs.tv_sec, rhs.tv_usec);
 }
 
 inline bool operator<(const struct timespec& lhs, const struct timespec& rhs)
 {
-  return tie(lhs.tv_sec, lhs.tv_nsec) < tie(rhs.tv_sec, rhs.tv_nsec);
+  return std::tie(lhs.tv_sec, lhs.tv_nsec) < std::tie(rhs.tv_sec, rhs.tv_nsec);
 }
 
 
@@ -380,8 +389,8 @@ inline bool pdns_iequals_ch(const char a, const char b)
 typedef unsigned long AtomicCounterInner;
 typedef std::atomic<AtomicCounterInner> AtomicCounter ;
 
-// FIXME400 this should probably go? 
-struct CIStringCompare: public std::binary_function<string, string, bool>
+// FIXME400 this should probably go?
+struct CIStringCompare
 {
   bool operator()(const string& a, const string& b) const
   {
@@ -405,7 +414,7 @@ struct CIStringComparePOSIX
    }
 };
 
-struct CIStringPairCompare: public std::binary_function<pair<string, uint16_t>, pair<string,uint16_t>, bool>
+struct CIStringPairCompare
 {
   bool operator()(const pair<string, uint16_t>& a, const pair<string, uint16_t>& b) const
   {
@@ -494,7 +503,7 @@ public:
   SimpleMatch(const string &mask, bool caseFold = false): d_mask(mask), d_fold(caseFold)
   {
   }
- 
+
   bool match(string::const_iterator mi, string::const_iterator mend, string::const_iterator vi, string::const_iterator vend) const
   {
     for(;;++mi) {
@@ -577,6 +586,7 @@ uint64_t getCPUTimeSystem(const std::string&);
 uint64_t getCPUIOWait(const std::string&);
 uint64_t getCPUSteal(const std::string&);
 std::string getMACAddress(const ComboAddress& ca);
+int getMACAddress(const ComboAddress& ca, char* dest, size_t len);
 
 template<typename T>
 const T& defTer(const T& a, const T& b)
@@ -623,7 +633,121 @@ double DiffTime(const struct timeval& first, const struct timeval& second);
 uid_t strToUID(const string &str);
 gid_t strToGID(const string &str);
 
-unsigned int pdns_stou(const std::string& str, size_t * idx = 0, int base = 10);
+namespace pdns
+{
+/**
+ * \brief Does a checked conversion from one integer type to another.
+ *
+ * \warning The source type `F` and target type `T` must have the same
+ * signedness, otherwise a compilation error is thrown.
+ *
+ * \exception std::out_of_range Thrown if the source value does not fit
+ * in the target type.
+ *
+ * \param[in] from The source value of type `F`.
+ *
+ * \return The target value of type `T`.
+ */
+template <typename T, typename F>
+auto checked_conv(F from) -> T
+{
+  static_assert(std::numeric_limits<F>::is_integer, "checked_conv: The `F` type must be an integer");
+  static_assert(std::numeric_limits<T>::is_integer, "checked_conv: The `T` type must be an integer");
+  static_assert((std::numeric_limits<F>::is_signed && std::numeric_limits<T>::is_signed) || (!std::numeric_limits<F>::is_signed && !std::numeric_limits<T>::is_signed),
+                "checked_conv: The `T` and `F` types must either both be signed or unsigned");
+
+  constexpr auto tMin = std::numeric_limits<T>::min();
+  if constexpr (std::numeric_limits<F>::min() != tMin) {
+    if (from < tMin) {
+      string s = "checked_conv: source value " + std::to_string(from) + " is smaller than target's minimum possible value " + std::to_string(tMin);
+      throw std::out_of_range(s);
+    }
+  }
+
+  constexpr auto tMax = std::numeric_limits<T>::max();
+  if constexpr (std::numeric_limits<F>::max() != tMax) {
+    if (from > tMax) {
+      string s = "checked_conv: source value " + std::to_string(from) + " is larger than target's maximum possible value " + std::to_string(tMax);
+      throw std::out_of_range(s);
+    }
+  }
+
+  return static_cast<T>(from);
+}
+
+/**
+ * \brief Performs a conversion from `std::string&` to integer.
+ *
+ * This function internally calls `std::stoll` and `std::stoull` to do
+ * the conversion from `std::string&` and calls `pdns::checked_conv` to
+ * do the checked conversion from `long long`/`unsigned long long` to
+ * `T`.
+ *
+ * \warning The target type `T` must be an integer, otherwise a
+ * compilation error is thrown.
+ *
+ * \exception std:stoll Throws what std::stoll throws.
+ *
+ * \exception std::stoull Throws what std::stoull throws.
+ *
+ * \exception pdns::checked_conv Throws what pdns::checked_conv throws.
+ *
+ * \param[in] str The input string to be converted.
+ *
+ * \param[in] idx Location to store the index at which processing
+ * stopped. If the input `str` is empty, `*idx` shall be set to 0.
+ *
+ * \param[in] base The numerical base for conversion.
+ *
+ * \return `str` converted to integer `T`, or 0 if `str` is empty.
+ */
+template <typename T>
+auto checked_stoi(const std::string& str, size_t* idx = nullptr, int base = 10) -> T
+{
+  static_assert(std::numeric_limits<T>::is_integer, "checked_stoi: The `T` type must be an integer");
+
+  if (str.empty()) {
+    if (idx != nullptr) {
+      *idx = 0;
+    }
+
+    return 0; // compatibility
+  }
+
+  if constexpr (std::is_unsigned_v<T>) {
+    return pdns::checked_conv<T>(std::stoull(str, idx, base));
+  }
+  else {
+    return pdns::checked_conv<T>(std::stoll(str, idx, base));
+  }
+}
+
+/**
+ * \brief Performs a conversion from `std::string&` to integer.
+ *
+ * This function internally calls `pdns::checked_stoi` and stores its
+ * result in `out`.
+ *
+ * \exception pdns::checked_stoi Throws what pdns::checked_stoi throws.
+ *
+ * \param[out] out `str` converted to integer `T`, or 0 if `str` is
+ * empty.
+ *
+ * \param[in] str The input string to be converted.
+ *
+ * \param[in] idx Location to store the index at which processing
+ * stopped. If the input `str` is empty, `*idx` shall be set to 0.
+ *
+ * \param[in] base The numerical base for conversion.
+ *
+ * \return `str` converted to integer `T`, or 0 if `str` is empty.
+ */
+template <typename T>
+auto checked_stoi_into(T& out, const std::string& str, size_t* idx = nullptr, int base = 10)
+{
+  out = checked_stoi<T>(str, idx, base);
+}
+}
 
 bool isSettingThreadCPUAffinitySupported();
 int mapThreadToCPUList(pthread_t tid, const std::set<int>& cpus);

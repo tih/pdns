@@ -83,6 +83,8 @@ Like `allow-notify-for`_, except reading from file. To use this
 feature, supply one domain name per line, with optional comments
 preceded by a "#".
 
+NOTIFY-allowed zones can also be specified using `forward-zones-file`_.
+
 .. _setting-allow-notify-from:
 
 ``allow-notify-from``
@@ -152,6 +154,7 @@ Allow ``trustanchor.server CH TXT`` and ``negativetrustanchor.server CH TXT`` qu
 -  Default: unset
 
 Directory where the REST API stores its configuration and zones.
+For configuration updates to work, :ref:`setting-include-dir` should have the same value.
 
 .. _setting-api-key:
 
@@ -189,19 +192,6 @@ Disallow data modification through the REST API when set.
 -  Default: unset
 
 Location of the server logfile (used by the REST API).
-
-.. _setting-auth-can-lower-ttl:
-
-``auth-can-lower-ttl``
-----------------------
--  Boolean
--  Default: no
-
-Authoritative zones can transmit a TTL value that is lower than that specified in the parent zone.
-This is called a 'delegation inconsistency'.
-To follow :rfc:`RFC 2181 section 5.2<2181#section-5.2>` and :rfc:`5.4 <2181#section-5.4>` to the letter, enable this feature.
-This will mean a slight deterioration of performance, and it will not solve any problems, but does make the recursor more standards compliant.
-Not recommended unless you have to tick an 'RFC 2181 compliant' box.
 
 .. _setting-auth-zones:
 
@@ -317,26 +307,25 @@ When running multiple recursors on the same server, read settings from :file:`re
 
 ``cpu-map``
 -----------
-.. versionadded:: 4.1.0
 
 - String
 - Default: unset
 
-Set CPU affinity for worker threads, asking the scheduler to run those threads on a single CPU, or a set of CPUs.
+Set CPU affinity for threads, asking the scheduler to run those threads on a single CPU, or a set of CPUs.
 This parameter accepts a space separated list of thread-id=cpu-id, or thread-id=cpu-id-1,cpu-id-2,...,cpu-id-N.
 For example, to make the worker thread 0 run on CPU id 0 and the worker thread 1 on CPUs 1 and 2::
 
   cpu-map=0=0 1=1,2
 
-The number of worker threads is determined by the :ref:`setting-threads` setting.
-If :ref:`setting-pdns-distributes-queries` is set, an additional thread is started, assigned the id 0,
-and is the only one listening on client sockets and accepting queries, distributing them to the other worker threads afterwards.
+The thread handling the control channel, the webserver and other internal stuff has been assigned id 0, the distributor
+threads if any are assigned id 1 and counting, and the worker threads follow behind.
+The number of distributor threads is determined by :ref:`setting-distributor-threads`, the number of worker threads is determined by the :ref:`setting-threads` setting.
 
-Starting with version 4.2.0, the thread handling the control channel, the webserver and other internal stuff has been assigned
-id 0 and more than one distributor thread can be started using the :ref:`setting-distributor-threads` setting, so the distributor
-threads if any are assigned id 1 and counting, and the other threads follow behind.
+This parameter is only available if the OS provides the ``pthread_setaffinity_np()`` function.
 
-This parameter is only available on OS that provides the `pthread_setaffinity_np()` function.
+Note that depending on the configuration the Recursor can start more threads.
+Typically these threads will sleep most of the time.
+These threads cannot be specified in this setting as their thread-ids are left unspecified.
 
 .. _setting-daemon:
 
@@ -830,7 +819,9 @@ Multiple IP addresses can be specified and port numbers other than 53 can be con
 
     forward-zones=example.org=203.0.113.210:5300;127.0.0.1, powerdns.com=127.0.0.1;198.51.100.10:530;[2001:DB8::1:3]:5300
 
-Forwarded queries have the 'recursion desired' bit set to 0, meaning that this setting is intended to forward queries to authoritative servers.
+Forwarded queries have the ``recursion desired (RD)`` bit set to ``0``, meaning that this setting is intended to forward queries to authoritative servers.
+If an ``NS`` record set for a subzone of the forwarded zone is learned, that record set will be used to determine addresses for name servers of the subzone.
+This allows e.g. a forward to a local authoritative server holding a copy of the root zone, delegations received from that server will work.
 
 **IMPORTANT**: When using DNSSEC validation (which is default), forwards to non-delegated (e.g. internal) zones that have a DNSSEC signed parent zone will validate as Bogus.
 To prevent this, add a Negative Trust Anchor (NTA) for this zone in the `lua-config-file`_ with ``addNTA("your.zone", "A comment")``.
@@ -870,7 +861,9 @@ list. Both prefix characters can be used if desired, in any order.
 -------------------------
 -  'zonename=IP' pairs, comma separated
 
-Like regular `forward-zones`_, but forwarded queries have the 'recursion desired' bit set to 1, meaning that this setting is intended to forward queries to other recursive servers.
+Like regular `forward-zones`_, but forwarded queries have the ``recursion desired (RD)`` bit set to ``1``, meaning that this setting is intended to forward queries to other recursive servers.
+In contrast to regular forwarding, the rule that delegations of the forwarded subzones are respected is not active.
+This is because we rely on the forwarder to resolve the query fully.
 
 See `forward-zones`_ for additional options (such as supplying multiple recursive servers) and an important note about DNSSEC.
 
@@ -890,8 +883,17 @@ If set, EDNS options in incoming queries are extracted and passed to the :func:`
 ``hint-file``
 -------------
 -  Path
+-  Default: empty
 
-If set, the root-hints are read from this file. If unset, default root hints are used.
+.. versionchanged:: 4.6.2
+
+  Introduced the value ``no`` to disable root-hints processing.
+
+If set, the root-hints are read from this file. If empty, the default built-in root hints are used.
+
+In some special cases, processing the root hints is not needed, for example when forwarding all queries to another recursor.
+For these special cases, it is possible to disable the processing of root hints by setting the value to ``no``.
+See :ref:`handling-of-root-hints` for more information on root hints handling.
 
 .. _setting-ignore-unknown-settings:
 
@@ -1065,6 +1067,31 @@ Path to a lua file to manipulate the Recursor's answers. See :doc:`lua-scripting
 The interval between calls to the Lua user defined `maintenance()` function in seconds.
 See :ref:`hooks-maintenance-callback`
 
+.. _setting-max-busy-dot-probes:
+
+``max-busy-dot-probes``
+-----------------------
+.. versionadded:: 4.7.0
+
+- Integer
+- Default: 0
+
+Limit the maximum number of simultaneous DoT probes the Recursor will schedule.
+The default value 0 means no DoT probes are scheduled.
+
+DoT probes are used to check if an authoritative server's IP address supports DoT.
+If the probe determines an IP address supports DoT, the Recursor will use DoT to contact it for subsequent queries until a failure occurs.
+After a failure, the Recursor will stop using DoT for that specific IP address for a while.
+The results of probes are remembered and can be viewed by the ``rec_control dump-dot-probe-map`` command.
+If the maximum number of pending probes is reached, no probes will be scheduled, even if no DoT status is known for an address.
+If the result of a probe is not yet available, the Recursor will contact the authoritative server in the regular way, unless an authoritative server is configured to be contacted over DoT always using :ref:`setting-dot-to-auth-names`.
+In that case no probe will be scheduled.
+
+
+Note::
+  DoT probing is an experimental feature.
+  Please test thoroughly to determine if it is suitable in your specific production environment before enabling.
+
 .. _setting-max-cache-bogus-ttl:
 
 ``max-cache-bogus-ttl``
@@ -1095,6 +1122,8 @@ The size of the negative cache is 10% of this number.
 -  Default: 86400
 
 Maximum number of seconds to cache an item in the DNS cache, no matter what the original TTL specified.
+This value also controls the refresh period of cached root data.
+See :ref:`handling-of-root-hints` for more information on this.
 
 .. versionchanged:: 4.1.0
 
@@ -1702,6 +1731,18 @@ The effect of this is far fewer queries to the root-servers.
 
     Default is 'yes' now, was 'no' before 4.0.0
 
+.. _setting-save-parent-ns-set:
+
+``save-parent-ns-set``
+----------------------
+.. versionadded:: 4.7.0
+
+- Boolean
+- Default: yes
+
+If set, a parent (non-authoritative) ``NS`` set is saved if it contains more entries than a newly encountered child (authoritative) ``NS`` set for the same domain.
+The saved parent ``NS`` set is tried if resolution using the child ``NS`` set fails.
+
 .. _setting-security-poll-suffix:
 
 ``security-poll-suffix``
@@ -2037,7 +2078,7 @@ closed and a new one will be created if needed.
 .. versionadded:: 4.6.0
 
 -  Integer
--  Default : 0
+-  Default : 100
 
 Maximum number of idle outgoing TCP/DoT connections per thread, 0 means do not keep idle connections open.
 
@@ -2268,7 +2309,7 @@ of /32 or /128.
 
 ``webserver-hash-plaintext-credentials``
 ----------------------------------------
-..versionadded:: 4.6.0
+.. versionadded:: 4.6.0
 
 -  Boolean
 -  Default: no
@@ -2358,6 +2399,7 @@ If a PID file should be written to `socket-dir`_
 
 .. note::
   This is an experimental implementation of `draft-bellis-dnsop-xpf <https://datatracker.ietf.org/doc/draft-bellis-dnsop-xpf/>`_.
+  This is a deprecated feature that will be removed in the near future.
 
 The server will trust XPF records found in queries sent from those netmasks (both IPv4 and IPv6),
 and will adjust queries' source and destination accordingly. This is especially useful when the recursor
@@ -2376,6 +2418,7 @@ should be done on the proxy.
 
 .. note::
   This is an experimental implementation of `draft-bellis-dnsop-xpf <https://datatracker.ietf.org/doc/draft-bellis-dnsop-xpf/>`_.
+  This is a deprecated feature that will be removed in the near future.
 
 This option sets the resource record code to use for XPF records, as long as an official code has not been assigned to it.
 0 means that XPF is disabled.

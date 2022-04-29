@@ -35,6 +35,7 @@
 #include <openssl/rsa.h>
 #include <openssl/opensslv.h>
 #include <openssl/err.h>
+#include <openssl/pem.h>
 #include "opensslsigners.hh"
 #include "dnssecinfra.hh"
 #include "dnsseckeeper.hh"
@@ -459,7 +460,7 @@ void OpenSSLRSADNSCryptoKeyEngine::fromISCMap(DNSKEYRecordContent& drc, std::map
   auto dmq1 = parse(stormap, "exponent2");
   auto iqmp = parse(stormap, "coefficient");
 
-  drc.d_algorithm = pdns_stou(stormap["algorithm"]);
+  pdns::checked_stoi_into(drc.d_algorithm, stormap["algorithm"]);
 
   if (drc.d_algorithm != d_algorithm) {
     throw runtime_error(getName() + " tried to feed an algorithm " + std::to_string(drc.d_algorithm) + " to a " + std::to_string(d_algorithm) + " key");
@@ -592,6 +593,38 @@ public:
   int getBits() const override { return d_len << 3; }
 
   void create(unsigned int bits) override;
+
+  /**
+   * \brief Creates an ECDSA key engine from a PEM file.
+   *
+   * Receives an open file handle with PEM contents and creates an ECDSA
+   * key engine.
+   *
+   * \param[in] drc Key record contents to be populated.
+   *
+   * \param[in] filename Only used for providing filename information
+   * in error messages.
+   *
+   * \param[in] fp An open file handle to a file containing ECDSA PEM
+   * contents.
+   *
+   * \return An ECDSA key engine populated with the contents of the PEM
+   * file.
+   */
+  void createFromPEMFile(DNSKEYRecordContent& drc, const std::string& filename, std::FILE& fp) override;
+
+  /**
+   * \brief Writes this key's contents to a file.
+   *
+   * Receives an open file handle and writes this key's contents to the
+   * file.
+   *
+   * \param[in] fp An open file handle for writing.
+   *
+   * \exception std::runtime_error In case of OpenSSL errors.
+   */
+  void convertToPEM(std::FILE& fp) const override;
+
   storvector_t convertToISCVector() const override;
   std::string hash(const std::string& hash) const override;
   std::string sign(const std::string& hash) const override;
@@ -625,8 +658,51 @@ void OpenSSLECDSADNSCryptoKeyEngine::create(unsigned int bits)
   if (res == 0) {
     throw runtime_error(getName()+" key generation failed");
   }
+
+  EC_KEY_set_asn1_flag(d_eckey.get(), OPENSSL_EC_NAMED_CURVE);
 }
 
+void OpenSSLECDSADNSCryptoKeyEngine::createFromPEMFile(DNSKEYRecordContent& drc, const string& filename, std::FILE& fp)
+{
+  drc.d_algorithm = d_algorithm;
+  d_eckey = std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)>(PEM_read_ECPrivateKey(&fp, nullptr, nullptr, nullptr), &EC_KEY_free);
+  if (d_eckey == nullptr) {
+    throw runtime_error(getName() + ": Failed to read private key from PEM file `" + filename + "`");
+  }
+
+  int ret = EC_KEY_set_group(d_eckey.get(), d_ecgroup.get());
+  if (ret != 1) {
+    throw runtime_error(getName() + " setting key group failed");
+  }
+
+  const BIGNUM* privateKeyBN = EC_KEY_get0_private_key(d_eckey.get());
+
+  auto pub_key = std::unique_ptr<EC_POINT, void (*)(EC_POINT*)>(EC_POINT_new(d_ecgroup.get()), EC_POINT_free);
+  if (!pub_key) {
+    throw runtime_error(getName() + " allocation of public key point failed");
+  }
+
+  ret = EC_POINT_mul(d_ecgroup.get(), pub_key.get(), privateKeyBN, nullptr, nullptr, nullptr);
+  if (ret != 1) {
+    throw runtime_error(getName() + " computing public key from private failed");
+  }
+
+  ret = EC_KEY_set_public_key(d_eckey.get(), pub_key.get());
+  if (ret != 1) {
+    ERR_print_errors_fp(stderr);
+    throw runtime_error(getName() + " setting public key failed");
+  }
+
+  EC_KEY_set_asn1_flag(d_eckey.get(), OPENSSL_EC_NAMED_CURVE);
+}
+
+void OpenSSLECDSADNSCryptoKeyEngine::convertToPEM(std::FILE& fp) const
+{
+  auto ret = PEM_write_ECPrivateKey(&fp, d_eckey.get(), nullptr, nullptr, 0, nullptr, nullptr);
+  if (ret == 0) {
+    throw runtime_error(getName() + ": Could not convert private key to PEM");
+  }
+}
 
 DNSCryptoKeyEngine::storvector_t OpenSSLECDSADNSCryptoKeyEngine::convertToISCVector() const
 {
@@ -798,6 +874,8 @@ void OpenSSLECDSADNSCryptoKeyEngine::fromISCMap(DNSKEYRecordContent& drc, std::m
   if (ret != 1) {
     throw runtime_error(getName()+" setting public key failed");
   }
+
+  EC_KEY_set_asn1_flag(d_eckey.get(), OPENSSL_EC_NAMED_CURVE);
 }
 
 bool OpenSSLECDSADNSCryptoKeyEngine::checkKey(vector<string> *errorMessages) const
@@ -882,6 +960,38 @@ public:
   int getBits() const override { return d_len << 3; }
 
   void create(unsigned int bits) override;
+
+  /**
+   * \brief Creates an EDDSA key engine from a PEM file.
+   *
+   * Receives an open file handle with PEM contents and creates an EDDSA
+   * key engine.
+   *
+   * \param[in] drc Key record contents to be populated.
+   *
+   * \param[in] filename Only used for providing filename information in
+   * error messages.
+   *
+   * \param[in] fp An open file handle to a file containing EDDSA PEM
+   * contents.
+   *
+   * \return An EDDSA key engine populated with the contents of the PEM
+   * file.
+   */
+  void createFromPEMFile(DNSKEYRecordContent& drc, const std::string& filename, std::FILE& fp) override;
+
+  /**
+   * \brief Writes this key's contents to a file.
+   *
+   * Receives an open file handle and writes this key's contents to the
+   * file.
+   *
+   * \param[in] fp An open file handle for writing.
+   *
+   * \exception std::runtime_error In case of OpenSSL errors.
+   */
+  void convertToPEM(std::FILE& fp) const override;
+
   storvector_t convertToISCVector() const override;
   std::string sign(const std::string& msg) const override;
   bool verify(const std::string& msg, const std::string& signature) const override;
@@ -922,6 +1032,23 @@ void OpenSSLEDDSADNSCryptoKeyEngine::create(unsigned int bits)
     throw runtime_error(getName()+" key generation failed");
   }
   d_edkey = std::unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(newKey, EVP_PKEY_free);
+}
+
+void OpenSSLEDDSADNSCryptoKeyEngine::createFromPEMFile(DNSKEYRecordContent& drc, const string& filename, std::FILE& fp)
+{
+  drc.d_algorithm = d_algorithm;
+  d_edkey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(PEM_read_PrivateKey(&fp, nullptr, nullptr, nullptr), &EVP_PKEY_free);
+  if (d_edkey == nullptr) {
+    throw runtime_error(getName() + ": Failed to read private key from PEM file `" + filename + "`");
+  }
+}
+
+void OpenSSLEDDSADNSCryptoKeyEngine::convertToPEM(std::FILE& fp) const
+{
+  auto ret = PEM_write_PrivateKey(&fp, d_edkey.get(), nullptr, nullptr, 0, nullptr, nullptr);
+  if (ret == 0) {
+    throw runtime_error(getName() + ": Could not convert private key to PEM");
+  }
 }
 
 DNSCryptoKeyEngine::storvector_t OpenSSLEDDSADNSCryptoKeyEngine::convertToISCVector() const
@@ -1047,23 +1174,23 @@ void OpenSSLEDDSADNSCryptoKeyEngine::fromPublicKeyString(const std::string& cont
 #endif // HAVE_LIBCRYPTO_EDDSA
 
 namespace {
-  struct LoaderStruct
+  const struct LoaderStruct
   {
     LoaderStruct()
     {
-      DNSCryptoKeyEngine::report(5, &OpenSSLRSADNSCryptoKeyEngine::maker);
-      DNSCryptoKeyEngine::report(7, &OpenSSLRSADNSCryptoKeyEngine::maker);
-      DNSCryptoKeyEngine::report(8, &OpenSSLRSADNSCryptoKeyEngine::maker);
-      DNSCryptoKeyEngine::report(10, &OpenSSLRSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::RSASHA1, &OpenSSLRSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::RSASHA1NSEC3SHA1, &OpenSSLRSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::RSASHA256, &OpenSSLRSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::RSASHA512, &OpenSSLRSADNSCryptoKeyEngine::maker);
 #ifdef HAVE_LIBCRYPTO_ECDSA
-      DNSCryptoKeyEngine::report(13, &OpenSSLECDSADNSCryptoKeyEngine::maker);
-      DNSCryptoKeyEngine::report(14, &OpenSSLECDSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::ECDSA256, &OpenSSLECDSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::ECDSA384, &OpenSSLECDSADNSCryptoKeyEngine::maker);
 #endif
 #ifdef HAVE_LIBCRYPTO_ED25519
-      DNSCryptoKeyEngine::report(15, &OpenSSLEDDSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::ED25519, &OpenSSLEDDSADNSCryptoKeyEngine::maker);
 #endif
 #ifdef HAVE_LIBCRYPTO_ED448
-      DNSCryptoKeyEngine::report(16, &OpenSSLEDDSADNSCryptoKeyEngine::maker);
+      DNSCryptoKeyEngine::report(DNSSECKeeper::ED448, &OpenSSLEDDSADNSCryptoKeyEngine::maker);
 #endif
     }
   } loaderOpenSSL;

@@ -92,6 +92,9 @@ dump-cache *FILENAME*
     also dumped to the same file. The per-thread positive and negative cache
     dumps are separated with an appropriate comment.
 
+dump-dot-probe-map *FILENAME*
+    Dump the contents of the DoT probe map to the *FILENAME* mentioned.
+
 dump-edns *FILENAME*
     Dumps the EDNS status to the filename mentioned. This file should not exist
     already, PowerDNS will refuse to overwrite it. While dumping, the recursor
@@ -120,6 +123,14 @@ dump-rpz *ZONE NAME* *FILE NAME*
     mentioned. This file should not exist already, PowerDNS will refuse to
     overwrite it otherwise. While dumping, the recursor will not answer
     questions.
+
+dump-saved-parent-ns-sets *FILE NAME*
+    Dump the entries of the map containing saved parent NS sets
+    that were successfully used in resolving.
+    The total number of entries is also printed in the header.
+    An entry is saved if the recursor sees that the parent set includes
+    names not in the child set. This is an indication of a
+    misconfigured domain.
 
 dump-throttlemap *FILENAME*
     Dump the contents of the throttle map to the *FILENAME* mentioned.

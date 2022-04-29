@@ -1,5 +1,44 @@
 Changelogs for 4.5.X
 ====================
+
+.. changelog::
+  :version: 4.5.9
+  :released: 4th of April 2022
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11419
+    :tickets: 11371
+
+    Be more careful using refresh mode only for the record asked.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11384
+    :tickets: 11300
+
+    Use the Lua context stored in SyncRes when calling hooks.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11024
+    :tickets: 10994, 11010
+
+    Do cache negative results, even when wasVariable() is true.
+
+.. changelog::
+  :version: 4.5.8
+  :released: 25th of March 2022
+
+  This is a security fix release for :doc:`PowerDNS Security Advisory 2022-01 <../security-advisories/powerdns-advisory-2022-01>`.
+  Additionally, because CentOS 8 is End Of Life now, we have switched those builds to Oracle Linux 8. The resulting packages are compatible with RHEL and all derivatives.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 11457
+
+    Fix validation of incremental zone transfers (IXFRs).
+
 .. changelog::
   :version: 4.5.7
   :released: 5th of November 2021

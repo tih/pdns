@@ -35,19 +35,8 @@ static __u64 ptr_to_u64(void *ptr)
   return (__u64) (unsigned long) ptr;
 }
 
-int bpf_create_map(enum bpf_map_type map_type, int key_size, int value_size,
-                   int max_entries)
-{
-  union bpf_attr attr;
-  memset(&attr, 0, sizeof(attr));
-  attr.map_type = map_type;
-  attr.key_size = key_size;
-  attr.value_size = value_size;
-  attr.max_entries = max_entries;
-  return syscall(SYS_bpf, BPF_MAP_CREATE, &attr, sizeof(attr));
-}
-
-int bpf_pin_map(int fd, const std::string& path)
+/* these can be static as they are not declared in libbpf.h: */
+static int bpf_pin_map(int fd, const std::string& path)
 {
   union bpf_attr attr;
   memset(&attr, 0, sizeof(attr));
@@ -56,7 +45,7 @@ int bpf_pin_map(int fd, const std::string& path)
   return syscall(SYS_bpf, BPF_OBJ_PIN, &attr, sizeof(attr));
 }
 
-int bpf_load_pinned_map(const std::string& path)
+static int bpf_load_pinned_map(const std::string& path)
 {
   union bpf_attr attr;
   memset(&attr, 0, sizeof(attr));
@@ -64,7 +53,7 @@ int bpf_load_pinned_map(const std::string& path)
   return syscall(SYS_bpf, BPF_OBJ_GET, &attr, sizeof(attr));
 }
 
-void bpf_check_map_sizes(int fd, uint32_t expectedKeySize, uint32_t expectedValueSize)
+static void bpf_check_map_sizes(int fd, uint32_t expectedKeySize, uint32_t expectedValueSize)
 {
   struct bpf_map_info info;
   uint32_t info_len = sizeof(info);
@@ -89,6 +78,18 @@ void bpf_check_map_sizes(int fd, uint32_t expectedKeySize, uint32_t expectedValu
   if (info.value_size != expectedValueSize) {
     throw std::runtime_error("Error checking the size of eBPF map: value size mismatch (" + std::to_string(info.value_size) + " VS " + std::to_string(expectedValueSize) + ")");
   }
+}
+
+int bpf_create_map(enum bpf_map_type map_type, int key_size, int value_size,
+                   int max_entries)
+{
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.map_type = map_type;
+  attr.key_size = key_size;
+  attr.value_size = value_size;
+  attr.max_entries = max_entries;
+  return syscall(SYS_bpf, BPF_MAP_CREATE, &attr, sizeof(attr));
 }
 
 int bpf_update_elem(int fd, void *key, void *value, unsigned long long flags)
@@ -312,7 +313,8 @@ static FDWrapper loadProgram(const struct bpf_insn* filter, size_t filterSize)
 }
 
 
-BPFFilter::BPFFilter(const BPFFilter::MapConfiguration& v4, const BPFFilter::MapConfiguration& v6, const BPFFilter::MapConfiguration& qnames, BPFFilter::MapFormat format, bool external): d_mapFormat(format), d_external(external)
+BPFFilter::BPFFilter(std::unordered_map<std::string, MapConfiguration>& configs, BPFFilter::MapFormat format, bool external) :
+  d_mapFormat(format), d_external(external)
 {
   if (d_mapFormat != BPFFilter::MapFormat::Legacy && !d_external) {
     throw std::runtime_error("Unsupported eBPF map format, the current internal implemenation only supports the legacy format");
@@ -320,9 +322,9 @@ BPFFilter::BPFFilter(const BPFFilter::MapConfiguration& v4, const BPFFilter::Map
 
   auto maps = d_maps.lock();
 
-  maps->d_v4 = BPFFilter::Map(v4, d_mapFormat);
-  maps->d_v6 = BPFFilter::Map(v6, d_mapFormat);
-  maps->d_qnames = BPFFilter::Map(qnames, d_mapFormat);
+  maps->d_v4 = BPFFilter::Map(configs["ipv4"], d_mapFormat);
+  maps->d_v6 = BPFFilter::Map(configs["ipv6"], d_mapFormat);
+  maps->d_qnames = BPFFilter::Map(configs["qnames"], d_mapFormat);
   if (!external) {
     BPFFilter::MapConfiguration filters;
     filters.d_maxItems = 1;
@@ -475,13 +477,11 @@ void BPFFilter::block(const DNSName& qname, BPFFilter::MatchAction action, uint1
   void* value = nullptr;
 
   if (d_external) {
-    memset(&cadvalue, 0, sizeof(cadvalue));
     cadvalue.counter = 0;
     cadvalue.action = action;
     value = &cadvalue;
   }
   else {
-    memset(&qvalue, 0, sizeof(qvalue));
     qvalue.counter = 0;
     qvalue.qtype = qtype;
     value = &qvalue;
@@ -504,12 +504,11 @@ void BPFFilter::block(const DNSName& qname, BPFFilter::MatchAction action, uint1
       throw std::runtime_error("Table full when trying to block " + qname.toLogString());
     }
 
-    int res = bpf_lookup_elem(map.d_fd.getHandle(), &key, &value);
+    int res = bpf_lookup_elem(map.d_fd.getHandle(), &key, value);
     if (res != -1) {
       throw std::runtime_error("Trying to block an already blocked qname: " + qname.toLogString());
     }
-
-    res = bpf_update_elem(map.d_fd.getHandle(), &key, &value, BPF_NOEXIST);
+    res = bpf_update_elem(map.d_fd.getHandle(), &key, value, BPF_NOEXIST);
     if (res == 0) {
       ++map.d_count;
     }
@@ -687,7 +686,7 @@ uint64_t BPFFilter::getHits(const ComboAddress& requestor)
 
 #else
 
-BPFFilter::BPFFilter(const BPFFilter::MapConfiguration&, const BPFFilter::MapConfiguration&, const BPFFilter::MapConfiguration&, BPFFilter::MapFormat, bool)
+BPFFilter::BPFFilter(std::unordered_map<std::string, MapConfiguration>& configs, BPFFilter::MapFormat format, bool external)
 {
 }
 

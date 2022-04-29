@@ -118,13 +118,16 @@ Listen Sockets
     ``enableRenegotiation``, ``exactPathMatching``, ``maxConcurrentTCPConnections`` and ``releaseBuffers`` options added.
     ``internalPipeBufferSize`` now defaults to 1048576 on Linux.
 
+  .. versionchanged:: 1.8.0
+     ``certFile`` now accepts a TLSCertificate object or a list of such objects (see :func:`newTLSCertificate`)
+
   Listen on the specified address and TCP port for incoming DNS over HTTPS connections, presenting the specified X.509 certificate.
   If no certificate (or key) files are specified, listen for incoming DNS over HTTP connections instead.
 
   :param str address: The IP Address with an optional port to listen on.
                       The default port is 443.
-  :param str certFile(s): The path to a X.509 certificate file in PEM format, or a list of paths to such files.
-  :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones.
+  :param str certFile(s): The path to a X.509 certificate file in PEM format, a list of paths to such files, or a TLSCertificate object.
+  :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones. Ignored if ``certFile`` contains TLSCertificate objects.
   :param str-or-list urls: The path part of a URL, or a list of paths, to accept queries on. Any query with a path matching exactly one of these will be treated as a DoH query (sub-paths can be accepted by setting the ``exactPathMatching`` to false). The default is /dns-query.
   :param table options: A table with key: value pairs with listen options.
 
@@ -166,13 +169,17 @@ Listen Sockets
     ``sessionTimeout`` and ``tcpListenQueueSize`` options added.
   .. versionchanged:: 1.6.0
     ``enableRenegotiation``, ``maxConcurrentTCPConnections``, ``maxInFlight`` and ``releaseBuffers`` options added.
+  .. versionchanged:: 1.8.0
+    ``tlsAsyncMode`` option added.
+  .. versionchanged:: 1.8.0
+     ``certFile`` now accepts a TLSCertificate object or a list of such objects (see :func:`newTLSCertificate`)
 
   Listen on the specified address and TCP port for incoming DNS over TLS connections, presenting the specified X.509 certificate.
 
   :param str address: The IP Address with an optional port to listen on.
                       The default port is 853.
-  :param str certFile(s): The path to a X.509 certificate file in PEM format, or a list of paths to such files.
-  :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones.
+  :param str certFile(s): The path to a X.509 certificate file in PEM format, a list of paths to such files, or a TLSCertificate object.
+  :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones. Ignored if ``certFile`` contains TLSCertificate objects.
   :param table options: A table with key: value pairs with listen options.
 
   Options:
@@ -199,6 +206,7 @@ Listen Sockets
   * ``maxConcurrentTCPConnections=0``: int - Maximum number of concurrent incoming TCP connections. The default is 0 which means unlimited.
   * ``releaseBuffers=true``: bool - Whether OpenSSL should release its I/O buffers when a connection goes idle, saving roughly 35 kB of memory per connection.
   * ``enableRenegotiation=false``: bool - Whether secure TLS renegotiation should be enabled (OpenSSL only, the GnuTLS provider does not support it). Disabled by default since it increases the attack surface and is seldom used for DNS.
+  * ``tlsAsyncMode=false``: bool - Whether to enable experimental asynchronous TLS I/O operations if OpenSSL is used as the TLS provider and an asynchronous capable SSL engine is loaded. See also :func:`loadTLSEngine` to load the engine.
 
 .. function:: setLocal(address[, options])
 
@@ -308,7 +316,7 @@ Webserver configuration
   :param string - password: The password to hash
   :param int - workFactor: The work factor to use for the hash function (currently scrypt), as a power of two. Default is 1024.
 
-.. function:: webserver(listen_address [, password[, apikey[, custom_headers[, acl]]]])
+.. function:: webserver(listen_address [, password[, apikey[, customHeaders[, acl]]]])
 
   .. versionchanged:: 1.5.0
     ``acl`` optional parameter added.
@@ -317,13 +325,16 @@ Webserver configuration
     The ``password`` parameter is now optional.
     The use of optional parameters is now deprecated. Please use :func:`setWebserverConfig` instead.
 
-  Launch the :doc:`../guides/webserver` with statistics and the API. Note that the parameters are global, so the parameter from the last ``webserver`` will override any existing ones. For this reason
-  the use of :func:`setWebserverConfig` is advised instead of specifying optional parameters here.
+  .. versionchanged:: 1.7.0
+    The ``password``, ``apikey``, ``customHeaders`` and ``acl`` parameters is no longer supported.
+    Please use :func:`setWebserverConfig` instead.
+
+  Launch the :doc:`../guides/webserver` with statistics and the API. Note that the parameters are global, so the parameter from the last ``webserver`` will override any existing ones. For this reason :func:`setWebserverConfig` should be used instead of specifying optional parameters here.
 
   :param str listen_address: The IP address and Port to listen on
   :param str password: The password required to access the webserver
   :param str apikey: The key required to access the API
-  :param {[str]=str,...} custom_headers: Allows setting custom headers and removing the defaults
+  :param {[str]=str,...} customHeaders: Allows setting custom headers and removing the defaults
   :param str acl: List of netmasks, as a string, that are allowed to open a connection to the web server. Defaults to "127.0.0.1, ::1". It accepts the same syntax that :func:`NetmaskGroup:addMask` does
 
 .. function:: setAPIWritable(allow [,dir])
@@ -347,6 +358,9 @@ Webserver configuration
     The optional ``password`` and ``apiKey`` parameters now accept hashed passwords.
     The optional ``hashPlaintextCredentials`` parameter has been added.
 
+  .. versionchanged:: 1.6.0
+    ``apiRequiresAuthentication`` optional parameters added.
+
   Setup webserver configuration. See :func:`webserver`.
 
   :param table options: A table with key: value pairs with webserver options.
@@ -355,8 +369,9 @@ Webserver configuration
 
   * ``password=newPassword``: string - Set the password used to access the internal webserver. Since 1.7.0 the password should be hashed and salted via the :func:`hashPassword` command.
   * ``apiKey=newKey``: string - Changes the API Key (set to an empty string do disable it). Since 1.7.0 the key should be hashed and salted via the :func:`hashPassword` command.
-  * ``custom_headers={[str]=str,...}``: map of string - Allows setting custom headers and removing the defaults.
+  * ``customHeaders={[str]=str,...}``: map of string - Allows setting custom headers and removing the defaults.
   * ``acl=newACL``: string - List of IP addresses, as a string, that are allowed to open a connection to the web server. Defaults to "127.0.0.1, ::1".
+  * ``apiRequiresAuthentication``: bool - Whether access to the API (/api endpoints) require a valid API key. Defaults to true.
   * ``statsRequireAuthentication``: bool - Whether access to the statistics (/metrics and /jsonstat endpoints) require a valid password or API key. Defaults to true.
   * ``maxConcurrentConnections``: int - The maximum number of concurrent web connections, or 0 which means an unlimited number. Defaults to 100.
   * ``hashPlaintextCredentials``: bool - Whether passwords and API keys provided in plaintext should be hashed during startup, to prevent the plaintext versions from staying in memory. Doing so increases significantly the cost of verifying credentials. Defaults to false.
@@ -397,6 +412,13 @@ Webserver configuration
 
   :param str path: Path to register the handler for.
   :param function handler: The Lua function to register.
+
+.. function:: showWebserverConfig()
+
+  .. versionadded:: 1.7.0
+
+  Show the current webserver configuration. See :func:`webserver`.
+
 
 Access Control Lists
 ~~~~~~~~~~~~~~~~~~~~
@@ -514,6 +536,9 @@ Servers
   .. versionchanged:: 1.7.0
     Added ``addXForwardedHeaders``, ``caStore``, ``checkTCP``, ``ciphers``, ``ciphers13``, ``dohPath``, ``enableRenegotiation``, ``releaseBuffers``, ``subjectName``, ``tcpOnly``, ``tls`` and ``validateCertificates`` to server_table.
 
+  .. versionchanged:: 1.8.0
+    Added ``autoUpgrade``, ``autoUpgradeDoHKey``, ``autoUpgradeInterval``, ``autoUpgradeKeep``, ``autoUpgradePool`` and ``subjectAddr`` to server_table.
+
   Add a new backend server. Call this function with either a string::
 
     newServer(
@@ -553,7 +578,7 @@ Servers
                                 --   "interface name", e.g. "eth0"
                                 --   "address@interface", e.g. "192.0.2.2@eth0"
       addXPF=NUM,               -- Add the client's IP address and port to the query, along with the original destination address and port,
-                                -- using the experimental XPF record from `draft-bellis-dnsop-xpf <https://datatracker.ietf.org/doc/draft-bellis-dnsop-xpf/>`_ and the specified option code. Default is disabled (0)
+                                -- using the experimental XPF record from `draft-bellis-dnsop-xpf <https://datatracker.ietf.org/doc/draft-bellis-dnsop-xpf/>`_ and the specified option code. Default is disabled (0). This is a deprecated feature that will be removed in the near future.
       sockets=NUM,              -- Number of UDP sockets (and thus source ports) used toward the backend server, defaults to a single one. Note that for backends which are multithreaded, this setting will have an effect on the number of cores that will be used to process traffic from dnsdist. For example you may want to set 'sockets' to a number somewhat higher than the number of worker threads configured in the backend, particularly if the Linux kernel is being used to distribute traffic to multiple threads listening on the same socket (via `reuseport`).
       disableZeroScope=BOOL,    -- Disable the EDNS Client Subnet 'zero scope' feature, which does a cache lookup for an answer valid for all subnets (ECS scope of 0) before adding ECS information to the query and doing the regular lookup. This requires the ``parseECS`` option of the corresponding cache to be set to true
       rise=NUM,                 -- Require NUM consecutive successful checks before declaring the backend up, default: 1
@@ -566,12 +591,18 @@ Servers
       caStore=STRING,           -- Specifies the path to the CA certificate file, in PEM format, to use to check the certificate presented by the backend. Default is an empty string, which means to use the system CA store. Note that this directive is only used if ``validateCertificates`` is set.
       ciphers=STRING,           -- The TLS ciphers to use. The exact format depends on the provider used. When the OpenSSL provider is used, ciphers for TLS 1.3 must be specified via ``ciphersTLS13``.
       ciphersTLS13=STRING,      -- The ciphers to use for TLS 1.3, when the OpenSSL provider is used. When the GnuTLS provider is used, ``ciphers`` applies regardless of the TLS protocol and this setting is not used.
-      subjectName=STRING,       -- The subject name passed in the SNI value of the TLS handshake, and against which to validate the certificate presented by the backend. Default is empty.
+      subjectName=STRING,       -- The subject name passed in the SNI value of the TLS handshake, and against which to validate the certificate presented by the backend. Default is empty. If set this value supersedes any ``subjectAddr`` one.
+      subjectAddr=STRING,       -- The subject IP address passed in the SNI value of the TLS handshake, and against which to validate the certificate presented by the backend. Default is empty.
       validateCertificates=BOOL,-- Whether the certificate presented by the backend should be validated against the CA store (see ``caStore``). Default is true.
       dohPath=STRING,           -- Enable DNS over HTTPS communication for this backend, using POST queries to the HTTP host supplied as ``subjectName`` and the HTTP path supplied in this parameter.
       addXForwardedHeaders=BOOL,-- Whether to add X-Forwarded-For, X-Forwarded-Port and X-Forwarded-Proto headers to a DNS over HTTPS backend.
       releaseBuffers=BOOL,      -- Whether OpenSSL should release its I/O buffers when a connection goes idle, saving roughly 35 kB of memory per connection. Default to true.
-      enableRenegotiation=BOOL  -- Whether secure TLS renegotiation should be enabled. Disabled by default since it increases the attack surface and is seldom used for DNS.
+      enableRenegotiation=BOOL, -- Whether secure TLS renegotiation should be enabled. Disabled by default since it increases the attack surface and is seldom used for DNS.
+      autoUpgrade=BOOL,         -- Whether to use the 'Discovery of Designated Resolvers' mechanism to automatically upgrade a Do53 backend to DoT or DoH, depending on the priorities present in the SVCB record returned by the backend. Default to false.
+      autoUpgradeInterval=NUM,  -- If ``autoUpgrade`` is set, how often to check if an upgrade is available, in seconds. Default is 3600 seconds.
+      autoUpgradeKeep=BOOL,     -- If ``autoUpgrade`` is set, whether to keep the existing Do53 backend around after an upgrade. Default is false which means the Do53 backend will be replaced by the upgraded one.
+      autoUpgradePool=STRING,   -- If ``autoUpgrade`` is set, in which pool to place the newly upgraded backend. Default is empty which means the backend is placed in the default pool.
+      autoUpgradeDoHKey=NUM     -- If ``autoUpgrade`` is set, the value to use for the SVC key corresponding to the DoH path. Default is 7.
     })
 
   :param str server_string: A simple IP:PORT string.
@@ -942,6 +973,28 @@ Status, Statistics and More
   .. versionadded:: 1.5.0
 
   Return the number of DOHFrontend binds.
+
+.. function:: getListOfAddressesOfNetworkInterface(itf)
+
+  .. versionadded:: 1.8.0
+
+  Return the list of addresses configured on a given network interface, as strings.
+  This function requires support for ``getifaddrs``, which is known to be present on FreeBSD, Linux, and OpenBSD at least.
+
+  :param str itf: The name of the network interface
+
+.. function:: getListOfNetworkInterfaces()
+
+  .. versionadded:: 1.8.0
+
+  Return the list of network interfaces configured on the system, as strings
+  This function requires support for ``getifaddrs``, which is known to be present on FreeBSD, Linux, and OpenBSD at least.
+
+.. function:: getOutgoingTLSSessionCacheSize()
+
+  .. versionadded:: 1.7.0
+
+  Return the number of TLS sessions (for outgoing connections) currently cached.
 
 .. function:: getTLSContext(idx)
 
@@ -1556,6 +1609,30 @@ Other functions
   If this function exists, it is called every second to do regular tasks.
   This can be used for e.g. :doc:`Dynamic Blocks <../guides/dynblocks>`.
 
+.. function:: threadmessage(cmd, dict)
+
+  .. versionadded:: 1.7.0
+
+  This function, if it exists, is called when a separate thread (made with :func:`newThread`) calls :func:`submitToMainThread`.
+
+.. function:: newThread(code)
+
+  .. versionadded:: 1.7.0
+
+  Spawns a separate thread running the supplied code.
+  Code is supplied as a string, not as a function object.
+  Note that this function does nothing in 'client' or 'config-check' modes.
+
+.. function:: submitToMainThread(cmd, dict)
+
+  .. versionadded:: 1.7.0
+
+  Must be called from a separate thread (made with :func:`newThread`), submits data to the main thread by calling :func:`threadmessage` in it.
+  If no ``threadmessage`` receiver is present in the main thread, ``submitToMainThread`` logs an error but returns normally.
+
+  The ``cmd`` argument is a string.
+  The ``dict`` argument is a Lua table.
+
 .. function:: setAllowEmptyResponse()
 
   .. versionadded:: 1.4.0
@@ -1578,6 +1655,14 @@ Other functions
 
   :param int size: The maximum size in bytes (default is 512)
 
+.. function:: setTCPFastOpenKey(key)
+
+  .. versionadded:: 1.8.0
+
+  Set the supplied ``TCP Fast Open`` key on all frontends. This can for example be used to allow all dnsdist instances in an anycast cluster to use the same ``TCP Fast Open`` key, reducing round-trips.
+
+  :param string key: The format of the key can be found in ``/proc/sys/net/ipv4/tcp_fastopen_key``
+
 .. function:: makeIPCipherKey(password) -> string
 
   .. versionadded:: 1.4.0
@@ -1598,6 +1683,38 @@ Other functions
   :param int numberOfDaysOfValidity: Number of days this OCSP response should be valid.
   :param int numberOfMinutesOfValidity: Number of minutes this OCSP response should be valid, in addition to the number of days.
 
+.. function:: loadTLSEngine(engineName [, defaultString])
+
+  .. versionadded:: 1.8.0
+
+  Load the OpenSSL engine named ``engineName``, setting the engine default string to ``defaultString`` if supplied. Engines can be used to accelerate cryptographic operations, like for example Intel QAT.
+  At the moment up to a maximum of 32 loaded engines are supported, and that support is experimental.
+  Some engines might actually degrade performance unless the TLS asynchronous mode of OpenSSL is enabled. To enable it see the ``tlsAsyncMode`` parameter on :func:`addTLSLocal`.
+
+  :param string engineName: The name of the engine to load.
+  :param string defaultString: The default string to pass to the engine. The exact value depends on the engine but represents the algorithms to register with the engine, as a list of  comma-separated keywords. For example "RSA,EC,DSA,DH,PKEY,PKEY_CRYPTO,PKEY_ASN1".
+
+.. function:: newTLSCertificate(pathToCert[, options])
+
+  .. versionadded:: 1.8.0
+
+  Creates a TLSCertificate object suited to be used with functions like :func:`addDOHLocal` and :func:`addTLSLocal` for TLS certificate configuration.
+
+  PKCS12 files are only supported by the ``openssl`` provider, password-protected or not.
+
+  :param string pathToCert: Path to a file containing the certificate or a PCKS12 file containing both a certificate and a key.
+  :param table options: A table with key: value pairs with additional options.
+
+  Options:
+
+  * ``key="path/to/key"``: string - Path to a file containing the key corresponding to the certificate.
+  * ``password="pass"``: string - Password protecting the PCKS12 file if appropriate.
+
+  .. code-block:: lua
+
+    newTLSCertificate("path/to/pub.crt", {key="path/to/private.pem"})
+    newTLSCertificate("path/to/domain.p12", {password="passphrase"}) -- use a password protected PCKS12 file
+
 DOHFrontend
 ~~~~~~~~~~~
 
@@ -1607,14 +1724,21 @@ DOHFrontend
 
   This object represents an address and port dnsdist is listening on for DNS over HTTPS queries.
 
+  .. method:: DOHFrontend:getAddressAndPort() -> string
+
+     .. versionadded:: 1.7.1
+
+     Return the address and port this frontend is listening on.
+
   .. method:: DOHFrontend:loadNewCertificatesAndKeys(certFile(s), keyFile(s))
 
      .. versionadded:: 1.6.1
 
-     Create and switch to a new TLS context using the same options than were passed to the corresponding `addDOHLocal()` directive, but loading new certificates and keys from the selected files, replacing the existing ones.
+     .. versionchanged:: 1.8.0
+        ``certFile`` now accepts a TLSCertificate object or a list of such objects (see :func:`newTLSCertificate`)
 
-     :param str certFile(s): The path to a X.509 certificate file in PEM format, or a list of paths to such files.
-     :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones.
+     :param str certFile(s): The path to a X.509 certificate file in PEM format, a list of paths to such files, or a TLSCertificate object.
+     :param str keyFile(s): The path to the private key file corresponding to the certificate, or a list of paths to such files, whose order should match the certFile(s) ones. Ignored if ``certFile`` contains TLSCertificate objects.
 
   .. method:: DOHFrontend:loadTicketsKeys(ticketsKeysFile)
 
@@ -1674,6 +1798,12 @@ TLSFrontend
 .. class:: TLSFrontend
 
   This object represents the configuration of a listening frontend for DNS over TLS queries. To each frontend is associated a TLSContext.
+
+  .. method:: TLSFrontend:getAddressAndPort() -> string
+
+     .. versionadded:: 1.7.1
+
+     Return the address and port this frontend is listening on.
 
   .. method:: TLSFrontend:loadNewCertificatesAndKeys(certFile(s), keyFile(s))
 

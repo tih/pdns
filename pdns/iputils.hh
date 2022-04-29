@@ -32,8 +32,6 @@
 #include "misc.hh"
 #include <netdb.h>
 #include <sstream>
-#include <boost/tuple/tuple.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
 
 #include "namespaces.hh"
 
@@ -91,7 +89,7 @@ union ComboAddress {
 
   bool operator==(const ComboAddress& rhs) const
   {
-    if(boost::tie(sin4.sin_family, sin4.sin_port) != boost::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
+    if(std::tie(sin4.sin_family, sin4.sin_port) != std::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
       return false;
     if(sin4.sin_family == AF_INET)
       return sin4.sin_addr.s_addr == rhs.sin4.sin_addr.s_addr;
@@ -109,9 +107,9 @@ union ComboAddress {
     if(sin4.sin_family == 0) {
       return false;
     }
-    if(boost::tie(sin4.sin_family, sin4.sin_port) < boost::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
+    if(std::tie(sin4.sin_family, sin4.sin_port) < std::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
       return true;
-    if(boost::tie(sin4.sin_family, sin4.sin_port) > boost::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
+    if(std::tie(sin4.sin_family, sin4.sin_port) > std::tie(rhs.sin4.sin_family, rhs.sin4.sin_port))
       return false;
 
     if(sin4.sin_family == AF_INET)
@@ -143,7 +141,7 @@ union ComboAddress {
     }
   };
 
-  struct addressOnlyLessThan: public std::binary_function<ComboAddress, ComboAddress, bool>
+  struct addressOnlyLessThan
   {
     bool operator()(const ComboAddress& a, const ComboAddress& b) const
     {
@@ -158,7 +156,7 @@ union ComboAddress {
     }
   };
 
-  struct addressOnlyEqual: public std::binary_function<ComboAddress, ComboAddress, bool>
+  struct addressOnlyEqual
   {
     bool operator()(const ComboAddress& a, const ComboAddress& b) const
     {
@@ -500,7 +498,7 @@ public:
     d_network = makeComboAddress(split.first);
 
     if (!split.second.empty()) {
-      setBits(static_cast<uint8_t>(pdns_stou(split.second)));
+      setBits(pdns::checked_stoi<uint8_t>(split.second));
     }
     else if (d_network.sin4.sin_family == AF_INET) {
       setBits(32);
@@ -614,7 +612,7 @@ public:
 
   bool operator==(const Netmask& rhs) const
   {
-    return tie(d_network, d_bits) == tie(rhs.d_network, rhs.d_bits);
+    return std::tie(d_network, d_bits) == std::tie(rhs.d_network, rhs.d_bits);
   }
 
   bool empty() const
@@ -888,15 +886,21 @@ private:
 
   void copyTree(const NetmaskTree& rhs)
   {
-    TreeNode *node;
-
-    node = rhs.d_root.get();
-    if (node != nullptr)
-      node = node->traverse_l();
-    while (node != nullptr) {
-      if (node->assigned)
-        insert(node->node.first).second = node->node.second;
-      node = node->traverse_lnr();
+    try {
+      TreeNode *node = rhs.d_root.get();
+      if (node != nullptr)
+        node = node->traverse_l();
+      while (node != nullptr) {
+        if (node->assigned)
+          insert(node->node.first).second = node->node.second;
+        node = node->traverse_lnr();
+      }
+    }
+    catch (const NetmaskException&) {
+      abort();
+    }
+    catch (const std::logic_error&) {
+      abort();
     }
   }
 
@@ -1552,7 +1556,7 @@ public:
 
   bool operator==(const AddressAndPortRange& rhs) const
   {
-    return tie(d_addr, d_addrMask, d_portMask) == tie(rhs.d_addr, rhs.d_addrMask, rhs.d_portMask);
+    return std::tie(d_addr, d_addrMask, d_portMask) == std::tie(rhs.d_addr, rhs.d_addrMask, rhs.d_portMask);
   }
 
   bool operator<(const AddressAndPortRange& rhs) const
@@ -1649,3 +1653,12 @@ bool isTCPSocketUsable(int sock);
 
 extern template class NetmaskTree<bool>;
 ComboAddress parseIPAndPort(const std::string& input, uint16_t port);
+
+std::set<std::string> getListOfNetworkInterfaces();
+std::vector<ComboAddress> getListOfAddressesOfNetworkInterface(const std::string& itf);
+
+/* These functions throw if the value was already set to a higher value,
+   or on error */
+void setSocketBuffer(int fd, int optname, uint32_t size);
+void setSocketReceiveBuffer(int fd, uint32_t size);
+void setSocketSendBuffer(int fd, uint32_t size);

@@ -124,7 +124,7 @@ static int readnWithTimeout(int fd, void* buffer, unsigned int n, unsigned int i
       else
         throw NetworkError("Did not fulfill read from TCP due to EOF");
     }
-    
+
     ptr += ret;
     bytes -= ret;
     if (totalTimeout) {
@@ -163,7 +163,7 @@ static void writenWithTimeout(int fd, const void *buffer, unsigned int n, unsign
     if(!ret) {
       throw NetworkError("Did not fulfill TCP write due to EOF");
     }
-    
+
     ptr += ret;
     bytes -= ret;
   }
@@ -221,7 +221,7 @@ void TCPNameserver::doConnection(int fd)
 {
   setThreadName("pdns/tcpConnect");
   std::unique_ptr<DNSPacket> packet;
-  ComboAddress remote;
+  ComboAddress remote, accountremote;
   socklen_t remotelen=sizeof(remote);
   size_t transactions = 0;
   time_t start = 0;
@@ -296,6 +296,10 @@ void TCPNameserver::doConnection(int fd)
       }
       inner_remote = psource;
       inner_tcp = tcp;
+      accountremote = psource;
+    }
+    else {
+      accountremote = remote;
     }
 
     for(;;) {
@@ -318,24 +322,24 @@ void TCPNameserver::doConnection(int fd)
 
       // this check will always be false *if* no one touches
       // the mesg array. pktlen can be maximum of 65535 as
-      // it is 2 byte unsigned variable. In getQuestion, we 
-      // write to 0 up to pktlen-1 so 65535 is just right. 
+      // it is 2 byte unsigned variable. In getQuestion, we
+      // write to 0 up to pktlen-1 so 65535 is just right.
 
       // do not remove this check as it will catch if someone
-      // decreases the mesg buffer size for some reason. 
+      // decreases the mesg buffer size for some reason.
       if(pktlen > mesgsize) {
         g_log<<Logger::Warning<<"Received an overly large question from "<<remote.toString()<<", dropping"<<endl;
         break;
       }
-      
+
       if (maxConnectionDurationReached(d_maxConnectionDuration, start, remainingTime)) {
         g_log << Logger::Notice<<"TCP Remote "<< remote <<" exceeded the maximum TCP connection duration, dropping.";
         break;
       }
 
       getQuestion(fd, mesg.get(), pktlen, remote, remainingTime);
-      S.inc("tcp-queries");      
-      if(remote.sin4.sin_family == AF_INET6)
+      S.inc("tcp-queries");
+      if (accountremote.sin4.sin_family == AF_INET6)
         S.inc("tcp6-queries");
       else
         S.inc("tcp4-queries");
@@ -364,7 +368,7 @@ void TCPNameserver::doConnection(int fd)
         continue;
       }
 
-      std::unique_ptr<DNSPacket> reply; 
+      std::unique_ptr<DNSPacket> reply;
       auto cached = make_unique<DNSPacket>(false);
       if(logDNSQueries)  {
         g_log << Logger::Notice<<"TCP Remote "<< packet->getRemoteString() <<" wants '" << packet->qdomain<<"|"<<packet->qtype.toString() <<
@@ -376,6 +380,7 @@ void TCPNameserver::doConnection(int fd)
           if(logDNSQueries)
             g_log<<": packetcache HIT"<<endl;
           cached->setRemote(&packet->d_remote);
+          cached->d_inner_remote = packet->d_inner_remote;
           cached->d.id=packet->d.id;
           cached->d.rd=packet->d.rd; // copy in recursion desired bit
           cached->commitD(); // commit d to the packet                        inlined
@@ -415,11 +420,13 @@ void TCPNameserver::doConnection(int fd)
   }
 
   catch(std::exception &e) {
-    g_log<<Logger::Error<<"TCP Connection Thread died because of STL error: "<<e.what()<<endl;
+    s_P.lock()->reset(); // on next call, backend will be recycled
+    g_log << Logger::Error << "TCP Connection Thread died because of STL error, cycling backend: " << e.what() << endl;
   }
   catch( ... )
   {
-    g_log << Logger::Error << "TCP Connection Thread caught unknown exception." << endl;
+    s_P.lock()->reset(); // on next call, backend will be recycled
+    g_log << Logger::Error << "TCP Connection Thread caught unknown exception, cycling backend." << endl;
   }
   d_connectionroom_sem->post();
 
@@ -460,7 +467,7 @@ bool TCPNameserver::canDoAXFR(std::unique_ptr<DNSPacket>& q, bool isAXFR, std::u
       return true;
     }
   }
-  
+
   // cerr<<"checking allow-axfr-ips"<<endl;
   if(!(::arg()["allow-axfr-ips"].empty()) && d_ng.match( q->getInnerRemote() )) {
     g_log<<Logger::Notice<<logPrefix<<"allowed: client IP is in allow-axfr-ips"<<endl;
@@ -511,7 +518,7 @@ bool TCPNameserver::canDoAXFR(std::unique_ptr<DNSPacket>& q, bool isAXFR, std::u
         }
       }
     }
-  }  
+  }
 
   extern CommunicatorClass Communicator;
 
@@ -627,8 +634,8 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
       return 0;
     }
   }
-  
-  
+
+
   // SOA *must* go out first, our signing pipe might reorder
   DLOG(g_log<<logPrefix<<"sending out SOA"<<endl);
   DNSZoneRecord soa = makeEditedDNSZRFromSOAData(dk, sd);
@@ -638,16 +645,16 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
     authSet.insert(target);
     addRRSigs(dk, db, authSet, outpacket->getRRS());
   }
-  
+
   if(haveTSIGDetails && !tsigkeyname.empty())
     outpacket->setTSIGDetails(trc, tsigkeyname, tsigsecret, trc.d_mac); // first answer is 'normal'
-  
+
   sendPacket(outpacket, outsock, false);
-  
+
   trc.d_mac = outpacket->d_trc.d_mac;
   outpacket = getFreshAXFRPacket(q);
 
-  
+
   DNSZoneRecord zrr;
   vector<DNSZoneRecord> zrrs;
 
@@ -691,16 +698,16 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
         }
 
         if(doCDS && !publishCDS.empty()){
-          doCDS = false;
           zrr.dr.d_type=QType::CDS;
           vector<string> digestAlgos;
           stringtok(digestAlgos, publishCDS, ", ");
           if(std::find(digestAlgos.begin(), digestAlgos.end(), "0") != digestAlgos.end()) {
+            doCDS = false;
             zrr.dr.d_content=PacketHandler::s_deleteCDSContent;
             zrrs.push_back(zrr);
           } else {
             for(auto const &digestAlgo : digestAlgos) {
-              zrr.dr.d_content=std::make_shared<DSRecordContent>(makeDSFromDNSKey(target, value.first.getDNSKEY(), pdns_stou(digestAlgo)));
+              zrr.dr.d_content=std::make_shared<DSRecordContent>(makeDSFromDNSKey(target, value.first.getDNSKEY(), pdns::checked_stoi<uint8_t>(digestAlgo)));
               zrrs.push_back(zrr);
             }
           }
@@ -719,9 +726,9 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
     DNSName keyname = DNSName(toBase32Hex(hashQNameWithSalt(ns3pr, zrr.dr.d_name)));
     zrrs.push_back(zrr);
   }
-  
+
   // now start list zone
-  if(!(sd.db->list(target, sd.domain_id))) {  
+  if(!(sd.db->list(target, sd.domain_id))) {
     g_log<<Logger::Error<<logPrefix<<"backend signals error condition, aborting AXFR"<<endl;
     outpacket->setRcode(RCode::ServFail);
     sendPacket(outpacket,outsock);
@@ -826,7 +833,7 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
   // Group records by name and type, signpipe stumbles over interrupted rrsets
   if(securedZone && !presignedZone) {
     sort(zrrs.begin(), zrrs.end(), [](const DNSZoneRecord& a, const DNSZoneRecord& b) {
-      return tie(a.dr.d_name, a.dr.d_type) < tie(b.dr.d_name, b.dr.d_type);
+      return std::tie(a.dr.d_name, a.dr.d_type) < std::tie(b.dr.d_name, b.dr.d_type);
     });
   }
 
@@ -1027,7 +1034,7 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
           outpacket->getRRS() = csp.getChunk();
           if(!outpacket->getRRS().empty()) {
             if(haveTSIGDetails && !tsigkeyname.empty())
-              outpacket->setTSIGDetails(trc, tsigkeyname, tsigsecret, trc.d_mac, true); 
+              outpacket->setTSIGDetails(trc, tsigkeyname, tsigsecret, trc.d_mac, true);
             sendPacket(outpacket, outsock, false);
             trc.d_mac=outpacket->d_trc.d_mac;
             outpacket=getFreshAXFRPacket(q);
@@ -1044,7 +1051,7 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
   cerr<<"Outstanding: "<<csp.d_outstanding<<", "<<csp.d_queued - csp.d_signed << endl;
   cerr<<"Ready for consumption: "<<csp.getReady()<<endl;
   * */
-  for(;;) { 
+  for(;;) {
     outpacket->getRRS() = csp.getChunk(true); // flush the pipe
     if(!outpacket->getRRS().empty()) {
       if(haveTSIGDetails && !tsigkeyname.empty())
@@ -1053,23 +1060,23 @@ int TCPNameserver::doAXFR(const DNSName &target, std::unique_ptr<DNSPacket>& q, 
       trc.d_mac=outpacket->d_trc.d_mac;
       outpacket=getFreshAXFRPacket(q);
     }
-    else 
+    else
       break;
   }
-  
+
   udiff=dt.udiffNoReset();
-  if(securedZone) 
+  if(securedZone)
     g_log<<Logger::Debug<<logPrefix<<"done signing: "<<csp.d_signed/(udiff/1000000.0)<<" sigs/s, "<<endl;
-  
+
   DLOG(g_log<<logPrefix<<"done writing out records"<<endl);
   /* and terminate with yet again the SOA record */
   outpacket=getFreshAXFRPacket(q);
   outpacket->addRecord(std::move(soa));
   if(haveTSIGDetails && !tsigkeyname.empty())
-    outpacket->setTSIGDetails(trc, tsigkeyname, tsigsecret, trc.d_mac, true); 
-  
+    outpacket->setTSIGDetails(trc, tsigkeyname, tsigsecret, trc.d_mac, true);
+
   sendPacket(outpacket, outsock);
-  
+
   DLOG(g_log<<logPrefix<<"last packet - close"<<endl);
   g_log<<Logger::Notice<<logPrefix<<"AXFR finished"<<endl;
 
@@ -1093,7 +1100,7 @@ int TCPNameserver::doIXFR(std::unique_ptr<DNSPacket>& q, int outsock)
       stringtok(parts, rr->d_content->getZoneRepresentation());
       if (parts.size() >= 3) {
         try {
-          serial=pdns_stou(parts[2]);
+          pdns::checked_stoi_into(serial, parts[2]);
         }
         catch(const std::out_of_range& oor) {
           g_log<<Logger::Warning<<logPrefix<<"invalid serial in IXFR query"<<endl;
@@ -1307,7 +1314,7 @@ void TCPNameserver::thread()
           if((fd=accept(sock, (sockaddr*)&remote, &addrlen))<0) {
             int err = errno;
             g_log<<Logger::Error<<"TCP question accept error: "<<stringerror(err)<<endl;
-            
+
             if(err==EMFILE) {
               g_log<<Logger::Error<<"TCP handler out of filedescriptors, exiting, won't recover from this"<<endl;
               _exit(1);

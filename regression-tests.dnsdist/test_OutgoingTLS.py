@@ -65,8 +65,10 @@ class OutgoingTLSTests(object):
         # we tried to reuse the connection (and then it failed but hey)
         self.assertEqual(self.getServerStat('tcpReusedConnections'), numberOfQueries - 1)
         # we resumed the TLS session, though, but since we only learn about that
-        # when the connection is closed, we are off by one
-        self.assertEqual(self.getServerStat('tlsResumptions'), numberOfUDPQueries - 1)
+        # when the connection is closed, we might be off by one, except if a health check
+        # allowed the first TCP connection to be resumed as well
+        self.assertGreaterEqual(self.getServerStat('tlsResumptions'), numberOfUDPQueries - 1)
+        self.assertLessEqual(self.getServerStat('tlsResumptions'), numberOfUDPQueries)
 
     def testTCP(self):
         """
@@ -144,10 +146,18 @@ class TestOutgoingTLSOpenSSL(DNSDistTest, OutgoingTLSTests):
     setWebserverConfig({password="%s", apiKey="%s"})
     """
 
+    @staticmethod
+    def sniCallback(sslSocket, sni, sslContext):
+        assert(sni == 'powerdns.com')
+        return None
+
     @classmethod
     def startResponders(cls):
         tlsContext = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tlsContext.load_cert_chain('server.chain', 'server.key')
+        # requires Python 3.7+
+        if hasattr(tlsContext, 'sni_callback'):
+            tlsContext.sni_callback = cls.sniCallback
 
         print("Launching TLS responder..")
         cls._TLSResponder = threading.Thread(name='TLS Responder', target=cls.TCPResponder, args=[cls._tlsBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, None, tlsContext])

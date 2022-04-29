@@ -32,7 +32,6 @@
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/ordered_index.hpp>
 #include <boost/multi_index/hashed_index.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
 #include <boost/multi_index/key_extractors.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
 #include <boost/version.hpp>
@@ -57,7 +56,7 @@ public:
 
   typedef boost::optional<std::string> OptTag;
 
-  time_t get(time_t, const DNSName& qname, const QType qt, bool requireAuth, vector<DNSRecord>* res, const ComboAddress& who, bool refresh = false, const OptTag& routingTag = boost::none, vector<std::shared_ptr<RRSIGRecordContent>>* signatures = nullptr, std::vector<std::shared_ptr<DNSRecord>>* authorityRecs = nullptr, bool* variable = nullptr, vState* state = nullptr, bool* wasAuth = nullptr, DNSName* fromAuthZone = nullptr);
+  time_t get(time_t, const DNSName& qname, const QType qt, bool requireAuth, vector<DNSRecord>* res, const ComboAddress& who, bool refresh = false, const OptTag& routingTag = boost::none, vector<std::shared_ptr<RRSIGRecordContent>>* signatures = nullptr, std::vector<std::shared_ptr<DNSRecord>>* authorityRecs = nullptr, bool* variable = nullptr, vState* state = nullptr, bool* wasAuth = nullptr, DNSName* fromAuthZone = nullptr, ComboAddress* fromAuthIP = nullptr);
 
   void replace(time_t, const DNSName& qname, const QType qt, const vector<DNSRecord>& content, const vector<shared_ptr<RRSIGRecordContent>>& signatures, const std::vector<std::shared_ptr<DNSRecord>>& authorityRecs, bool auth, const DNSName& authZone, boost::optional<Netmask> ednsmask = boost::none, const OptTag& routingTag = boost::none, vState state = vState::Indeterminate, boost::optional<ComboAddress> from = boost::none);
 
@@ -73,8 +72,8 @@ public:
 private:
   struct CacheEntry
   {
-    CacheEntry(const boost::tuple<DNSName, QType, OptTag, Netmask>& key, bool auth) :
-      d_qname(key.get<0>()), d_netmask(key.get<3>().getNormalized()), d_rtag(key.get<2>()), d_state(vState::Indeterminate), d_ttd(0), d_qtype(key.get<1>()), d_auth(auth), d_submitted(false)
+    CacheEntry(const std::tuple<DNSName, QType, OptTag, Netmask>& key, bool auth) :
+      d_qname(std::get<0>(key)), d_netmask(std::get<3>(key).getNormalized()), d_rtag(std::get<2>(key)), d_state(vState::Indeterminate), d_ttd(0), d_orig_ttl{0}, d_qtype(std::get<1>(key)), d_auth(auth), d_submitted(false)
     {
     }
 
@@ -252,7 +251,7 @@ private:
   Entries getEntries(MapCombo::LockedContent& content, const DNSName& qname, const QType qt, const OptTag& rtag);
   cache_t::const_iterator getEntryUsingECSIndex(MapCombo::LockedContent& content, time_t now, const DNSName& qname, QType qtype, bool requireAuth, const ComboAddress& who);
 
-  time_t handleHit(MapCombo::LockedContent& content, OrderedTagIterator_t& entry, const DNSName& qname, uint32_t& origTTL, vector<DNSRecord>* res, vector<std::shared_ptr<RRSIGRecordContent>>* signatures, std::vector<std::shared_ptr<DNSRecord>>* authorityRecs, bool* variable, boost::optional<vState>& state, bool* wasAuth, DNSName* authZone);
+  time_t handleHit(MapCombo::LockedContent& content, OrderedTagIterator_t& entry, const DNSName& qname, uint32_t& origTTL, vector<DNSRecord>* res, vector<std::shared_ptr<RRSIGRecordContent>>* signatures, std::vector<std::shared_ptr<DNSRecord>>* authorityRecs, bool* variable, boost::optional<vState>& state, bool* wasAuth, DNSName* authZone, ComboAddress* fromAuthIP);
 
 public:
   void preRemoval(MapCombo::LockedContent& map, const CacheEntry& entry)
@@ -261,7 +260,7 @@ public:
       return;
     }
 
-    auto key = tie(entry.d_qname, entry.d_qtype);
+    auto key = std::tie(entry.d_qname, entry.d_qtype);
     auto ecsIndexEntry = map.d_ecsIndex.find(key);
     if (ecsIndexEntry != map.d_ecsIndex.end()) {
       ecsIndexEntry->removeNetmask(entry.d_netmask);

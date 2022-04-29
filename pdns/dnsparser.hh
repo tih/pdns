@@ -29,11 +29,10 @@
 // #include <netinet/in.h>
 #include "misc.hh"
 
-#include <boost/tuple/tuple.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
 #include "dns.hh"
 #include "dnswriter.hh"
 #include "dnsname.hh"
+#include "noinitvector.hh"
 #include "pdnsexception.hh"
 #include "iputils.hh"
 #include "svc-records.hh"
@@ -50,7 +49,7 @@
     We can add:        2 -> 1  easily by reversing the packetwriter
     And we might be able to reverse 2 -> 3 as well
 */
-    
+
 #include "namespaces.hh"
 
 class MOADNSException : public runtime_error
@@ -79,7 +78,7 @@ public:
   uint32_t get32BitInt();
   uint16_t get16BitInt();
   uint8_t get8BitInt();
-  
+
   void xfrNodeOrLocatorID(NodeOrLocatorID& val);
   void xfr48BitInt(uint64_t& val);
 
@@ -212,7 +211,7 @@ public:
 
     pw.startRecord(qname, this->getType());
     this->toPacket(pw);
-    
+
     string record;
     pw.getRecordPayload(record); // needs to be called before commit()
     return record;
@@ -222,7 +221,7 @@ public:
   {
     return typeid(*this)==typeid(rhs) && this->getZoneRepresentation() == rhs.getZoneRepresentation();
   }
-  
+
   static shared_ptr<DNSRecordContent> deserialize(const DNSName& qname, uint16_t qtype, const string& serialized);
 
   void doRecordCheck(const struct DNSRecord&){}
@@ -241,7 +240,7 @@ public:
     getN2Typemap().emplace(name, pair(cl, ty));
   }
 
-  static void unregist(uint16_t cl, uint16_t ty) 
+  static void unregist(uint16_t cl, uint16_t ty)
   {
     auto key = pair(cl, ty);
     getTypemap().erase(key);
@@ -258,17 +257,18 @@ public:
     n2typemap_t::const_iterator iter = getN2Typemap().find(toUpper(name));
     if(iter != getN2Typemap().end())
       return iter->second.second;
-    
-    if (isUnknownType(name))
-      return (uint16_t) pdns_stou(name.substr(4));
-    
+
+    if (isUnknownType(name)) {
+      return pdns::checked_stoi<uint16_t>(name.substr(4));
+    }
+
     throw runtime_error("Unknown DNS type '"+name+"'");
   }
 
   static const string NumberToType(uint16_t num, uint16_t classnum=1)
   {
     auto iter = getT2Namemap().find(pair(classnum, num));
-    if(iter == getT2Namemap().end()) 
+    if(iter == getT2Namemap().end())
       return "TYPE" + std::to_string(num);
       //      throw runtime_error("Unknown DNS type with numerical id "+std::to_string(num));
     return iter->second;
@@ -302,44 +302,44 @@ struct DNSRecord
 
   bool operator<(const DNSRecord& rhs) const
   {
-    if(tie(d_name, d_type, d_class, d_ttl) < tie(rhs.d_name, rhs.d_type, rhs.d_class, rhs.d_ttl))
+    if(std::tie(d_name, d_type, d_class, d_ttl) < std::tie(rhs.d_name, rhs.d_type, rhs.d_class, rhs.d_ttl))
       return true;
-    
-    if(tie(d_name, d_type, d_class, d_ttl) != tie(rhs.d_name, rhs.d_type, rhs.d_class, rhs.d_ttl))
+
+    if(std::tie(d_name, d_type, d_class, d_ttl) != std::tie(rhs.d_name, rhs.d_type, rhs.d_class, rhs.d_ttl))
       return false;
-    
+
     string lzrp, rzrp;
     if(d_content)
       lzrp=toLower(d_content->getZoneRepresentation());
     if(rhs.d_content)
       rzrp=toLower(rhs.d_content->getZoneRepresentation());
-    
+
     return lzrp < rzrp;
   }
 
   // this orders in canonical order and keeps the SOA record on top
-  static bool prettyCompare(const DNSRecord& a, const DNSRecord& b) 
+  static bool prettyCompare(const DNSRecord& a, const DNSRecord& b)
   {
-    auto aType = (a.d_type == QType::SOA) ? 0 : a.d_type; 
-    auto bType = (b.d_type == QType::SOA) ? 0 : b.d_type; 
+    auto aType = (a.d_type == QType::SOA) ? 0 : a.d_type;
+    auto bType = (b.d_type == QType::SOA) ? 0 : b.d_type;
 
     if(a.d_name.canonCompare(b.d_name))
       return true;
     if(b.d_name.canonCompare(a.d_name))
       return false;
 
-    if(tie(aType, a.d_class, a.d_ttl) < tie(bType, b.d_class, b.d_ttl))
+    if(std::tie(aType, a.d_class, a.d_ttl) < std::tie(bType, b.d_class, b.d_ttl))
       return true;
-    
-    if(tie(aType, a.d_class, a.d_ttl) != tie(bType, b.d_class, b.d_ttl))
+
+    if(std::tie(aType, a.d_class, a.d_ttl) != std::tie(bType, b.d_class, b.d_ttl))
       return false;
-    
+
     string lzrp, rzrp;
     if(a.d_content)
       lzrp=toLower(a.d_content->getZoneRepresentation());
     if(b.d_content)
       rzrp=toLower(b.d_content->getZoneRepresentation());
-    
+
     return lzrp < rzrp;
   }
 
@@ -348,7 +348,7 @@ struct DNSRecord
   {
     if(d_type != rhs.d_type || d_class != rhs.d_class || d_name != rhs.d_name)
       return false;
-    
+
     return *d_content == *rhs.d_content;
   }
 };
@@ -414,7 +414,7 @@ public:
   dnsheader d_header;
 
   typedef vector<pair<DNSRecord, uint16_t > > answers_t;
-  
+
   //! All answers contained in this packet (everything *but* the question section)
   answers_t d_answers;
 
@@ -434,6 +434,9 @@ string simpleCompress(const string& label, const string& root="");
 void ageDNSPacket(char* packet, size_t length, uint32_t seconds);
 void ageDNSPacket(std::string& packet, uint32_t seconds);
 void editDNSPacketTTL(char* packet, size_t length, const std::function<uint32_t(uint8_t, uint16_t, uint16_t, uint32_t)>& visitor);
+void clearDNSPacketRecordTypes(vector<uint8_t>& packet, const std::set<QType>& qtypes);
+void clearDNSPacketRecordTypes(PacketBuffer& packet, const std::set<QType>& qtypes);
+void clearDNSPacketRecordTypes(char* packet, size_t& length, const std::set<QType>& qtypes);
 uint32_t getDNSPacketMinTTL(const char* packet, size_t length, bool* seenAuthSOA=nullptr);
 uint32_t getDNSPacketLength(const char* packet, size_t length);
 uint16_t getRecordsOfTypeCount(const char* packet, size_t length, uint8_t section, uint16_t type);

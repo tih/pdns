@@ -816,9 +816,12 @@ Actions
 
 :ref:`RulesIntro` need to be combined with an action for them to actually do something with the matched packets.
 Some actions allow further processing of rules, this is noted in their description. Most of these start with 'Set' with a few exceptions, mostly for logging actions. These exceptions are:
+
+- :func:`ClearRecordTypesResponseAction`
 - :func:`KeyValueStoreLookupAction`
 - :func:`DnstapLogAction`
 - :func:`DnstapLogResponseAction`
+- :func:`LimitTTLResponseAction`
 - :func:`LogAction`
 - :func:`NoneAction`
 - :func:`RemoteLogAction`
@@ -836,6 +839,30 @@ The following actions exist.
 .. function:: AllowResponseAction()
 
   Let these packets go through.
+
+.. function:: ClearRecordTypesResponseAction(types)
+
+  .. versionadded:: 1.8.0
+
+  Removes given type(s) records from the response. Beware you can accidentally turn the answer into a NODATA response
+  without a SOA record in the additional section in which case you may want to use :func:`NegativeAndSOAAction` to generate an answer,
+  see example bellow.
+  Subsequent rules are processed after this action.
+
+  .. code-block:: Lua
+
+    -- removes any HTTPS record in the response
+    addResponseAction(
+            QNameRule('www.example.com.'),
+            ClearRecordTypesResponseAction(DNSQType.HTTPS)
+    )
+    -- reply directly with NODATA and a SOA record as we know the answer will be empty
+    addAction(
+            AndRule{QNameRule('www.example.com.'), QTypeRule(DNSQType.HTTPS)},
+            NegativeAndSOAAction(false, 'example.com.', 3600, 'ns.example.com.', 'postmaster.example.com.', 1, 1800, 900, 604800, 86400)
+    )
+
+  :param int types: a single type or a list of types to remove
 
 .. function:: ContinueAction(action)
 
@@ -866,7 +893,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetDisableECSAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetDisableECSAction` instead.
 
   Disable the sending of ECS to the backend.
   Subsequent rules are processed after this action.
@@ -875,7 +902,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetDisableValidationAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetDisableValidationAction` instead.
 
   Set the CD bit in the query and let it go through.
   Subsequent rules are processed after this action.
@@ -912,7 +939,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetECSOverrideAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetECSOverrideAction` instead.
 
   Whether an existing EDNS Client Subnet value should be overridden (true) or not (false).
   Subsequent rules are processed after this action.
@@ -923,7 +950,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetECSPrefixLengthAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetECSPrefixLengthAction` instead.
 
   Set the ECS prefix length.
   Subsequent rules are processed after this action.
@@ -1000,6 +1027,15 @@ The following actions exist.
   :param KeyValueStore kvs: The key value store to query
   :param KeyValueLookupKey lookupKey: The key to use for the lookup
   :param string destinationTag: The name of the tag to store the result into
+
+.. function:: LimitTTLResponseAction(min[, max])
+
+  .. versionadded:: 1.8.0
+
+  Cap the TTLs of the response to the given boundaries.
+
+  :param int min: The minimum allowed value
+  :param int max: The maximum allowed value
 
 .. function:: LogAction([filename[, binary[, append[, buffered[, verboseOnly[, includeTimestamp]]]]]])
 
@@ -1121,7 +1157,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetMacAddrAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetMacAddrAction` instead.
 
   Add the source MAC address to the query as EDNS0 option ``option``.
   This action is currently only supported on Linux.
@@ -1163,16 +1199,20 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetNoRecurseAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetNoRecurseAction` instead.
 
   Strip RD bit from the question, let it go through.
   Subsequent rules are processed after this action.
 
-.. function:: PoolAction(poolname)
+.. function:: PoolAction(poolname [, stop])
 
-  Send the packet into the specified pool.
+  .. versionchanged:: 1.8.0
+    Added the ``stop`` optional parameter.
+
+  Send the packet into the specified pool. If ``stop`` is set to false, subsequent rules will be processed after this action.
 
   :param string poolname: The name of the pool
+  :param bool stop: Whether to stop processing rules after this action. Default is true, meaning the remaining rules will not be processed.
 
 .. function:: QPSAction(maxqps)
 
@@ -1183,11 +1223,15 @@ The following actions exist.
 
 .. function:: QPSPoolAction(maxqps, poolname)
 
-  Send the packet into the specified pool only if it does not exceed the ``maxqps`` queries per second limits.
+  .. versionchanged:: 1.8.0
+    Added the ``stop`` optional parameter.
+
+  Send the packet into the specified pool only if it does not exceed the ``maxqps`` queries per second limits. If ``stop`` is set to false, subsequent rules will be processed after this action.
   Letting the subsequent rules apply otherwise.
 
   :param int maxqps: The QPS limit for that pool
   :param string poolname: The name of the pool
+  :param bool stop: Whether to stop processing rules after this action. Default is true, meaning the remaining rules will not be processed.
 
 .. function:: RCodeAction(rcode [, options])
 
@@ -1328,6 +1372,22 @@ The following actions exist.
 
   :param int option: The EDNS0 option number
 
+.. function:: SetMaxTTLResponseAction(max)
+
+  .. versionadded:: 1.8.0
+
+  Cap the TTLs of the response to the given maximum.
+
+  :param int max: The maximum allowed value
+
+.. function:: SetMinTTLResponseAction(min)
+
+  .. versionadded:: 1.8.0
+
+  Cap the TTLs of the response to the given minimum.
+
+  :param int min: The minimum allowed value
+
 .. function:: SetNoRecurseAction()
 
   .. versionadded:: 1.6.0
@@ -1342,7 +1402,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`NegativeAndSOAAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`NegativeAndSOAAction` instead.
 
   Turn a question into a response, either a NXDOMAIN or a NODATA one based on ''nxd'', setting the QR bit to 1 and adding a SOA record in the additional section.
 
@@ -1432,7 +1492,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetSkipAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetSkipAction` instead.
 
   Don't lookup the cache for this query, don't store the answer.
   Subsequent rules are processed after this action.
@@ -1554,10 +1614,19 @@ The following actions exist.
   * ``ra``: bool - Set the RA bit to this value (true means the bit is set, false means it's cleared). Default is to copy the value of the RD bit from the incoming query.
   * ``ttl``: int - The TTL of the record.
 
+.. function:: SpoofPacketAction(rawPacket, len)
+
+  .. versionadded:: 1.8.0
+
+  Spoof a raw self-generated answer
+
+  :param string rawPacket: The raw wire-ready DNS answer
+  :param int len: The length of the packet
+
 .. function:: TagAction(name, value)
 
   .. deprecated:: 1.6.0
-    This function has been deprecated in 1.6.0, please use :func:`SetTagAction` instead.
+    This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetTagAction` instead.
 
   Associate a tag named ``name`` with a value of ``value`` to this query, that will be passed on to the response.
   Subsequent rules are processed after this action.
@@ -1568,7 +1637,7 @@ The following actions exist.
 .. function:: TagResponseAction(name, value)
 
   .. deprecated:: 1.6.0
-    This function has been deprecated in 1.6.0, please use :func:`SetTagResponseAction` instead.
+    This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetTagResponseAction` instead.
 
   Associate a tag named ``name`` with a value of ``value`` to this response.
   Subsequent rules are processed after this action.
@@ -1598,7 +1667,7 @@ The following actions exist.
 
   .. deprecated:: 1.6.0
 
-  This function has been deprecated in 1.6.0, please use :func:`SetTempFailureCacheTTLAction` instead.
+  This function has been deprecated in 1.6.0 and removed in 1.7.0, please use :func:`SetTempFailureCacheTTLAction` instead.
 
   Set the cache TTL to use for ServFail and Refused replies. TTL is not applied for successful replies.
   Subsequent rules are processed after this action.

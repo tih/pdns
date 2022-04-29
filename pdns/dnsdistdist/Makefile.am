@@ -132,12 +132,15 @@ dnsdist_SOURCES = \
 	connection-management.hh \
 	credentials.cc credentials.hh \
 	dns.cc dns.hh \
+	dns_random.hh \
 	dnscrypt.cc dnscrypt.hh \
 	dnsdist-backend.cc \
 	dnsdist-cache.cc dnsdist-cache.hh \
-	dnsdist-carbon.cc \
+	dnsdist-carbon.cc dnsdist-carbon.hh \
 	dnsdist-console.cc dnsdist-console.hh \
+	dnsdist-discovery.cc dnsdist-discovery.hh \
 	dnsdist-dnscrypt.cc \
+	dnsdist-downstream-connection.hh \
 	dnsdist-dynblocks.cc dnsdist-dynblocks.hh \
 	dnsdist-dynbpf.cc dnsdist-dynbpf.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
@@ -165,6 +168,7 @@ dnsdist_SOURCES = \
 	dnsdist-protobuf.cc dnsdist-protobuf.hh \
 	dnsdist-protocols.cc dnsdist-protocols.hh \
 	dnsdist-proxy-protocol.cc dnsdist-proxy-protocol.hh \
+	dnsdist-random.cc dnsdist-random.hh \
 	dnsdist-rings.cc dnsdist-rings.hh \
 	dnsdist-rules.cc dnsdist-rules.hh \
 	dnsdist-secpoll.cc dnsdist-secpoll.hh \
@@ -233,6 +237,7 @@ testrunner_SOURCES = \
 	dnscrypt.cc dnscrypt.hh \
 	dnsdist-backend.cc \
 	dnsdist-cache.cc dnsdist-cache.hh \
+	dnsdist-downstream-connection.hh \
 	dnsdist-dynblocks.cc dnsdist-dynblocks.hh \
 	dnsdist-dynbpf.cc dnsdist-dynbpf.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
@@ -248,6 +253,7 @@ testrunner_SOURCES = \
 	dnsdist-nghttp2.cc dnsdist-nghttp2.hh \
 	dnsdist-protocols.cc dnsdist-protocols.hh \
 	dnsdist-proxy-protocol.cc dnsdist-proxy-protocol.hh \
+	dnsdist-random.cc dnsdist-random.hh \
 	dnsdist-rings.cc dnsdist-rings.hh \
 	dnsdist-rules.cc dnsdist-rules.hh \
 	dnsdist-session-cache.cc dnsdist-session-cache.hh \
@@ -309,7 +315,7 @@ testrunner_SOURCES = \
 dnsdist_LDFLAGS = \
 	$(AM_LDFLAGS) \
 	$(PROGRAM_LDFLAGS) \
-	-pthread 
+	-pthread
 
 dnsdist_LDADD = \
 	$(LUA_LIBS) \
@@ -408,11 +414,11 @@ endif
 
 if HAVE_SOLARIS
 dnsdist_SOURCES += \
-        devpollmplexer.cc \
-        portsmplexer.cc
+	devpollmplexer.cc \
+	portsmplexer.cc
 testrunner_SOURCES += \
-        devpollmplexer.cc \
-        portsmplexer.cc
+	devpollmplexer.cc \
+	portsmplexer.cc
 endif
 
 MANPAGES=dnsdist.1

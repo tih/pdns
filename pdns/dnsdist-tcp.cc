@@ -30,6 +30,7 @@
 #include "dnsdist-rings.hh"
 #include "dnsdist-tcp.hh"
 #include "dnsdist-tcp-downstream.hh"
+#include "dnsdist-downstream-connection.hh"
 #include "dnsdist-tcp-upstream.hh"
 #include "dnsdist-xpf.hh"
 #include "dnsparser.hh"
@@ -118,7 +119,7 @@ std::shared_ptr<TCPConnectionToBackend> IncomingTCPConnectionState::getDownstrea
   if (!downstream) {
     /* we don't have a connection to this backend owned yet, let's get one (it might not be a fresh one, though) */
     downstream = t_downstreamTCPConnectionsManager.getConnectionToDownstream(d_threadData.mplexer, ds, now, std::string());
-    if (ds->useProxyProtocol) {
+    if (ds->d_config.useProxyProtocol) {
       registerOwnedDownstreamConnection(downstream);
     }
   }
@@ -254,9 +255,13 @@ static void handleResponseSent(std::shared_ptr<IncomingTCPConnectionState>& stat
     const auto& ds = currentResponse.d_connection->getDS();
     const auto& ids = currentResponse.d_idstate;
     double udiff = ids.sentTime.udiff();
-    vinfolog("Got answer from %s, relayed to %s (%s, %d bytes), took %f usec", ds->remote.toStringWithPort(), ids.origRemote.toStringWithPort(), (state->d_handler.isTLS() ? "DoT" : "TCP"), currentResponse.d_buffer.size(), udiff);
+    vinfolog("Got answer from %s, relayed to %s (%s, %d bytes), took %f usec", ds->d_config.remote.toStringWithPort(), ids.origRemote.toStringWithPort(), (state->d_handler.isTLS() ? "DoT" : "TCP"), currentResponse.d_buffer.size(), udiff);
 
-    ::handleResponseSent(ids, udiff, state->d_ci.remote, ds->remote, static_cast<unsigned int>(currentResponse.d_buffer.size()), currentResponse.d_cleartextDH, ds->getProtocol());
+    auto backendProtocol = ds->getProtocol();
+    if (backendProtocol == dnsdist::Protocol::DoUDP) {
+      backendProtocol = dnsdist::Protocol::DoTCP;
+    }
+    ::handleResponseSent(ids, udiff, state->d_ci.remote, ds->d_config.remote, static_cast<unsigned int>(currentResponse.d_buffer.size()), currentResponse.d_cleartextDH, backendProtocol);
 
     updateTCPLatency(ds, udiff);
   }
@@ -383,10 +388,31 @@ void IncomingTCPConnectionState::terminateClientConnection()
     }
   }
   d_ownedConnectionsToBackend.clear();
+
   /* meaning we will no longer be 'active' when the backend
      response or timeout comes in */
   d_ioState.reset();
-  d_handler.close();
+
+  /* if we do have remaining async descriptors associated with this TLS
+     connection, we need to defer the destruction of the TLS object until
+     the engine has reported back, otherwise we have a use-after-free.. */
+  auto afds = d_handler.getAsyncFDs();
+  if (afds.empty()) {
+    d_handler.close();
+  }
+  else {
+    /* we might already be waiting, but we might also not because sometimes we have already been
+       notified via the descriptor, not received Async again, but the async job still exists.. */
+    auto state = shared_from_this();
+    for (const auto fd : afds) {
+      try {
+        state->d_threadData.mplexer->addReadFD(fd, handleAsyncReady, state);
+      }
+      catch (...) {
+      }
+    }
+
+  }
 }
 
 void IncomingTCPConnectionState::queueResponse(std::shared_ptr<IncomingTCPConnectionState>& state, const struct timeval& now, TCPResponse&& response)
@@ -416,8 +442,50 @@ void IncomingTCPConnectionState::queueResponse(std::shared_ptr<IncomingTCPConnec
 
     // for the same reason we need to update the state right away, nobody will do that for us
     if (state->active()) {
-      state->d_ioState->update(iostate, handleIOCallback, state, iostate == IOState::NeedWrite ? state->getClientWriteTTD(now) : state->getClientReadTTD(now));
+      updateIO(state, iostate, now);
     }
+  }
+}
+
+void IncomingTCPConnectionState::handleAsyncReady(int fd, FDMultiplexer::funcparam_t& param)
+{
+  auto state = boost::any_cast<std::shared_ptr<IncomingTCPConnectionState>>(param);
+
+  /* If we are here, the async jobs for this SSL* are finished
+     so we should be able to remove all FDs */
+  auto afds = state->d_handler.getAsyncFDs();
+  for (const auto afd : afds) {
+    try {
+      state->d_threadData.mplexer->removeReadFD(afd);
+    }
+    catch (...) {
+    }
+  }
+
+  if (state->active()) {
+    /* and now we restart our own I/O state machine */
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    handleIO(state, now);
+  }
+  else {
+    /* we were only waiting for the engine to come back,
+       to prevent a use-after-free */
+    state->d_handler.close();
+  }
+}
+
+void IncomingTCPConnectionState::updateIO(std::shared_ptr<IncomingTCPConnectionState>& state, IOState newState, const struct timeval& now)
+{
+  if (newState == IOState::Async) {
+    auto fds = state->d_handler.getAsyncFDs();
+    for (const auto fd : fds) {
+      state->d_threadData.mplexer->addReadFD(fd, handleAsyncReady, state);
+    }
+    state->d_ioState->update(IOState::Done, handleIOCallback, state);
+  }
+  else {
+    state->d_ioState->update(newState, handleIOCallback, state, newState == IOState::NeedWrite ? state->getClientWriteTTD(now) : state->getClientReadTTD(now));
   }
 }
 
@@ -426,7 +494,7 @@ void IncomingTCPConnectionState::handleResponse(const struct timeval& now, TCPRe
 {
   std::shared_ptr<IncomingTCPConnectionState> state = shared_from_this();
 
-  if (response.d_connection && response.d_connection->getDS() && response.d_connection->getDS()->useProxyProtocol) {
+  if (response.d_connection && response.d_connection->getDS() && response.d_connection->getDS()->d_config.useProxyProtocol) {
     // if we have added a TCP Proxy Protocol payload to a connection, don't release it to the general pool as no one else will be able to use it anyway
     if (!response.d_connection->willBeReusable(true)) {
       // if it can't be reused even by us, well
@@ -458,7 +526,7 @@ void IncomingTCPConnectionState::handleResponse(const struct timeval& now, TCPRe
   try {
     auto& ids = response.d_idstate;
     unsigned int qnameWireLength;
-    if (!responseContentMatches(response.d_buffer, ids.qname, ids.qtype, ids.qclass, response.d_connection->getRemote(), qnameWireLength)) {
+    if (!response.d_connection || !responseContentMatches(response.d_buffer, ids.qname, ids.qtype, ids.qclass, response.d_connection->getRemote(), qnameWireLength)) {
       state->terminateClientConnection();
       return;
     }
@@ -502,7 +570,7 @@ struct TCPCrossProtocolResponse
 class TCPCrossProtocolQuerySender : public TCPQuerySender
 {
 public:
-  TCPCrossProtocolQuerySender(std::shared_ptr<IncomingTCPConnectionState>& state, int responseDescriptor): d_state(state), d_responseDesc(responseDescriptor)
+  TCPCrossProtocolQuerySender(std::shared_ptr<IncomingTCPConnectionState>& state): d_state(state)
   {
   }
 
@@ -518,13 +586,13 @@ public:
 
   void handleResponse(const struct timeval& now, TCPResponse&& response) override
   {
-    if (d_responseDesc == -1) {
+    if (d_state->d_threadData.crossProtocolResponsesPipe == -1) {
       throw std::runtime_error("Invalid pipe descriptor in TCP Cross Protocol Query Sender");
     }
 
     auto ptr = new TCPCrossProtocolResponse(std::move(response), d_state, now);
     static_assert(sizeof(ptr) <= PIPE_BUF, "Writes up to PIPE_BUF are guaranteed not to be interleaved and to either fully succeed or fail");
-    ssize_t sent = write(d_responseDesc, &ptr, sizeof(ptr));
+    ssize_t sent = write(d_state->d_threadData.crossProtocolResponsesPipe, &ptr, sizeof(ptr));
     if (sent != sizeof(ptr)) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         ++g_stats.tcpCrossProtocolResponsePipeFull;
@@ -550,7 +618,6 @@ public:
 
 private:
   std::shared_ptr<IncomingTCPConnectionState> d_state;
-  int d_responseDesc{-1};
 };
 
 class TCPCrossProtocolQuery : public CrossProtocolQuery
@@ -707,11 +774,11 @@ static void handleQuery(std::shared_ptr<IncomingTCPConnectionState>& state, cons
 
     /* we need to do this _before_ creating the cross protocol query because
        after that the buffer will have been moved */
-    if (ds->useProxyProtocol) {
+    if (ds->d_config.useProxyProtocol) {
       proxyProtocolPayload = getProxyProtocolPayload(dq);
     }
 
-    auto incoming = std::make_shared<TCPCrossProtocolQuerySender>(state, state->d_threadData.crossProtocolResponsesPipe);
+    auto incoming = std::make_shared<TCPCrossProtocolQuerySender>(state);
     auto cpq = std::make_unique<TCPCrossProtocolQuery>(std::move(state->d_buffer), std::move(ids), ds, incoming);
     cpq->query.d_proxyProtocolPayload = std::move(proxyProtocolPayload);
 
@@ -723,7 +790,7 @@ static void handleQuery(std::shared_ptr<IncomingTCPConnectionState>& state, cons
 
   auto downstreamConnection = state->getDownstreamConnection(ds, dq.proxyProtocolValues, now);
 
-  if (ds->useProxyProtocol) {
+  if (ds->d_config.useProxyProtocol) {
     /* if we ever sent a TLV over a connection, we can never go back */
     if (!state->d_proxyProtocolPayloadHasTLV) {
       state->d_proxyProtocolPayloadHasTLV = dq.proxyProtocolValues && !dq.proxyProtocolValues->empty();
@@ -1004,7 +1071,7 @@ void IncomingTCPConnectionState::handleIO(std::shared_ptr<IncomingTCPConnectionS
       state->d_ioState->update(iostate, handleIOCallback, state);
     }
     else {
-      state->d_ioState->update(iostate, handleIOCallback, state, iostate == IOState::NeedRead ? state->getClientReadTTD(now) : state->getClientWriteTTD(now));
+      updateIO(state, iostate, now);
     }
     ioGuard.release();
   }
@@ -1028,7 +1095,7 @@ void IncomingTCPConnectionState::notifyIOError(IDState&& query, const struct tim
 
       if (state->active() && iostate != IOState::Done) {
         // we need to update the state right away, nobody will do that for us
-        state->d_ioState->update(iostate, handleIOCallback, state, iostate == IOState::NeedWrite ? state->getClientWriteTTD(now) : state->getClientReadTTD(now));
+	updateIO(state, iostate, now);
       }
     }
     catch (const std::exception& e) {
@@ -1277,6 +1344,7 @@ static void tcpClientThread(int pipefd, int crossProtocolQueriesPipeFD, int cros
                   errlog(" - Worker thread pipe");
                 }
               });
+              errlog("The TCP/DoT client cache has %d active and %d idle outgoing connections cached", t_downstreamTCPConnectionsManager.getActiveCount(), t_downstreamTCPConnectionsManager.getIdleCount());
             }
           }
         }
