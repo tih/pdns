@@ -1,3 +1,5 @@
+Everywhere, before configuring: autoreconf -vi
+
 Here: ./configure --with-modules='gpgsql' --with-dynmodules=''
 
 In pdns/recursordist: ./configure
