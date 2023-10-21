@@ -1,8 +1,8 @@
-Everywhere, before configuring: autoreconf -vi
+Everywhere, before configuring: make distclean; autoreconf -vi
 
 Here: ./configure --with-modules='gpgsql' --with-dynmodules=''
 
-In pdns/recursordist: ./configure
+In pdns/recursordist: ./configure --enable-dns-over-tls
 
 In pdns/dnsdistdist: ./configure LIBEDIT_CFLAGS="-I/usr/include" LIBEDIT_LIBS="-L/usr/lib -ledit"
 ...or...
