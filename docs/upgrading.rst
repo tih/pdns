@@ -8,8 +8,35 @@ Please upgrade to the PowerDNS Authoritative Server 4.0.0 from 3.4.2+.
 See the `3.X <https://doc.powerdns.com/3/authoritative/upgrading/>`__
 upgrade notes if your version is older than 3.4.2.
 
-4.5.x to 4.6.0 or master
-------------------------
+any version to 4.8.x
+--------------------
+
+LMDB backend
+^^^^^^^^^^^^
+
+Version 4.8.0-alpha1 ships a new version of the LMDB database schema (called version 5), for compatibility with `Lightning Stream <https://doc.powerdns.com/lightningstream>`_.
+This schema is somewhat experimental, and although we do intend to make databases portable/upgradeable to future releases in the 4.8 train, we currently make no promises.
+There is no downgrade process.
+If you upgrade your database (by starting 4.8.0 without ``lmdb-schema-version=4``), you cannot go back.
+
+Upgrading is only supported from database schema versions 3 and 4, that is, databases created/upgraded by version 4.4 and up.
+
+In version 4.8.0, schema version 5 is finalised.
+Databases created with -alpha1 or -beta1 work with 4.8.0.
+
+4.6.0 to 4.7.0
+--------------
+
+Schema changes
+^^^^^^^^^^^^^^
+
+The new Catalog Zones feature comes with a mandatory schema change for the gsql database backends.
+See files named ``4.3.x_to_4.7.0_schema.X.sql`` for your database backend in our Git repo, tarball, or distro-specific documentation path.
+For the LMDB backend, please review :ref:`setting-lmdb-schema-version`.
+The new LMDB schema version is 4.
+
+4.5.x to 4.6.0
+--------------
 
 Automatic conversion of ``@`` signs in SOA
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -70,7 +97,7 @@ Renamed options
 ~~~~~~~~~~~~~~~
 
 Various settings have been renamed.
-Their old names still work in 4.5.x, but will be removed in the release after it.
+Their old names still work in 4.5.x, but will be removed in a release after it.
 
 * :ref:`setting-allow-unsigned-supermaster` is now :ref:`setting-allow-unsigned-autoprimary`
 * :ref:`setting-master` is now :ref:`setting-primary`
@@ -265,7 +292,7 @@ Schema changes
 - The new 'unpublished DNSSEC keys' feature comes with a mandatory schema change for all database backends (including BIND with a DNSSEC database).
   See files named ``4.2.0_to_4.3.0_schema.X.sql`` for your database backend in our Git repo, tarball, or distro-specific documentation path.
   For the LMDB backend, please review :ref:`setting-lmdb-schema-version`.
-- If you are upgrading from beta2 or rc2, AND ONLY THEN, please read `pull request #8975 <https://github.com/PowerDNS/pdns/pull/8975>`__ very carefully.
+- If you are upgrading from 4.3.0-beta2 or 4.3.0-rc2, AND ONLY THEN, please read `pull request #8975 <https://github.com/PowerDNS/pdns/pull/8975>`__ very carefully.
 
 Implicit 5->7 algorithm upgrades
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -69,14 +69,14 @@ current-queries
     Shows the currently active queries.
 
 clear-dont-throttle-names NAME [NAME...]
-    Remove names that are not allowed to be throttled. If *NAME* is '*', remove all
+    Remove names that are not allowed to be throttled. If *NAME* is ``*``, remove all
 
 clear-dont-throttle-netmasks NETMASK [NETMASK...]
-    Remove netmasks that are not allowed to be throttled. If *NETMASK* is '*', remove all
+    Remove netmasks that are not allowed to be throttled. If *NETMASK* is ``*``, remove all
 
 clear-nta *DOMAIN*...
     Remove Negative Trust Anchor for one or more *DOMAIN*\ s. Set domain to
-    '*' to remove all NTA's.
+    ``*`` to remove all NTA's.
 
 clear-ta [*DOMAIN*]...
     Remove Trust Anchor for one or more *DOMAIN*\ s. Note that removing the
@@ -122,7 +122,8 @@ dump-rpz *ZONE NAME* *FILE NAME*
     Dumps the content of the RPZ zone named *ZONE NAME* to the *FILENAME*
     mentioned. This file should not exist already, PowerDNS will refuse to
     overwrite it otherwise. While dumping, the recursor will not answer
-    questions.
+    questions. For details on how RPZ are named see
+    `<https://docs.powerdns.com/recursor/lua-config/rpz.html#policyname>`__.
 
 dump-saved-parent-ns-sets *FILE NAME*
     Dump the entries of the map containing saved parent NS sets
@@ -140,7 +141,7 @@ dump-throttlemap *FILENAME*
 
 get *STATISTIC* [*STATISTIC*]...
     Retrieve a statistic. For items that can be queried, see
-    :doc:`../metrics`
+    `<https://docs.powerdns.com/recursor/metrics.html>`__.
 
 get-all
     Retrieve all known statistics.
@@ -160,8 +161,14 @@ get-tas
 get-parameter *KEY* [*KEY*]...
     Retrieves the specified configuration parameter(s).
 
+get-proxymapping-stats
+    Get the list of proxy-mapped subnets and associated counters.
+
 get-qtypelist
     Retrieves QType statistics. Queries from cache aren't being counted yet.
+
+get-remotelogger-stats
+    Retrieves the remote logger statistics, per type and address.
 
 hash-password [*WORK-FACTOR*]
     Asks for a password then returns the hashed and salted version,
@@ -173,6 +180,9 @@ hash-password [*WORK-FACTOR*]
 help
     Shows a list of supported commands understood by the running
     :program:`pdns_recursor`
+
+list-dnssec-algos
+    List supported (and potentially disabled) DNSSEC algorithms.
 
 ping
     Check if server is alive.
@@ -197,8 +207,9 @@ reload-lua-config [*FILENAME*]
     (Re)loads Lua configuration *FILENAME*. If *FILENAME* is empty, attempt
     to reload the currently loaded file. Note that *FILENAME* will be fully
     executed, any settings changed at runtime that are not modified in this
-    file, will still be active. Reloading RPZ, especially by AXFR, can take
-    some time; during which the recursor will not answer questions.
+    file, will still be active. The effects of reloading do not always take
+    place immediately, as some subsystems reload and replace configuration
+    in an asynchronous way.
 
 reload-zones
     Reload authoritative and forward zones. Retains current configuration in
@@ -209,8 +220,8 @@ set-carbon-server *CARBON SERVER* [*CARBON OURNAME*]
     not empty, also set the carbon-ourname setting to *CARBON OURNAME*.
 
 set-dnssec-log-bogus *SETTING*
-    Set dnssec-log-bogus setting to *SETTING*. Set to 'on' or 'yes' to log
-    DNSSEC validation failures and to 'no' or 'off' to disable logging these
+    Set dnssec-log-bogus setting to *SETTING*. Set to ``on`` or ``yes`` to log
+    DNSSEC validation failures and to ``no`` or ``off`` to disable logging these
     failures.
 
 set-ecs-minimum-ttl *NUM*
@@ -230,7 +241,8 @@ set-minimum-ttl *NUM*
     Set minimum-ttl-override to *NUM*.
 
 set-event-trace-enabled *NUM*
-    Set logging of event trace messages, 0 = disabled, 1 = protobuf, 2 = log file, 3 = both.
+    Set logging of event trace messages, ``0`` = disabled, ``1`` = protobuf,
+    ``2`` = log file, ``3`` = protobuf and log file.
 
 top-queries
     Shows the top-20 queries. Statistics are over the last
@@ -278,8 +290,12 @@ top-timeouts
     Shows the top-20 most active downstream timeout destinations.
     Statistics are over the last 'stats-ringbuffer-entries' queries.
 
-trace-regex *REGEX*
-    Emit resolution trace for matching queries. Empty regex to disable trace.
+trace-regex *REGEX* *FILE*
+    Emit resolution trace for matching queries. No arguments disables tracing.
+    Before version 4.9.0, there was no *FILE* argument, traces were always
+    written to the log. Starting with version 4.9.0, trace information is
+    written to the file specified, which may be ``-`` for the standard out
+    stream.
 
     Queries matching this regular expression will generate voluminous tracing
     output. Be aware that matches from the packet cache will still not generate
@@ -310,8 +326,8 @@ wipe-cache *DOMAIN* [*DOMAIN*] [...]
     Wipe entries for *DOMAIN* (exact name match) from the cache. This is useful
     if, for example, an important server has a new IP address, but the TTL has
     not yet expired. Multiple domain names can be passed.
-    *DOMAIN* can be suffixed with a '$'. to delete the whole tree from the
-    cache. i.e. 'powerdns.com$' will remove all cached entries under and
+    *DOMAIN* can be suffixed with a ``$``. to delete the whole tree from the
+    cache. i.e. ``powerdns.com$`` will remove all cached entries under and
     including the powerdns.com name.
 
     **Note**: this command also wipes the negative cache.
@@ -322,6 +338,10 @@ wipe-cache *DOMAIN* [*DOMAIN*] [...]
 wipe-cache-typed *qtype* *DOMAIN* [*DOMAIN*] [...]
     Same as wipe-cache, but only wipe records of type *qtype*.
 
+show-yaml [*FILE*]
+    Show Yaml representation of config. EXPERIMENTAL.
+
 See also
 --------
 :manpage:`pdns_recursor(1)`
+`<https://docs.powerdns.com/recursor>`__

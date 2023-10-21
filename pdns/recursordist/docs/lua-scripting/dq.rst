@@ -70,6 +70,14 @@ The DNSQuestion object contains at least the following fields:
       - getFakePTRRecords: Get a fake PTR record, see :doc:`DNS64 <../dns64>`
       - udpQueryResponse: Do a UDP query and call a handler, see :ref:`UDP Query Response <udpqueryresponse>`
 
+  .. attribute:: DNSQuestion.followupName
+
+      see :doc:`DNS64 <../dns64>`
+
+  .. attribute:: DNSQuestion.followupPrefix
+
+      see :doc:`DNS64 <../dns64>`
+
   .. attribute:: DNSQuestion.appliedPolicy
 
     The decision that was made by the policy engine, see :ref:`modifyingpolicydecisions`.
@@ -149,7 +157,7 @@ The DNSQuestion object contains at least the following fields:
 
   .. attribute:: DNSQuestion.udpAnswer
 
-      Answer to the :attr:`udpQuery <DNSQuestion.udpQuery>` when when using the ``udpQueryResponse`` :attr:`followupFunction <DNSQuestion.followupFunction>`.
+      Answer to the :attr:`udpQuery <DNSQuestion.udpQuery>` when using the ``udpQueryResponse`` :attr:`followupFunction <DNSQuestion.followupFunction>`.
       Only filled when the call-back function is invoked.
 
   .. attribute:: DNSQuestion.udpQueryDest
@@ -210,6 +218,24 @@ The DNSQuestion object contains at least the following fields:
       .. versionadded:: 4.2.0
 
       Whether the response to this query will be exported to a remote protobuf logger, if one has been configured.
+
+  .. attribute:: DNSQuestion.tag
+
+      The packet-cache tag set via :func:`gettag`, or 0 if it has not been set.
+
+  .. attribute:: DNSQuestion.queryTime
+
+     .. versionadded:: 4.8.0
+
+     The time the query was received
+
+     .. attribute:: DNSQuestion.queryTime.tv_sec
+
+        The number of seconds since the Unix epoch.
+
+     .. attribute:: DNSQuestion.queryTime.tv_usec
+
+        The number of microseconds, to be added to the number of seconds in :attr:`DNSQuestion.queryTime.tv_sec` to get a high accuracy timestamp.
 
   It also supports the following methods:
 
@@ -337,6 +363,11 @@ The DNS header as returned by :meth:`DNSQuestion:getDH()` represents a header of
   .. method:: DNSHeader:getID() -> int
 
       The ID of the query
+
+DNSRecord Object
+================
+
+See :doc:`DNSRecord <dnsrecord>`.
 
 The EDNSOptionView Class
 ========================

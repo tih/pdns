@@ -2,7 +2,7 @@
 
 https://hub.docker.com/u/powerdns offers automatic builds of dnsdist, Auth and Recursor, from the pdns.git master branch.
 
-The images are based on Debian Buster (slim).
+The images are based on Debian Bullseye (slim).
 
 The Dockerfiles:
 
@@ -11,6 +11,9 @@ The Dockerfiles:
 * https://github.com/PowerDNS/pdns/blob/master/Dockerfile-recursor
 
 Other data involved in the Docker build process can be found at https://github.com/PowerDNS/pdns/tree/master/dockerdata
+
+> **Note**
+> If you are building the Dockerfiles directly from the git repo, make sure you run `git submodule init` followed by `git submodule update` first.
 
 # Usage
 
@@ -21,7 +24,7 @@ For the dnsdist console, make sure that your API key is in a format suitable for
 
 The default configs shipped in the image (see dockerdata above) parse all files in `/etc/powerdns/pdns.d` / `/etc/powerdns/recursor.d` / `/etc/dnsdist/conf.d`.
 The image also ships a symlink to the API config file inside those `.d` dirs.
-For Auth and Recursor, extra configuration can be passed or the command line, or via a volume mount into `/etc/powerdns` or the `.d` dir.
+For Auth and Recursor, extra configuration can be passed on the command line, or via a volume mount into `/etc/powerdns` or the `.d` dir.
 For dnsdist, only the volume mount is applicable.
 
 If you want to volume mount a config, but also take the keys from the environment, please take care to include the same `X-api.conf` symlink in your `.d` directory.
@@ -39,8 +42,8 @@ In a plain Docker or Compose setup, this can be done by using the host PID names
 
 # Compose example
 
-We have a Docker Compose example at https://github.com/PowerDNS/pdns/blob/master/docker-compose.yml .
-It brings up all three services, and exposes them to eachother by name (using Docker's internal DNS).
+We have a Docker Compose example at https://github.com/PowerDNS/pdns/blob/master/docker-compose.yml.
+It brings up all three services, and exposes them to each other by name (using Docker's internal DNS).
 In the dockerdata dir, you can find an example dnsdist Lua config (with Python helper to make DNS lookups non-blocking for dnsdist) for managing your auth/rec backends by name.
 
 # Privileged ports
@@ -54,4 +57,4 @@ There are multiple ways of dealing with these restrictions if you encounter them
     * dnsdist: `setLocal()`
     * Auth & Recursor: `local-address` and/or `local-port`
 
-Note: Docker Engine 20.10.0 (released december 2020) removed the need to set the `NET_BIND_SERVICE` capability when attempting to bind to a privileged port. 
+Note: Docker Engine 20.10.0 (released december 2020) removed the need to set the `NET_BIND_SERVICE` capability when attempting to bind to a privileged port.

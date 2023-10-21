@@ -88,7 +88,7 @@ public:
     }
   }
 
-  SSqlStatement* bind(const string& name, bool value)
+  SSqlStatement* bind(const string& /* name */, bool value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -109,7 +109,7 @@ public:
   {
     return bind(name, (unsigned long)value);
   }
-  SSqlStatement* bind(const string& name, long value)
+  SSqlStatement* bind(const string& /* name */, long value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -122,7 +122,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& name, unsigned long value)
+  SSqlStatement* bind(const string& /* name */, unsigned long value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -136,7 +136,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& name, long long value)
+  SSqlStatement* bind(const string& /* name */, long long value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -149,7 +149,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& name, unsigned long long value)
+  SSqlStatement* bind(const string& /* name */, unsigned long long value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -163,7 +163,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& name, const std::string& value)
+  SSqlStatement* bind(const string& /* name */, const std::string& value)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -180,7 +180,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bindNull(const string& name)
+  SSqlStatement* bindNull(const string& /* name */)
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -262,7 +262,7 @@ public:
     }
 
     if (d_dolog)
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " usec to execute" << endl;
+      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us to execute" << endl;
 
     return this;
   }
@@ -270,7 +270,7 @@ public:
   bool hasNextRow()
   {
     if (d_dolog && d_residx == d_resnum) {
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " total usec to last row" << endl;
+      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us total to last row" << endl;
     }
     return d_residx < d_resnum;
   }
@@ -489,11 +489,6 @@ void SMySQL::connect()
 
   do {
 
-#if MYSQL_VERSION_ID >= 50013
-    my_bool set_reconnect = 0;
-    mysql_options(&d_db, MYSQL_OPT_RECONNECT, &set_reconnect);
-#endif
-
 #if MYSQL_VERSION_ID >= 50100
     if (d_timeout) {
       mysql_options(&d_db, MYSQL_OPT_READ_TIMEOUT, &d_timeout);
@@ -562,7 +557,7 @@ void SMySQL::execute(const string& query)
 
   int err;
   if ((err = mysql_query(&d_db, query.c_str())))
-    throw sPerrorException("Failed to execute mysql_query '" + query + "' Err=" + itoa(err));
+    throw sPerrorException("Failed to execute mysql_query '" + query + "' Err=" + std::to_string(err));
 }
 
 void SMySQL::startTransaction()

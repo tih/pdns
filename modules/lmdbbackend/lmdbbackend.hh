@@ -74,13 +74,26 @@ public:
   bool feedEnts(int domain_id, map<DNSName, bool>& nonterm) override;
   bool feedEnts3(int domain_id, const DNSName& domain, map<DNSName, bool>& nonterm, const NSEC3PARAMRecordContent& ns3prc, bool narrow) override;
   bool replaceRRSet(uint32_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset) override;
+  bool replaceComments(uint32_t domain_id, const DNSName& qname, const QType& qt, const vector<Comment>& comments) override;
 
   void getAllDomains(vector<DomainInfo>* domains, bool doSerial, bool include_disabled) override;
   void lookup(const QType& type, const DNSName& qdomain, int zoneId, DNSPacket* p = nullptr) override;
   bool get(DNSResourceRecord& rr) override;
   bool get(DNSZoneRecord& dzr) override;
 
+  // secondary support
   void getUnfreshSlaveInfos(vector<DomainInfo>* domains) override;
+  void setStale(uint32_t domain_id) override;
+  void setFresh(uint32_t domain_id) override;
+
+  // primary support
+  void getUpdatedMasters(vector<DomainInfo>& updatedDomains, std::unordered_set<DNSName>& catalogs, CatalogHashMap& catalogHashes) override;
+  void setNotified(uint32_t id, uint32_t serial) override;
+
+  // catalog zones
+  bool getCatalogMembers(const DNSName& catalog, vector<CatalogInfo>& members, CatalogInfo::CatalogType type) override;
+  bool setOptions(const DNSName& domain, const std::string& options) override;
+  bool setCatalog(const DNSName& domain, const DNSName& options) override;
 
   bool setMasters(const DNSName& domain, const vector<ComboAddress>& masters) override;
   bool setKind(const DNSName& domain, const DomainInfo::DomainKind kind) override;
@@ -103,9 +116,6 @@ public:
   }
 
   bool setDomainMetadata(const DNSName& name, const std::string& kind, const std::vector<std::string>& meta) override;
-  void setStale(uint32_t domain_id) override;
-  void setFresh(uint32_t domain_id) override;
-  void setNotified(uint32_t id, uint32_t serial) override;
   bool setAccount(const DNSName& domain, const std::string& account) override;
   bool deleteDomain(const DNSName& domain) override;
 
@@ -118,7 +128,7 @@ public:
   bool unpublishDomainKey(const DNSName& name, unsigned int id) override;
 
   // TSIG
-  bool getTSIGKey(const DNSName& name, DNSName* algorithm, string* content) override;
+  bool getTSIGKey(const DNSName& name, DNSName& algorithm, string& content) override;
   bool setTSIGKey(const DNSName& name, const DNSName& algorithm, const string& content) override;
   bool deleteTSIGKey(const DNSName& name) override;
   bool getTSIGKeys(std::vector<struct TSIGKey>& keys) override;
@@ -137,6 +147,13 @@ public:
   {
     return true;
   }
+
+  // other
+  string directBackendCmd(const string& query) override;
+
+  // functions to use without constructing a backend object
+  static std::pair<uint32_t, uint32_t> getSchemaVersionAndShards(std::string& filename);
+  static bool upgradeToSchemav5(std::string& filename);
 
 private:
   struct compoundOrdername
@@ -293,6 +310,8 @@ private:
   int genChangeDomain(uint32_t id, std::function<void(DomainInfo&)> func);
   void deleteDomainRecords(RecordsRWTransaction& txn, uint32_t domain_id, uint16_t qtype = QType::ANY);
 
+  void getAllDomainsFiltered(vector<DomainInfo>* domains, const std::function<bool(DomainInfo&)>& allow);
+
   bool getSerial(DomainInfo& di);
 
   bool upgradeToSchemav3();
@@ -312,5 +331,6 @@ private:
   uint32_t d_transactiondomainid;
   bool d_dolog;
   bool d_random_ids;
+  bool d_handle_dups;
   DTime d_dtime; // used only for logging
 };

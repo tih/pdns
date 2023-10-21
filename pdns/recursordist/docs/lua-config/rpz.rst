@@ -92,6 +92,7 @@ RPZ Configuration Functions
 .. function:: rpzFile(filename, settings)
 
   Load an RPZ from disk.
+  If multiple files are to be loaded, the zones can be distinguished by setting a ``policyName``, see below.
 
   :param str filename: The filename to load
   :param {} settings: A table to settings, see below
@@ -150,6 +151,13 @@ extendedErrorExtra
 
 An extended error extra text (:rfc:`8914`) to set on RPZ hits. See :ref:`setting-extended-resolution-errors`.
 
+includeSOA
+^^^^^^^^^^
+.. versionadded:: 4.9.0
+
+Include the RPZ's SOA record to the reply's additional section if modified by a policy hit.
+Defaults to ``no``.
+
 maxTTL
 ^^^^^^
 The maximum TTL value of the synthesized records, overriding a higher value from ``defttl`` or the zone. Default is unlimited.
@@ -158,7 +166,7 @@ The maximum TTL value of the synthesized records, overriding a higher value from
 
 policyName
 ^^^^^^^^^^
-The name logged as 'appliedPolicy' in :doc:`protobuf <protobuf>` messages when this policy is applied.
+The name logged as ``appliedPolicy`` in :doc:`protobuf <protobuf>` messages when this policy is applied.
 Defaults to ``rpzFile`` for RPZs loaded by :func:`rpzFile` or the name of the zone for RPZs loaded by :func:`rpzPrimary`.
 
 tags
@@ -214,10 +222,18 @@ When unset, :ref:`setting-query-local-address` is used.
 axfrTimeout
 ^^^^^^^^^^^
 .. versionadded:: 4.1.2
-  Before 4.1.2, the timeout was fixed on 10 seconds.
+   Before 4.1.2, the timeout was fixed on 10 seconds.
 
-The timeout in seconds of the total initial AXFR transaction.
-20 by default.
+.. versionchanged:: 4.5.12
+   The same timeout applies to followup IXFR transactions.
+
+.. versionchanged:: 4.6.5
+   The same timeout applies to followup IXFR transactions.
+
+.. versionchanged:: 4.7.4
+   The same timeout applies to followup IXFR transactions.
+
+The timeout in seconds of the total initial AXFR transaction. 20 by default.
 
 dumpFile
 ^^^^^^^^

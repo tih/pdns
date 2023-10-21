@@ -523,14 +523,19 @@ BOOST_AUTO_TEST_CASE(test_suffixmatch) {
 
   smn.add(DNSName("news.bbc.co.uk."));
   BOOST_CHECK(smn.check(DNSName("news.bbc.co.uk.")));
+  BOOST_CHECK(smn.getBestMatch(DNSName("news.bbc.co.uk")) == DNSName("news.bbc.co.uk."));
   BOOST_CHECK(smn.check(DNSName("www.news.bbc.co.uk.")));
+  BOOST_CHECK(smn.getBestMatch(DNSName("www.news.bbc.co.uk")) == DNSName("news.bbc.co.uk."));
   BOOST_CHECK(smn.check(DNSName("www.www.www.www.www.news.bbc.co.uk.")));
   BOOST_CHECK(!smn.check(DNSName("images.bbc.co.uk.")));
+  BOOST_CHECK(smn.getBestMatch(DNSName("images.bbc.co.uk")) == std::nullopt);
 
   BOOST_CHECK(!smn.check(DNSName("www.news.gov.uk.")));
+  BOOST_CHECK(smn.getBestMatch(DNSName("www.news.gov.uk")) == std::nullopt);
 
   smn.add(g_rootdnsname); // block the root
   BOOST_CHECK(smn.check(DNSName("a.root-servers.net.")));
+  BOOST_CHECK(smn.getBestMatch(DNSName("a.root-servers.net.")) == g_rootdnsname);
 
   DNSName examplenet("example.net.");
   DNSName net("net.");
@@ -971,6 +976,27 @@ BOOST_AUTO_TEST_CASE(test_getrawlabel) {
   BOOST_CHECK_THROW(name.getRawLabel(name.countLabels()), std::out_of_range);
 }
 
+BOOST_AUTO_TEST_CASE(test_getrawlabels_visitor) {
+  DNSName name("a.bb.ccc.dddd.");
+  auto visitor = name.getRawLabelsVisitor();
+  BOOST_CHECK(!visitor.empty());
+  BOOST_CHECK_EQUAL(visitor.front(), *name.getRawLabels().begin());
+  BOOST_CHECK_EQUAL(visitor.back(), *name.getRawLabels().rbegin());
+
+  BOOST_CHECK_EQUAL(visitor.back(), "dddd");
+  BOOST_CHECK(visitor.pop_back());
+  BOOST_CHECK_EQUAL(visitor.back(), "ccc");
+  BOOST_CHECK(visitor.pop_back());
+  BOOST_CHECK_EQUAL(visitor.back(), "bb");
+  BOOST_CHECK(visitor.pop_back());
+  BOOST_CHECK_EQUAL(visitor.back(), "a");
+  BOOST_CHECK(visitor.pop_back());
+  BOOST_CHECK(visitor.empty());
+  BOOST_CHECK(!visitor.pop_back());
+  BOOST_CHECK_THROW(visitor.front(), std::out_of_range);
+  BOOST_CHECK_THROW(visitor.back(), std::out_of_range);
+}
+
 BOOST_AUTO_TEST_CASE(test_getlastlabel) {
   DNSName name("www.powerdns.com");
   DNSName ans = name.getLastLabel();
@@ -993,14 +1019,18 @@ BOOST_AUTO_TEST_CASE(test_getcommonlabels) {
   BOOST_CHECK_EQUAL(name2.getCommonLabels(name1), DNSName("powerdns.com"));
 
   const DNSName name3("www.powerdns.org");
-  BOOST_CHECK_EQUAL(name1.getCommonLabels(name3), DNSName());
-  BOOST_CHECK_EQUAL(name2.getCommonLabels(name3), DNSName());
-  BOOST_CHECK_EQUAL(name3.getCommonLabels(name1), DNSName());
-  BOOST_CHECK_EQUAL(name3.getCommonLabels(name2), DNSName());
+  BOOST_CHECK_EQUAL(name1.getCommonLabels(name3), g_rootdnsname);
+  BOOST_CHECK_EQUAL(name2.getCommonLabels(name3), g_rootdnsname);
+  BOOST_CHECK_EQUAL(name3.getCommonLabels(name1), g_rootdnsname);
+  BOOST_CHECK_EQUAL(name3.getCommonLabels(name2), g_rootdnsname);
 
   const DNSName name4("WWw.PowErDnS.org");
   BOOST_CHECK_EQUAL(name3.getCommonLabels(name4), name3);
   BOOST_CHECK_EQUAL(name4.getCommonLabels(name3), name4);
+
+  const DNSName name5;
+  BOOST_CHECK_EQUAL(name1.getCommonLabels(name5), DNSName());
+  BOOST_CHECK_EQUAL(name5.getCommonLabels(name1), DNSName());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -188,8 +188,11 @@ vector<DNSBackend *> BackendMakerClass::all(bool metadataOnly)
 
   ret.reserve(d_instances.size());
 
+  std::string current; // to make the exception text more useful
+
   try {
     for (const auto& instance : d_instances) {
+      current = instance.first + instance.second;
       DNSBackend *made = nullptr;
 
       if (metadataOnly) {
@@ -207,7 +210,7 @@ vector<DNSBackend *> BackendMakerClass::all(bool metadataOnly)
     }
   }
   catch(const PDNSException &ae) {
-    g_log<<Logger::Error<<"Caught an exception instantiating a backend: "<<ae.reason<<endl;
+    g_log<<Logger::Error<<"Caught an exception instantiating a backend (" << current << "): "<<ae.reason<<endl;
     g_log<<Logger::Error<<"Cleaning up"<<endl;
     for (auto i : ret) {
       delete i;
@@ -215,7 +218,7 @@ vector<DNSBackend *> BackendMakerClass::all(bool metadataOnly)
     throw;
   } catch(...) {
     // and cleanup
-    g_log<<Logger::Error<<"Caught an exception instantiating a backend, cleaning up"<<endl;
+    g_log<<Logger::Error<<"Caught an exception instantiating a backend (" << current <<"), cleaning up"<<endl;
     for (auto i : ret) {
       delete i;
     }
@@ -304,7 +307,7 @@ bool DNSBackend::getBeforeAndAfterNames(uint32_t id, const DNSName& zonename, co
   return ret;
 }
 
-void DNSBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool include_disabled)
+void DNSBackend::getAllDomains(vector<DomainInfo>* /* domains */, bool /* getSerial */, bool /* include_disabled */)
 {
   if (g_zoneCache.isEnabled()) {
     g_log << Logger::Error << "One of the backends does not support zone caching. Put zone-cache-refresh-interval=0 in the config file to disable this cache." << endl;

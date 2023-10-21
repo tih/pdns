@@ -73,30 +73,37 @@ bool ConnectionToBackend::reconnect()
     DEBUGLOG("Opening TCP connection to backend "<<d_ds->getNameWithAddr());
     ++d_ds->tcpNewConnections;
     try {
-      auto socket = std::make_unique<Socket>(d_ds->d_config.remote.sin4.sin_family, SOCK_STREAM, 0);
-      DEBUGLOG("result of socket() is "<<socket->getHandle());
+      auto socket = Socket(d_ds->d_config.remote.sin4.sin_family, SOCK_STREAM, 0);
+      DEBUGLOG("result of socket() is "<<socket.getHandle());
+
+      /* disable NAGLE, which does not play nicely with delayed ACKs.
+         In theory we could be wasting up to 500 milliseconds waiting for
+         the other end to acknowledge our initial packet before we could
+         send the rest. */
+      setTCPNoDelay(socket.getHandle());
+
+#ifdef SO_BINDTODEVICE
+      if (!d_ds->d_config.sourceItfName.empty()) {
+        int res = setsockopt(socket.getHandle(), SOL_SOCKET, SO_BINDTODEVICE, d_ds->d_config.sourceItfName.c_str(), d_ds->d_config.sourceItfName.length());
+        if (res != 0) {
+          vinfolog("Error setting up the interface on backend TCP socket '%s': %s", d_ds->getNameWithAddr(), stringerror());
+        }
+      }
+#endif
 
       if (!IsAnyAddress(d_ds->d_config.sourceAddr)) {
-        SSetsockopt(socket->getHandle(), SOL_SOCKET, SO_REUSEADDR, 1);
+        SSetsockopt(socket.getHandle(), SOL_SOCKET, SO_REUSEADDR, 1);
 #ifdef IP_BIND_ADDRESS_NO_PORT
         if (d_ds->d_config.ipBindAddrNoPort) {
-          SSetsockopt(socket->getHandle(), SOL_IP, IP_BIND_ADDRESS_NO_PORT, 1);
+          SSetsockopt(socket.getHandle(), SOL_IP, IP_BIND_ADDRESS_NO_PORT, 1);
         }
 #endif
-#ifdef SO_BINDTODEVICE
-        if (!d_ds->d_config.sourceItfName.empty()) {
-          int res = setsockopt(socket->getHandle(), SOL_SOCKET, SO_BINDTODEVICE, d_ds->d_config.sourceItfName.c_str(), d_ds->d_config.sourceItfName.length());
-          if (res != 0) {
-            vinfolog("Error setting up the interface on backend TCP socket '%s': %s", d_ds->getNameWithAddr(), stringerror());
-          }
-        }
-#endif
-        socket->bind(d_ds->d_config.sourceAddr, false);
+        socket.bind(d_ds->d_config.sourceAddr, false);
       }
-      socket->setNonBlocking();
+      socket.setNonBlocking();
 
       gettimeofday(&d_connectionStartTime, nullptr);
-      auto handler = std::make_unique<TCPIOHandler>(d_ds->d_config.d_tlsSubjectName, d_ds->d_config.d_tlsSubjectIsAddr, socket->releaseHandle(), timeval{0,0}, d_ds->d_tlsCtx, d_connectionStartTime.tv_sec);
+      auto handler = std::make_unique<TCPIOHandler>(d_ds->d_config.d_tlsSubjectName, d_ds->d_config.d_tlsSubjectIsAddr, socket.releaseHandle(), timeval{0,0}, d_ds->d_tlsCtx);
       if (!tlsSession && d_ds->d_tlsCtx) {
         tlsSession = g_sessionCache.getSession(d_ds->getID(), d_connectionStartTime.tv_sec);
       }
@@ -111,7 +118,7 @@ bool ConnectionToBackend::reconnect()
       return true;
     }
     catch (const std::runtime_error& e) {
-      vinfolog("Connection to downstream server %s failed: %s", d_ds->getName(), e.what());
+      vinfolog("Connection to downstream server %s failed: %s", d_ds->getNameWithAddr(), e.what());
       d_downstreamFailures++;
       if (d_downstreamFailures >= d_ds->d_config.d_retries) {
         throw;
@@ -139,6 +146,62 @@ void TCPConnectionToBackend::release(){
   if (d_ioState) {
     d_ioState.reset();
   }
+}
+
+static uint32_t getSerialFromRawSOAContent(const std::vector<uint8_t>& raw)
+{
+  /* minimal size for a SOA record, as defined by rfc1035:
+     MNAME (root): 1
+     RNAME (root): 1
+     SERIAL: 4
+     REFRESH: 4
+     RETRY: 4
+     EXPIRE: 4
+     MINIMUM: 4
+     = 22 bytes
+  */
+  if (raw.size() < 22) {
+    throw std::runtime_error("Invalid content of size " + std::to_string(raw.size()) + " for a SOA record");
+  }
+  /* As rfc1025 states that "all domain names in the RDATA section of these RRs may be compressed",
+     and we don't want to parse these names, start at the end */
+  uint32_t serial = 0;
+  memcpy(&serial, &raw.at(raw.size() - 20), sizeof(serial));
+  return ntohl(serial);
+}
+
+static bool getSerialFromIXFRQuery(TCPQuery& query)
+{
+  try {
+    size_t proxyPayloadSize = query.d_proxyProtocolPayloadAdded ? query.d_idstate.d_proxyProtocolPayloadSize : 0;
+    if (query.d_buffer.size() <= (proxyPayloadSize + sizeof(uint16_t))) {
+      return false;
+    }
+
+    size_t payloadSize = query.d_buffer.size() - sizeof(uint16_t) - proxyPayloadSize;
+
+    MOADNSParser parser(true, reinterpret_cast<const char*>(query.d_buffer.data() + sizeof(uint16_t) + proxyPayloadSize), payloadSize);
+
+    for (const auto& record : parser.d_answers) {
+      if (record.first.d_place != DNSResourceRecord::AUTHORITY || record.first.d_class != QClass::IN || record.first.d_type != QType::SOA) {
+        return false;
+      }
+
+      auto unknownContent = getRR<UnknownRecordContent>(record.first);
+      if (!unknownContent) {
+        return false;
+      }
+      auto raw = unknownContent->getRawContent();
+      query.d_ixfrQuerySerial = getSerialFromRawSOAContent(raw);
+      return true;
+    }
+  }
+  catch (const MOADNSException& e) {
+    DEBUGLOG("Exception when parsing IXFR TCP Query to DNS: " << e.what());
+    /* ponder what to do here, shall we close the connection? */
+  }
+
+  return false;
 }
 
 static void editPayloadID(PacketBuffer& payload, uint16_t newId, size_t proxyProtocolPayloadSize, bool sizePrepended)
@@ -169,19 +232,25 @@ static void prepareQueryForSending(TCPQuery& query, uint16_t id, QueryState quer
     if (query.d_proxyProtocolPayload.size() > 0 && !query.d_proxyProtocolPayloadAdded) {
       query.d_buffer.insert(query.d_buffer.begin(), query.d_proxyProtocolPayload.begin(), query.d_proxyProtocolPayload.end());
       query.d_proxyProtocolPayloadAdded = true;
+      query.d_idstate.d_proxyProtocolPayloadSize = query.d_proxyProtocolPayload.size();
     }
   }
   else if (connectionState == ConnectionState::proxySent) {
     if (query.d_proxyProtocolPayloadAdded) {
-      if (query.d_buffer.size() < query.d_proxyProtocolPayload.size()) {
+      if (query.d_buffer.size() < query.d_idstate.d_proxyProtocolPayloadSize) {
         throw std::runtime_error("Trying to remove a proxy protocol payload of size " + std::to_string(query.d_proxyProtocolPayload.size()) + " from a buffer of size " + std::to_string(query.d_buffer.size()));
       }
-      query.d_buffer.erase(query.d_buffer.begin(), query.d_buffer.begin() + query.d_proxyProtocolPayload.size());
+      // NOLINTNEXTLINE(*-narrowing-conversions): the size of the payload is limited to 2^16-1
+      query.d_buffer.erase(query.d_buffer.begin(), query.d_buffer.begin() + static_cast<ssize_t>(query.d_idstate.d_proxyProtocolPayloadSize));
       query.d_proxyProtocolPayloadAdded = false;
+      query.d_idstate.d_proxyProtocolPayloadSize = 0;
     }
   }
+  if (query.d_idstate.qclass == QClass::IN && query.d_idstate.qtype == QType::IXFR) {
+    getSerialFromIXFRQuery(query);
+  }
 
-  editPayloadID(query.d_buffer, id, query.d_proxyProtocolPayloadAdded ? query.d_proxyProtocolPayload.size() : 0, true);
+  editPayloadID(query.d_buffer, id, query.d_proxyProtocolPayloadAdded ? query.d_idstate.d_proxyProtocolPayloadSize : 0, true);
 }
 
 IOState TCPConnectionToBackend::queueNextQuery(std::shared_ptr<TCPConnectionToBackend>& conn)
@@ -200,7 +269,7 @@ IOState TCPConnectionToBackend::queueNextQuery(std::shared_ptr<TCPConnectionToBa
 
 IOState TCPConnectionToBackend::sendQuery(std::shared_ptr<TCPConnectionToBackend>& conn, const struct timeval& now)
 {
-  DEBUGLOG("sending query to backend "<<conn->getDS()->getName()<<" over FD "<<conn->d_handler->getDescriptor());
+  DEBUGLOG("sending query to backend "<<conn->getDS()->getNameWithAddr()<<" over FD "<<conn->d_handler->getDescriptor());
 
   IOState state = conn->d_handler->tryWrite(conn->d_currentQuery.d_query.d_buffer, conn->d_currentPos, conn->d_currentQuery.d_query.d_buffer.size());
 
@@ -293,7 +362,7 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
             iostate = conn->handleResponse(conn, now);
           }
           catch (const std::exception& e) {
-            vinfolog("Got an exception while handling TCP response from %s (client is %s): %s", conn->d_ds ? conn->d_ds->getName() : "unknown", conn->d_currentQuery.d_query.d_idstate.origRemote.toStringWithPort(), e.what());
+            vinfolog("Got an exception while handling TCP response from %s (client is %s): %s", conn->d_ds ? conn->d_ds->getNameWithAddr() : "unknown", conn->d_currentQuery.d_query.d_idstate.origRemote.toStringWithPort(), e.what());
             ioGuard.release();
             conn->release();
             return;
@@ -335,7 +404,7 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
 
     if (connectionDied) {
 
-      DEBUGLOG("connection died, number of failures is "<<conn->d_downstreamFailures<<", retries is "<<conn->d_ds->d_retries);
+      DEBUGLOG("connection died, number of failures is "<<conn->d_downstreamFailures<<", retries is "<<conn->d_ds->d_config.d_retries);
 
       if (conn->d_downstreamFailures < conn->d_ds->d_config.d_retries) {
 
@@ -365,7 +434,8 @@ void TCPConnectionToBackend::handleIO(std::shared_ptr<TCPConnectionToBackend>& c
                 /* this one can't be restarted, sorry */
                 DEBUGLOG("A XFR for which a response has already been sent cannot be restarted");
                 try {
-                  pending.second.d_sender->notifyIOError(std::move(pending.second.d_query.d_idstate), now);
+                  TCPResponse response(std::move(pending.second.d_query));
+                  pending.second.d_sender->notifyIOError(now, std::move(response));
                 }
                 catch (const std::exception& e) {
                   vinfolog("Got an exception while notifying: %s", e.what());
@@ -485,16 +555,16 @@ void TCPConnectionToBackend::handleTimeout(const struct timeval& now, bool write
   if (write) {
     if (isFresh() && d_queries == 0) {
       ++d_ds->tcpConnectTimeouts;
-      vinfolog("Timeout while connecting to TCP backend %s", d_ds->getName());
+      vinfolog("Timeout while connecting to TCP backend %s", d_ds->getNameWithAddr());
     }
     else {
       ++d_ds->tcpWriteTimeouts;
-      vinfolog("Timeout while writing to TCP backend %s", d_ds->getName());
+      vinfolog("Timeout while writing to TCP backend %s", d_ds->getNameWithAddr());
     }
   }
   else {
     ++d_ds->tcpReadTimeouts;
-    vinfolog("Timeout while reading from TCP backend %s", d_ds->getName());
+    vinfolog("Timeout while reading from TCP backend %s", d_ds->getNameWithAddr());
   }
 
   try {
@@ -513,6 +583,7 @@ void TCPConnectionToBackend::handleTimeout(const struct timeval& now, bool write
 void TCPConnectionToBackend::notifyAllQueriesFailed(const struct timeval& now, FailureReason reason)
 {
   d_connectionDied = true;
+  d_ds->reportTimeoutOrError();
 
   /* we might be terminated while notifying a query sender */
   d_ds->outstanding -= d_pendingResponses.size();
@@ -521,15 +592,13 @@ void TCPConnectionToBackend::notifyAllQueriesFailed(const struct timeval& now, F
   auto pendingResponses = std::move(d_pendingResponses);
   d_pendingResponses.clear();
 
-  auto increaseCounters = [reason](std::shared_ptr<TCPQuerySender>& sender) {
+  auto increaseCounters = [reason](const ClientState* cs) {
     if (reason == FailureReason::timeout) {
-      const ClientState* cs = sender->getClientState();
       if (cs) {
         ++cs->tcpDownstreamTimeouts;
       }
     }
     else if (reason == FailureReason::gaveUp) {
-      const ClientState* cs = sender->getClientState();
       if (cs) {
         ++cs->tcpGaveUp;
       }
@@ -538,26 +607,29 @@ void TCPConnectionToBackend::notifyAllQueriesFailed(const struct timeval& now, F
 
   try {
     if (d_state == State::sendingQueryToBackend) {
+      increaseCounters(d_currentQuery.d_query.d_idstate.cs);
       auto sender = d_currentQuery.d_sender;
       if (sender->active()) {
-        increaseCounters(sender);
-        sender->notifyIOError(std::move(d_currentQuery.d_query.d_idstate), now);
+        TCPResponse response(std::move(d_currentQuery.d_query));
+        sender->notifyIOError(now, std::move(response));
       }
     }
 
     for (auto& query : pendingQueries) {
+      increaseCounters(query.d_query.d_idstate.cs);
       auto sender = query.d_sender;
       if (sender->active()) {
-        increaseCounters(sender);
-        sender->notifyIOError(std::move(query.d_query.d_idstate), now);
+        TCPResponse response(std::move(query.d_query));
+        sender->notifyIOError(now, std::move(response));
       }
     }
 
     for (auto& response : pendingResponses) {
+      increaseCounters(response.second.d_query.d_idstate.cs);
       auto sender = response.second.d_sender;
       if (sender->active()) {
-        increaseCounters(sender);
-        sender->notifyIOError(std::move(response.second.d_query.d_idstate), now);
+        TCPResponse tresp(std::move(response.second.d_query));
+        sender->notifyIOError(now, std::move(tresp));
       }
     }
   }
@@ -569,28 +641,6 @@ void TCPConnectionToBackend::notifyAllQueriesFailed(const struct timeval& now, F
   }
 
   release();
-}
-
-static uint32_t getSerialFromRawSOAContent(const std::vector<uint8_t>& raw)
-{
-  /* minimal size for a SOA record, as defined by rfc1035:
-     MNAME (root): 1
-     RNAME (root): 1
-     SERIAL: 4
-     REFRESH: 4
-     RETRY: 4
-     EXPIRE: 4
-     MINIMUM: 4
-     = 22 bytes
-  */
-  if (raw.size() < 22) {
-    throw std::runtime_error("Invalid content of size " + std::to_string(raw.size()) + " for a SOA record");
-  }
-  /* As rfc1025 states that "all domain names in the RDATA section of these RRs may be compressed",
-     and we don't want to parse these names, start at the end */
-  uint32_t serial = 0;
-  memcpy(&serial, &raw.at(raw.size() - 20), sizeof(serial));
-  return ntohl(serial);
 }
 
 IOState TCPConnectionToBackend::handleResponse(std::shared_ptr<TCPConnectionToBackend>& conn, const struct timeval& now)
@@ -624,6 +674,7 @@ IOState TCPConnectionToBackend::handleResponse(std::shared_ptr<TCPConnectionToBa
     TCPResponse response;
     response.d_buffer = std::move(d_responseBuffer);
     response.d_connection = conn;
+    response.d_ds = conn->d_ds;
     /* we don't move the whole IDS because we will need for the responses to come */
     response.d_idstate.qtype = it->second.d_query.d_idstate.qtype;
     response.d_idstate.qname = it->second.d_query.d_idstate.qname;
@@ -637,15 +688,15 @@ IOState TCPConnectionToBackend::handleResponse(std::shared_ptr<TCPConnectionToBa
       --conn->d_ds->outstanding;
       /* marking as idle for now, so we can accept new queries if our queues are empty */
       if (d_pendingQueries.empty() && d_pendingResponses.empty()) {
-        t_downstreamTCPConnectionsManager.moveToIdle(conn);
         d_state = State::idle;
+        t_downstreamTCPConnectionsManager.moveToIdle(conn);
       }
     }
 
     sender->handleXFRResponse(now, std::move(response));
     if (done) {
-      t_downstreamTCPConnectionsManager.moveToIdle(conn);
       d_state = State::idle;
+      t_downstreamTCPConnectionsManager.moveToIdle(conn);
       return IOState::Done;
     }
 
@@ -658,18 +709,37 @@ IOState TCPConnectionToBackend::handleResponse(std::shared_ptr<TCPConnectionToBa
 
   --conn->d_ds->outstanding;
   auto ids = std::move(it->second.d_query.d_idstate);
+  const double udiff = ids.queryRealTime.udiff();
+  conn->d_ds->updateTCPLatency(udiff);
+  if (d_responseBuffer.size() >= sizeof(dnsheader)) {
+    dnsheader dh;
+    memcpy(&dh, d_responseBuffer.data(), sizeof(dh));
+    conn->d_ds->reportResponse(dh.rcode);
+  }
+  else {
+    conn->d_ds->reportTimeoutOrError();
+  }
+
   d_pendingResponses.erase(it);
   /* marking as idle for now, so we can accept new queries if our queues are empty */
   if (d_pendingQueries.empty() && d_pendingResponses.empty()) {
-    t_downstreamTCPConnectionsManager.moveToIdle(conn);
     d_state = State::idle;
+    t_downstreamTCPConnectionsManager.moveToIdle(conn);
+  }
+  else if (!d_pendingResponses.empty()) {
+    d_currentPos = 0;
+    d_state = State::waitingForResponseFromBackend;
   }
 
+  // be very careful that handleResponse() might trigger new queries being assigned to us,
+  // which may reset our d_currentPos, d_state and/or d_responseBuffer, so we cannot assume
+  // anything without checking first
   auto shared = conn;
   if (sender->active()) {
     DEBUGLOG("passing response to client connection for "<<ids.qname);
     // make sure that we still exist after calling handleResponse()
-    sender->handleResponse(now, TCPResponse(std::move(d_responseBuffer), std::move(ids), conn));
+    TCPResponse response(std::move(d_responseBuffer), std::move(ids), conn, conn->d_ds);
+    sender->handleResponse(now, std::move(response));
   }
 
   if (!d_pendingQueries.empty()) {
@@ -678,15 +748,12 @@ IOState TCPConnectionToBackend::handleResponse(std::shared_ptr<TCPConnectionToBa
   }
   else if (!d_pendingResponses.empty()) {
     DEBUGLOG("still have some responses to read");
-    d_state = State::waitingForResponseFromBackend;
-    d_currentPos = 0;
-    d_responseBuffer.resize(sizeof(uint16_t));
     return IOState::NeedRead;
   }
   else {
     DEBUGLOG("nothing to do, waiting for a new query");
-    t_downstreamTCPConnectionsManager.moveToIdle(conn);
     d_state = State::idle;
+    t_downstreamTCPConnectionsManager.moveToIdle(conn);
     return IOState::Done;
   }
 }
@@ -731,8 +798,10 @@ bool TCPConnectionToBackend::matchesTLVs(const std::unique_ptr<std::vector<Proxy
 bool TCPConnectionToBackend::isXFRFinished(const TCPResponse& response, TCPQuery& query)
 {
   bool done = false;
+
   try {
     MOADNSParser parser(true, reinterpret_cast<const char*>(response.d_buffer.data()), response.d_buffer.size());
+
     if (parser.d_header.rcode != 0U) {
       done = true;
     }
@@ -748,22 +817,34 @@ bool TCPConnectionToBackend::isXFRFinished(const TCPResponse& response, TCPQuery
         }
         auto raw = unknownContent->getRawContent();
         auto serial = getSerialFromRawSOAContent(raw);
-        ++query.d_xfrSerialCount;
         if (query.d_xfrMasterSerial == 0) {
           // store the first SOA in our client's connection metadata
-          ++query.d_xfrMasterSerialCount;
           query.d_xfrMasterSerial = serial;
+          if (query.d_idstate.qtype == QType::IXFR && (query.d_xfrMasterSerial == query.d_ixfrQuerySerial || rfc1982LessThan(query.d_xfrMasterSerial, query.d_ixfrQuerySerial))) {
+            /* This is the first message with a master SOA:
+               RFC 1995 Section 2:
+                 If an IXFR query with the same or newer version number
+                 than that of the server is received, it is replied to
+                 with a single SOA record of the server's current version.
+            */
+            done = true;
+            break;
+          }
         }
-        else if (query.d_xfrMasterSerial == serial) {
+
+        ++query.d_xfrSerialCount;
+        if (serial == query.d_xfrMasterSerial) {
           ++query.d_xfrMasterSerialCount;
           // figure out if it's end when receiving master's SOA again
           if (query.d_xfrSerialCount == 2) {
             // if there are only two SOA records marks a finished AXFR
             done = true;
+            break;
           }
           if (query.d_xfrMasterSerialCount == 3) {
             // receiving master's SOA 3 times marks a finished IXFR
             done = true;
+            break;
           }
         }
       }

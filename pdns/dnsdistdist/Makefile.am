@@ -13,13 +13,16 @@ AM_CPPFLAGS += $(SYSTEMD_CFLAGS) \
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS=ext/ipcrypt \
+SUBDIRS=ext/arc4random \
+	ext/ipcrypt \
 	ext/yahttp
 
 CLEANFILES = \
 	htmlfiles.h.tmp \
 	htmlfiles.h \
 	dnsdist-lua-ffi-interface.inc
+
+sysconf_DATA = dnsdist.conf-dist
 
 dnslabeltext.cc: dnslabeltext.rl
 	$(AM_V_GEN)$(RAGEL) $< -o dnslabeltext.cc
@@ -32,9 +35,9 @@ htmlfiles.h: $(srcdir)/html/* $(srcdir)/incfiles
 	$(AM_V_GEN)$(srcdir)/incfiles $(srcdir) > $@.tmp
 	@mv $@.tmp $@
 
-dnsdist-lua-ffi-interface.inc: dnsdist-lua-ffi-interface.h
+dnsdist-lua-ffi-interface.inc: dnsdist-lua-ffi-interface.h dnsdist-lua-inspection-ffi.h
 	$(AM_V_GEN)echo 'R"FFIContent(' > $@
-	@cat $< >> $@
+	@cat $^ >> $@
 	@echo ')FFIContent"' >> $@
 SRC_JS_FILES := $(wildcard src_js/*.js)
 MIN_JS_FILES := $(patsubst src_js/%.js,html/js/%.min.js,$(SRC_JS_FILES))
@@ -77,6 +80,10 @@ if HAVE_LIBSSL
 AM_CPPFLAGS += $(LIBSSL_CFLAGS)
 endif
 
+if HAVE_GNUTLS
+AM_CPPFLAGS += $(GNUTLS_CFLAGS)
+endif
+
 if HAVE_LIBH2OEVLOOP
 AM_CPPFLAGS += $(LIBH2OEVLOOP_CFLAGS)
 endif
@@ -84,7 +91,7 @@ endif
 
 EXTRA_DIST=COPYING \
 	   dnslabeltext.rl \
-	   dnsdistconf.lua \
+	   dnsdist.conf-dist \
 	   dnsmessage.proto \
 	   dnstap.proto \
 	   README.md \
@@ -103,6 +110,7 @@ EXTRA_DIST=COPYING \
 	   kqueuemplexer.cc \
 	   portsmplexer.cc \
 	   cdb.cc cdb.hh \
+	   standalone_fuzz_target_runner.cc \
 	   ext/lmdb-safe/lmdb-safe.cc ext/lmdb-safe/lmdb-safe.hh \
 	   ext/protozero/include/* \
 	   builder-support/gen-version
@@ -111,7 +119,7 @@ bin_PROGRAMS = dnsdist
 
 if UNIT_TESTS
 noinst_PROGRAMS = testrunner
-TESTS_ENVIRONMENT = env BOOST_TEST_LOG_LEVEL=message SRCDIR='$(srcdir)'
+TESTS_ENVIRONMENT = env BOOST_TEST_LOG_LEVEL=message BOOST_TEST_RANDOM=1 SRCDIR='$(srcdir)'
 TESTS=testrunner
 else
 check-local:
@@ -123,46 +131,61 @@ dnsdist-web.$(OBJEXT): htmlfiles.h
 dnsdist-lua-ffi.$(OBJEXT): dnsdist-lua-ffi-interface.inc
 
 dnsdist_SOURCES = \
-	ascii.hh \
 	base64.hh \
 	bpf-filter.cc bpf-filter.hh \
+	burtle.hh \
 	cachecleaner.hh \
 	capabilities.cc capabilities.hh \
+	channel.cc channel.hh \
 	circular_buffer.hh \
 	connection-management.hh \
+	coverage.cc coverage.hh \
 	credentials.cc credentials.hh \
 	dns.cc dns.hh \
 	dns_random.hh \
 	dnscrypt.cc dnscrypt.hh \
+	dnsdist-async.cc dnsdist-async.hh \
 	dnsdist-backend.cc \
 	dnsdist-cache.cc dnsdist-cache.hh \
 	dnsdist-carbon.cc dnsdist-carbon.hh \
+	dnsdist-concurrent-connections.hh \
 	dnsdist-console.cc dnsdist-console.hh \
 	dnsdist-discovery.cc dnsdist-discovery.hh \
 	dnsdist-dnscrypt.cc \
+	dnsdist-dnsparser.cc dnsdist-dnsparser.hh \
+	dnsdist-doh-common.cc dnsdist-doh-common.hh \
 	dnsdist-downstream-connection.hh \
 	dnsdist-dynblocks.cc dnsdist-dynblocks.hh \
 	dnsdist-dynbpf.cc dnsdist-dynbpf.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
+	dnsdist-edns.cc dnsdist-edns.hh \
 	dnsdist-healthchecks.cc dnsdist-healthchecks.hh \
-	dnsdist-idstate.cc dnsdist-idstate.hh \
+	dnsdist-idstate.hh \
+	dnsdist-internal-queries.cc dnsdist-internal-queries.hh \
 	dnsdist-kvs.hh dnsdist-kvs.cc \
 	dnsdist-lbpolicies.cc dnsdist-lbpolicies.hh \
 	dnsdist-lua-actions.cc \
 	dnsdist-lua-bindings-dnscrypt.cc \
+	dnsdist-lua-bindings-dnsparser.cc \
 	dnsdist-lua-bindings-dnsquestion.cc \
 	dnsdist-lua-bindings-kvs.cc \
+	dnsdist-lua-bindings-network.cc \
 	dnsdist-lua-bindings-packetcache.cc \
 	dnsdist-lua-bindings-protobuf.cc \
+	dnsdist-lua-bindings-rings.cc \
 	dnsdist-lua-bindings.cc \
 	dnsdist-lua-ffi-interface.h dnsdist-lua-ffi-interface.inc \
 	dnsdist-lua-ffi.cc dnsdist-lua-ffi.hh \
-	dnsdist-lua-inspection-ffi.cc dnsdist-lua-inspection-ffi.hh \
+	dnsdist-lua-inspection-ffi.cc dnsdist-lua-inspection-ffi.h \
 	dnsdist-lua-inspection.cc \
+	dnsdist-lua-network.cc dnsdist-lua-network.hh \
 	dnsdist-lua-rules.cc \
 	dnsdist-lua-vars.cc \
 	dnsdist-lua-web.cc \
 	dnsdist-lua.cc dnsdist-lua.hh \
+	dnsdist-mac-address.cc dnsdist-mac-address.hh \
+	dnsdist-metrics.cc dnsdist-metrics.hh \
+	dnsdist-nghttp2-in.cc dnsdist-nghttp2-in.hh \
 	dnsdist-nghttp2.cc dnsdist-nghttp2.hh \
 	dnsdist-prometheus.hh \
 	dnsdist-protobuf.cc dnsdist-protobuf.hh \
@@ -187,8 +210,9 @@ dnsdist_SOURCES = \
 	dnsparser.hh dnsparser.cc \
 	dnstap.cc dnstap.hh \
 	dnswriter.cc dnswriter.hh \
-	doh.hh doh.cc \
+	doh.hh \
 	dolog.hh \
+	doq.hh \
 	ednscookies.cc ednscookies.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
@@ -202,6 +226,7 @@ dnsdist_SOURCES = \
 	iputils.cc iputils.hh \
 	libssl.cc libssl.hh \
 	lock.hh \
+	logging.hh \
 	misc.cc misc.hh \
 	mplexer.hh \
 	namespaces.hh \
@@ -230,18 +255,24 @@ testrunner_SOURCES = \
 	base64.hh \
 	bpf-filter.cc bpf-filter.hh \
 	cachecleaner.hh \
+	channel.cc channel.hh \
 	circular_buffer.hh \
 	connection-management.hh \
 	credentials.cc credentials.hh \
 	dns.cc dns.hh \
 	dnscrypt.cc dnscrypt.hh \
+	dnsdist-async.cc dnsdist-async.hh \
 	dnsdist-backend.cc \
 	dnsdist-cache.cc dnsdist-cache.hh \
+	dnsdist-concurrent-connections.hh \
+	dnsdist-dnsparser.cc dnsdist-dnsparser.hh \
+	dnsdist-doh-common.cc dnsdist-doh-common.hh \
 	dnsdist-downstream-connection.hh \
 	dnsdist-dynblocks.cc dnsdist-dynblocks.hh \
 	dnsdist-dynbpf.cc dnsdist-dynbpf.hh \
 	dnsdist-ecs.cc dnsdist-ecs.hh \
-	dnsdist-idstate.cc dnsdist-idstate.hh \
+	dnsdist-edns.cc dnsdist-edns.hh \
+	dnsdist-idstate.hh \
 	dnsdist-kvs.cc dnsdist-kvs.hh \
 	dnsdist-lbpolicies.cc dnsdist-lbpolicies.hh \
 	dnsdist-lua-bindings-dnsquestion.cc \
@@ -249,7 +280,11 @@ testrunner_SOURCES = \
 	dnsdist-lua-bindings.cc \
 	dnsdist-lua-ffi-interface.h dnsdist-lua-ffi-interface.inc \
 	dnsdist-lua-ffi.cc dnsdist-lua-ffi.hh \
+	dnsdist-lua-network.cc dnsdist-lua-network.hh \
 	dnsdist-lua-vars.cc \
+	dnsdist-mac-address.cc dnsdist-mac-address.hh \
+	dnsdist-metrics.cc dnsdist-metrics.hh \
+	dnsdist-nghttp2-in.cc dnsdist-nghttp2-in.hh \
 	dnsdist-nghttp2.cc dnsdist-nghttp2.hh \
 	dnsdist-protocols.cc dnsdist-protocols.hh \
 	dnsdist-proxy-protocol.cc dnsdist-proxy-protocol.hh \
@@ -268,6 +303,7 @@ testrunner_SOURCES = \
 	dnswriter.cc dnswriter.hh \
 	dolog.hh \
 	ednscookies.cc ednscookies.hh \
+	ednsextendederror.cc ednsextendederror.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
 	ext/luawrapper/include/LuaContext.hpp \
@@ -287,16 +323,25 @@ testrunner_SOURCES = \
 	statnode.cc statnode.hh \
 	svc-records.cc svc-records.hh \
 	test-base64_cc.cc \
+	test-channel.cc \
 	test-connectionmanagement_hh.cc \
 	test-credentials_cc.cc \
 	test-delaypipe_hh.cc \
 	test-dnscrypt_cc.cc \
 	test-dnsdist-connections-cache.cc \
+	test-dnsdist-dnsparser.cc \
+	test-dnsdist-lua-ffi.cc \
 	test-dnsdist_cc.cc \
+	test-dnsdistasync.cc \
+	test-dnsdistbackend_cc.cc \
 	test-dnsdistdynblocks_hh.cc \
+	test-dnsdistedns.cc \
 	test-dnsdistkvs_cc.cc \
 	test-dnsdistlbpolicies_cc.cc \
+	test-dnsdistluanetwork.cc \
+	test-dnsdistnghttp2-in_cc.cc \
 	test-dnsdistnghttp2_cc.cc \
+	test-dnsdistnghttp2_common.hh \
 	test-dnsdistpacketcache_cc.cc \
 	test-dnsdistrings_cc.cc \
 	test-dnsdistrules_cc.cc \
@@ -327,7 +372,8 @@ dnsdist_LDADD = \
 	$(SYSTEMD_LIBS) \
 	$(NET_SNMP_LIBS) \
 	$(LIBCAP_LIBS) \
-	$(IPCRYPT_LIBS)
+	$(IPCRYPT_LIBS) \
+	$(ARC4RANDOM_LIBS)
 
 testrunner_LDFLAGS = \
 	$(AM_LDFLAGS) \
@@ -341,7 +387,8 @@ testrunner_LDADD = \
 	$(LIBSODIUM_LIBS) \
 	$(LUA_LIBS) \
 	$(RT_LIBS) \
-	$(LIBCAP_LIBS)
+	$(LIBCAP_LIBS) \
+	$(ARC4RANDOM_LIBS)
 
 if HAVE_CDB
 dnsdist_LDADD += $(CDB_LDFLAGS) $(CDB_LIBS)
@@ -379,10 +426,23 @@ endif
 
 if HAVE_DNS_OVER_HTTPS
 
+if HAVE_GNUTLS
+dnsdist_LDADD += -lgnutls
+endif
+
 if HAVE_LIBH2OEVLOOP
+dnsdist_SOURCES += doh.cc
 dnsdist_LDADD += $(LIBH2OEVLOOP_LIBS)
 endif
 
+endif
+
+if HAVE_DNS_OVER_QUIC
+dnsdist_SOURCES += doq.cc
+if HAVE_QUICHE
+AM_CPPFLAGS += $(QUICHE_CFLAGS)
+dnsdist_LDADD += $(QUICHE_LDFLAGS) $(QUICHE_LIBS)
+endif
 endif
 
 if HAVE_NGHTTP2
@@ -419,6 +479,62 @@ dnsdist_SOURCES += \
 testrunner_SOURCES += \
 	devpollmplexer.cc \
 	portsmplexer.cc
+endif
+
+if FUZZ_TARGETS
+
+LIB_FUZZING_ENGINE ?= standalone_fuzz_target_runner.o
+
+standalone_fuzz_target_runner.o: standalone_fuzz_target_runner.cc
+
+fuzz_targets_programs =  \
+	fuzz_target_dnsdistcache
+
+fuzz_targets: $(ARC4RANDOM_LIBS) $(fuzz_targets_programs)
+
+bin_PROGRAMS += \
+	$(fuzz_targets_programs)
+
+fuzz_targets_libs = \
+	$(LIBCRYPTO_LIBS) \
+	$(ARC4RANDOM_LIBS) \
+	$(LIB_FUZZING_ENGINE)
+
+fuzz_targets_ldflags = \
+	$(AM_LDFLAGS) \
+	$(DYNLINKFLAGS) \
+	$(LIBCRYPTO_LDFLAGS) \
+	$(FUZZING_LDFLAGS)
+
+# we need the mockup runner to be built, but not linked if a real fuzzing engine is used
+fuzz_targets_deps = standalone_fuzz_target_runner.o
+
+fuzz_target_dnsdistcache_SOURCES = \
+	channel.hh channel.cc \
+	dns.cc dns.hh \
+	dnsdist-cache.cc dnsdist-cache.hh \
+	dnsdist-dnsparser.cc dnsdist-dnsparser.hh \
+	dnsdist-ecs.cc dnsdist-ecs.hh \
+	dnsdist-idstate.hh \
+	dnsdist-protocols.cc dnsdist-protocols.hh \
+	dnslabeltext.cc \
+	dnsname.cc dnsname.hh \
+	dnsparser.cc dnsparser.hh \
+	dnswriter.cc dnswriter.hh \
+	doh.hh \
+	ednsoptions.cc ednsoptions.hh \
+	ednssubnet.cc ednssubnet.hh \
+	fuzz_dnsdistcache.cc \
+	iputils.cc iputils.hh \
+	misc.cc misc.hh \
+	packetcache.hh \
+	qtype.cc qtype.hh \
+	svc-records.cc svc-records.hh
+
+fuzz_target_dnsdistcache_DEPENDENCIES = $(fuzz_targets_deps)
+fuzz_target_dnsdistcache_LDFLAGS = $(fuzz_targets_ldflags)
+fuzz_target_dnsdistcache_LDADD = $(fuzz_targets_libs)
+
 endif
 
 MANPAGES=dnsdist.1
@@ -525,6 +641,15 @@ if !HAVE_SYSTEMD_SYSTEM_CALL_ARCHITECTURES
 endif
 if !HAVE_SYSTEMD_SYSTEM_CALL_FILTER
 	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallFilter/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_PROC
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectProc/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_IPC
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateIPC/' $@
+endif
+if !HAVE_SYSTEMD_REMOVE_IPC
+	$(AM_V_GEN)perl -ni -e 'print unless /^RemoveIPC/' $@
 endif
 
 dnsdist@.service: dnsdist.service

@@ -27,7 +27,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <iostream>
-#include <errno.h>
+#include <cerrno>
 #include "misc.hh"
 #include <algorithm>
 #include <sstream>
@@ -48,6 +48,7 @@
 
 #include "dns_random.hh"
 #include <poll.h>
+#include "gss_context.hh"
 #include "namespaces.hh"
 
 using pdns::resolver::parseResult;
@@ -192,7 +193,7 @@ uint16_t Resolver::sendResolve(const ComboAddress& remote, const ComboAddress& l
 
 namespace pdns {
   namespace resolver {
-    int parseResult(MOADNSParser& mdp, const DNSName& origQname, uint16_t origQtype, uint16_t id, Resolver::res_t* result)
+    int parseResult(MOADNSParser& mdp, const DNSName& origQname, uint16_t /* origQtype */, uint16_t id, Resolver::res_t* result)
     {
       result->clear();
 
@@ -203,7 +204,7 @@ namespace pdns {
         if(mdp.d_header.id != id)
           throw ResolverException("Remote nameserver replied with wrong id");
         if(mdp.d_header.qdcount != 1)
-          throw ResolverException("resolver: received answer with wrong number of questions ("+itoa(mdp.d_header.qdcount)+")");
+          throw ResolverException("resolver: received answer with wrong number of questions ("+std::to_string(mdp.d_header.qdcount)+")");
         if(mdp.d_qname != origQname)
           throw ResolverException(string("resolver: received an answer to another question (")+mdp.d_qname.toLogString()+"!="+ origQname.toLogString()+".)");
       }
@@ -216,7 +217,7 @@ namespace pdns {
         rr.qname = i.first.d_name;
         rr.qtype = i.first.d_type;
         rr.ttl = i.first.d_ttl;
-        rr.content = i.first.d_content->getZoneRepresentation(true);
+        rr.content = i.first.getContent()->getZoneRepresentation(true);
         result->push_back(rr);
       }
 
@@ -286,14 +287,14 @@ bool Resolver::tryGetSOASerial(DNSName *domain, ComboAddress* remote, uint32_t *
   bool gotSOA=false;
   for(const MOADNSParser::answers_t::value_type& drc :  mdp.d_answers) {
     if(drc.first.d_type == QType::SOA && drc.first.d_name == *domain) {
-      shared_ptr<SOARecordContent> src=getRR<SOARecordContent>(drc.first);
+      auto src = getRR<SOARecordContent>(drc.first);
       if (src) {
-        *theirSerial=src->d_st.serial;
+        *theirSerial = src->d_st.serial;
         gotSOA = true;
       }
     }
     if(drc.first.d_type == QType::RRSIG && drc.first.d_name == *domain) {
-      shared_ptr<RRSIGRecordContent> rrc=getRR<RRSIGRecordContent>(drc.first);
+      auto rrc = getRR<RRSIGRecordContent>(drc.first);
       if(rrc && rrc->d_type == QType::SOA) {
         *theirInception= std::max(*theirInception, rrc->d_siginception);
         *theirExpire = std::max(*theirExpire, rrc->d_sigexpire);

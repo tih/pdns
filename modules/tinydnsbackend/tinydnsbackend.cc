@@ -88,7 +88,7 @@ TinyDNSBackend::TinyDNSBackend(const string& suffix)
   d_isWildcardQuery = false;
 }
 
-void TinyDNSBackend::getUpdatedMasters(vector<DomainInfo>* retDomains)
+void TinyDNSBackend::getUpdatedMasters(vector<DomainInfo>& retDomains, std::unordered_set<DNSName>& /* catalogs */, CatalogHashMap& /* catalogHashes */)
 {
   auto domainInfo = s_domainInfo.lock(); //TODO: We could actually lock less if we do it per suffix.
   if (!domainInfo->count(d_suffix)) {
@@ -120,13 +120,13 @@ void TinyDNSBackend::getUpdatedMasters(vector<DomainInfo>* retDomains)
 
       di->id = s_lastId;
       if (di->notified_serial > 0) {
-        retDomains->push_back(*di);
+        retDomains.push_back(*di);
       }
     }
     else {
       if (itByZone->notified_serial < di->serial) {
         di->id = itByZone->id;
-        retDomains->push_back(*di);
+        retDomains.push_back(*di);
       }
     }
   }
@@ -151,7 +151,7 @@ void TinyDNSBackend::setNotified(uint32_t id, uint32_t serial)
   (*domainInfo)[d_suffix] = *domains;
 }
 
-void TinyDNSBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool include_disabled)
+void TinyDNSBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool /* include_disabled */)
 {
   d_isAxfr = true;
   d_isGetDomains = true;
@@ -195,7 +195,7 @@ void TinyDNSBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, 
   }
 }
 
-bool TinyDNSBackend::list(const DNSName& target, int domain_id, bool include_disabled)
+bool TinyDNSBackend::list(const DNSName& target, int /* domain_id */, bool /* include_disabled */)
 {
   d_isAxfr = true;
   d_isGetDomains = false;
@@ -211,7 +211,7 @@ bool TinyDNSBackend::list(const DNSName& target, int domain_id, bool include_dis
   return d_cdbReader->searchSuffix(key);
 }
 
-void TinyDNSBackend::lookup(const QType& qtype, const DNSName& qdomain, int zoneId, DNSPacket* pkt_p)
+void TinyDNSBackend::lookup(const QType& qtype, const DNSName& qdomain, int /* zoneId */, DNSPacket* pkt_p)
 {
   d_isAxfr = false;
   d_isGetDomains = false;

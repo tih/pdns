@@ -20,24 +20,24 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #pragma once
-#include <stdint.h>
+#include <cstdint>
+#include <ctime>
 #include <queue>
-#include <vector>
 #include <map>
-#include <time.h>
+#include <memory>
+#include <stack>
+#include <vector>
+
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/ordered_index.hpp>
 #include <boost/multi_index/key_extractors.hpp>
 #include "namespaces.hh"
 #include "misc.hh"
 #include "mtasker_context.hh"
-#include <memory>
 
 using namespace ::boost::multi_index;
 
 // #define MTASKERTIMING 1
-
-struct KeyTag {};
 
 //! The main MTasker class    
 /** The main MTasker class. See the main page for more information.
@@ -57,23 +57,27 @@ private:
   {
 	std::shared_ptr<pdns_ucontext_t> context;
 	std::function<void(void)> start;
-	char* startOfStack;
-	char* highestStackSeen;
+	const char* startOfStack;
+	const char* highestStackSeen;
 #ifdef MTASKERTIMING
     	CPUTime dt;
 	unsigned int totTime;
 #endif
   };
 
-  typedef std::map<int, ThreadInfo> mthreads_t;
+  using pdns_mtasker_stack_t = std::vector<char, lazy_allocator<char>>;
+  using mthreads_t = std::map<int, ThreadInfo>;
+
   mthreads_t d_threads;
+  std::stack<pdns_mtasker_stack_t> d_cachedStacks;
   size_t d_stacksize;
-  size_t d_threadsCount;
-  int d_tid;
-  int d_maxtid;
+  size_t d_threadsCount{0};
+  size_t d_maxCachedStacks{0};
+  int d_tid{0};
+  int d_maxtid{0};
 
   EventVal d_waitval;
-  enum waitstatusenum {Error=-1,TimeOut=0,Answer} d_waitstatus;
+  enum waitstatusenum : int8_t {Error=-1,TimeOut=0,Answer} d_waitstatus;
 
 public:
   struct Waiter
@@ -83,6 +87,7 @@ public:
     struct timeval ttd;
     int tid;
   };
+  struct KeyTag {};
 
   typedef multi_index_container<
     Waiter,
@@ -104,10 +109,11 @@ public:
     pthread_getattr_np(pthread_self(), &attr);
     pthread_attr_getstack(&attr, &t_mainStack, &t_mainStackSize);
     pthread_attr_destroy(&attr);
-#endif
-#if defined(HAVE_PTHREAD_GET_STACKSIZE_NP) && defined(HAVE_PTHREAD_GET_STACKADDR_NP)
+#elif defined(HAVE_PTHREAD_GET_STACKSIZE_NP) && defined(HAVE_PTHREAD_GET_STACKADDR_NP)
     t_mainStack = pthread_get_stackaddr_np(pthread_self());
     t_mainStackSize = pthread_get_stacksize_np(pthread_self());
+#else
+#error Cannot determine stack size and base on this platform
 #endif
 
 #endif /* HAVE_FIBER_SANITIZER */
@@ -118,7 +124,7 @@ public:
       This limit applies solely to the stack, the heap is not limited in any way. If threads need to allocate a lot of data,
       the use of new/delete is suggested. 
    */
-  MTasker(size_t stacksize=16*8192) : d_stacksize(stacksize), d_threadsCount(0), d_tid(0), d_maxtid(0), d_waitstatus(Error)
+  MTasker(size_t stacksize=16*8192, size_t stackCacheSize=0) : d_stacksize(stacksize), d_maxCachedStacks(stackCacheSize), d_waitstatus(Error)
   {
     initMainStackBounds();
 
@@ -140,6 +146,8 @@ public:
   unsigned int getUsec();
 
 private:
+  std::shared_ptr<pdns_ucontext_t> getUContext();
+
   EventKey d_eventkey;   // for waitEvent, contains exact key it was awoken for
 };
 #include "mtasker.cc"

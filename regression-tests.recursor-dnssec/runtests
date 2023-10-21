@@ -1,5 +1,7 @@
 #!/bin/sh
 
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
 if [ ! -d .venv ]; then
   python3 -m venv .venv
 fi
@@ -57,7 +59,7 @@ fi
 
 # LIBFAKETIME is only added to LD_PRELOAD by the pyton code when needed
 if [ "${LIBASAN}" != "" -o "${LIBAUTHBIND}" != "" ]; then
-LD_PRELOAD="${LIBASAN} ${LIBAUTHBIND}" nosetests -I test_WellKnown.py --with-xunit $@
+LD_PRELOAD="${LIBASAN} ${LIBAUTHBIND}" pytest --ignore=test_WellKnown.py --junitxml=pytest.xml $@
 else
-nosetests -I test_WellKnown.py --with-xunit $@
+pytest --ignore=test_WellKnown.py  --junitxml=pytest.xml $@
 fi

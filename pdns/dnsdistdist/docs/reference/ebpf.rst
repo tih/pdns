@@ -7,6 +7,7 @@ These are all the functions, objects and methods related to the :doc:`../advance
 
   This is the eBPF equivalent of :func:`addDynBlocks`, blocking a set of addresses for (optionally) a number of seconds, using an eBPF dynamic filter.
   The default number of seconds to block for is 10.
+  Since 1.6.0, the use of a :ref:`DynBlockRulesGroup` is a much more efficient way of doing the same thing.
 
   :param addresses: set of Addresses as returned by an :ref:`exceed function <exceedfuncs>`
   :param DynBPFFilter dynbpf: The dynamic eBPF filter to use
@@ -28,13 +29,18 @@ These are all the functions, objects and methods related to the :doc:`../advance
   :param table options: A table with key: value pairs with options.
 
   Options:
+
   * ``ipv4MaxItems``: int - The maximum number of entries in the IPv4 map. Default is 0 which will not allow any entry at all.
   * ``ipv4PinnedPath``: str - The filesystem path this map should be pinned to.
   * ``ipv6MaxItems``: int - The maximum number of entries in the IPv6 map. Default is 0 which will not allow any entry at all.
   * ``ipv6PinnedPath``: str - The filesystem path this map should be pinned to.
+  * ``cidr4MaxItems``: int - The maximum number of entries in the IPv4 range block map. Default is 0 which will not allow any entry at all.
+  * ``cidr4PinnedPath``: str - The filesystem path this map should be pinned to.
+  * ``cidr6MaxItems``: int - The maximum number of entries in the IPv6 range block map. Default is 0 which will not allow any entry at all.
+  * ``cidr6PinnedPath``: str - The filesystem path this map should be pinned to.
   * ``qnamesMaxItems``: int - The maximum number of entries in the qname map. Default is 0 which will not allow any entry at all.
   * ``qnamesPinnedPath``: str - The filesystem path this map should be pinned to.
-  * ``external``: bool - If set to true, DNSDist can to load the internal eBPF program.
+  * ``external``: bool - If set to true, DNSDist does not load the internal eBPF program.
 
 .. function:: newDynBPFFilter(bpf) -> DynBPFFilter
 
@@ -77,6 +83,18 @@ These are all the functions, objects and methods related to the :doc:`../advance
 
     :param ComboAddress address: The address to block
 
+  .. method:: BPFFilter:addRangeRule(Netmask , action [, force=false])
+
+    .. versionadded:: 1.8.0
+
+    Block all IP addresses in this range. 
+
+    DNSDist eBPF code first checks if an exact IP match is found, then if a range matches, and finally if a DNSName does.
+
+    :param string Netmask: The ip range to block, allow or truncate
+    :param int action: set ``action``  to ``0`` to allow a range, set ``action`` to ``1`` to block a range, set ``action`` to ``2`` to truncate a range.
+    :param bool force: When ``force`` is set to true, DNSDist always accepts adding a new item to BPF maps, even if the item to be added may already be included in the larger network range.
+
   .. method:: BPFFilter:blockQName(name [, qtype=255])
 
     Block queries for this exact qname. An optional qtype can be used, defaults to 255.
@@ -93,6 +111,18 @@ These are all the functions, objects and methods related to the :doc:`../advance
     Unblock this address.
 
     :param ComboAddress address: The address to unblock
+
+  .. method:: BPFFilter:rmRangeRule(Netmask)
+
+    .. versionadded:: 1.8.0
+
+    :param Netmask string: The rule you want to remove
+
+  .. method:: BPFFilter:lsRangeRule()
+
+    .. versionadded:: 1.8.0
+
+    List all range rule.
 
   .. method:: BPFFilter:unblockQName(name [, qtype=255])
 

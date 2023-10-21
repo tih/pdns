@@ -28,7 +28,7 @@
 #include <sys/socket.h>
 #include <boost/format.hpp>
 
-#if HAVE_GETIFADDRS
+#ifdef HAVE_GETIFADDRS
 #include <ifaddrs.h>
 #endif
 
@@ -147,7 +147,7 @@ int SSetsockopt(int sockfd, int level, int opname, int value)
   return ret;
 }
 
-void setSocketIgnorePMTU(int sockfd, int family)
+void setSocketIgnorePMTU([[maybe_unused]] int sockfd, [[maybe_unused]] int family)
 {
   if (family == AF_INET) {
 #if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
@@ -293,30 +293,6 @@ int sendOnNBSocket(int fd, const struct msghdr *msgh)
   }
 #endif
   return sendErr;
-}
-
-ssize_t sendfromto(int sock, const void* data, size_t len, int flags, const ComboAddress& from, const ComboAddress& to)
-{
-  struct msghdr msgh;
-  struct iovec iov;
-  cmsgbuf_aligned cbuf;
-
-  /* Set up iov and msgh structures. */
-  memset(&msgh, 0, sizeof(struct msghdr));
-  iov.iov_base = const_cast<void*>(data);
-  iov.iov_len = len;
-  msgh.msg_iov = &iov;
-  msgh.msg_iovlen = 1;
-  msgh.msg_name = (struct sockaddr*)&to;
-  msgh.msg_namelen = to.getSocklen();
-
-  if(from.sin4.sin_family) {
-    addCMsgSrcAddr(&msgh, &cbuf, &from, 0);
-  }
-  else {
-    msgh.msg_control=nullptr;
-  }
-  return sendmsg(sock, &msgh, flags);
 }
 
 // be careful: when using this for receive purposes, make sure addr->sin4.sin_family is set appropriately so getSocklen works!
@@ -540,11 +516,13 @@ void setSocketBuffer(int fd, int optname, uint32_t size)
   uint32_t psize = 0;
   socklen_t len = sizeof(psize);
 
-  if (!getsockopt(fd, SOL_SOCKET, optname, &psize, &len) && psize > size) {
-    throw std::runtime_error("Not decreasing socket buffer size from " + std::to_string(psize) + " to " + std::to_string(size));
+  if (getsockopt(fd, SOL_SOCKET, optname, &psize, &len) != 0) {
+    throw std::runtime_error("Unable to retrieve socket buffer size:" + stringerror());
   }
-
-  if (setsockopt(fd, SOL_SOCKET, optname, &size, sizeof(size)) < 0) {
+  if (psize >= size) {
+    return;
+  }
+  if (setsockopt(fd, SOL_SOCKET, optname, &size, sizeof(size)) != 0) {
     throw std::runtime_error("Unable to raise socket buffer size to " + std::to_string(size) + ": " + stringerror());
   }
 }
@@ -562,7 +540,7 @@ void setSocketSendBuffer(int fd, uint32_t size)
 std::set<std::string> getListOfNetworkInterfaces()
 {
   std::set<std::string> result;
-#if HAVE_GETIFADDRS
+#ifdef HAVE_GETIFADDRS
   struct ifaddrs *ifaddr;
   if (getifaddrs(&ifaddr) == -1) {
     return result;
@@ -580,11 +558,11 @@ std::set<std::string> getListOfNetworkInterfaces()
   return result;
 }
 
+#ifdef HAVE_GETIFADDRS
 std::vector<ComboAddress> getListOfAddressesOfNetworkInterface(const std::string& itf)
 {
   std::vector<ComboAddress> result;
-#if HAVE_GETIFADDRS
-  struct ifaddrs *ifaddr;
+  struct ifaddrs *ifaddr = nullptr;
   if (getifaddrs(&ifaddr) == -1) {
     return result;
   }
@@ -608,6 +586,80 @@ std::vector<ComboAddress> getListOfAddressesOfNetworkInterface(const std::string
   }
 
   freeifaddrs(ifaddr);
-#endif
   return result;
 }
+#else
+std::vector<ComboAddress> getListOfAddressesOfNetworkInterface(const std::string& /* itf */)
+{
+  std::vector<ComboAddress> result;
+  return result;
+}
+#endif                          // HAVE_GETIFADDRS
+
+#ifdef HAVE_GETIFADDRS
+static uint8_t convertNetmaskToBits(const uint8_t* mask, socklen_t len)
+{
+  if (mask == nullptr || len > 16) {
+    throw std::runtime_error("Invalid parameters passed to convertNetmaskToBits");
+  }
+
+  uint8_t result = 0;
+  // for all bytes in the address (4 for IPv4, 16 for IPv6)
+  for (size_t idx = 0; idx < len; idx++) {
+    uint8_t byte = *(mask + idx);
+    // count the number of bits set
+    while (byte > 0) {
+      result += (byte & 1);
+      byte >>= 1;
+    }
+  }
+  return result;
+}
+#endif /* HAVE_GETIFADDRS */
+
+#ifdef HAVE_GETIFADDRS
+std::vector<Netmask> getListOfRangesOfNetworkInterface(const std::string& itf)
+{
+  std::vector<Netmask> result;
+  struct ifaddrs *ifaddr = nullptr;
+  if (getifaddrs(&ifaddr) == -1) {
+    return result;
+  }
+
+  for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+    if (ifa->ifa_name == nullptr || strcmp(ifa->ifa_name, itf.c_str()) != 0) {
+      continue;
+    }
+    if (ifa->ifa_addr == nullptr || (ifa->ifa_addr->sa_family != AF_INET && ifa->ifa_addr->sa_family != AF_INET6)) {
+      continue;
+    }
+    ComboAddress addr;
+    try {
+      addr.setSockaddr(ifa->ifa_addr, ifa->ifa_addr->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6));
+    }
+    catch (...) {
+      continue;
+    }
+
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+      auto netmask = reinterpret_cast<const struct sockaddr_in*>(ifa->ifa_netmask);
+      uint8_t maskBits = convertNetmaskToBits(reinterpret_cast<const uint8_t*>(&netmask->sin_addr.s_addr), sizeof(netmask->sin_addr.s_addr));
+      result.emplace_back(addr, maskBits);
+    }
+    else if (ifa->ifa_addr->sa_family == AF_INET6) {
+      auto netmask = reinterpret_cast<const struct sockaddr_in6*>(ifa->ifa_netmask);
+      uint8_t maskBits = convertNetmaskToBits(reinterpret_cast<const uint8_t*>(&netmask->sin6_addr.s6_addr), sizeof(netmask->sin6_addr.s6_addr));
+      result.emplace_back(addr, maskBits);
+    }
+  }
+
+  freeifaddrs(ifaddr);
+  return result;
+}
+#else
+std::vector<Netmask> getListOfRangesOfNetworkInterface(const std::string& /* itf */)
+{
+  std::vector<Netmask> result;
+  return result;
+}
+#endif                          // HAVE_GETIFADDRS

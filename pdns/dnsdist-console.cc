@@ -236,8 +236,8 @@ void doClient(ComboAddress server, const std::string& command)
   SodiumNonce theirs, ours, readingNonce, writingNonce;
   ours.init();
 
-  writen2(fd.getHandle(), (const char*)ours.value, sizeof(ours.value));
-  readn2(fd.getHandle(), (char*)theirs.value, sizeof(theirs.value));
+  writen2(fd.getHandle(), ours.value.data(), ours.value.size());
+  readn2(fd.getHandle(), theirs.value.data(), theirs.value.size());
   readingNonce.merge(ours, theirs);
   writingNonce.merge(theirs, ours);
 
@@ -252,14 +252,10 @@ void doClient(ComboAddress server, const std::string& command)
   else if (commandResult == ConsoleCommandResult::TooLarge) {
     return;
   }
-  else if (commandResult == ConsoleCommandResult::TooLarge) {
-    close(fd);
-    return;
-  }
 
   if (!command.empty()) {
     sendMessageToServer(fd.getHandle(), command, readingNonce, writingNonce, false);
-    return; 
+    return;
   }
 
 #ifdef HAVE_LIBEDIT
@@ -288,7 +284,7 @@ void doClient(ComboAddress server, const std::string& command)
     }
     lastline = line;
     free(sline);
-    
+
     if (line == "quit") {
       break;
     }
@@ -386,7 +382,7 @@ void doConsole()
         auto ret = lua->executeCode<
           boost::optional<
             boost::variant<
-              string, 
+              string,
               shared_ptr<DownstreamState>,
               ClientState*,
               std::unordered_map<string, double>
@@ -458,7 +454,7 @@ void doConsole()
       }
     }
     catch (const std::exception& e) {
-      std::cerr << e.what() << std::endl;      
+      std::cerr << e.what() << std::endl;
     }
   }
 }
@@ -474,10 +470,12 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "addConsoleACL", true, "netmask", "add a netmask to the console ACL" },
   { "addDNSCryptBind", true, "\"127.0.0.1:8443\", \"provider name\", \"/path/to/resolver.cert\", \"/path/to/resolver.key\", {reusePort=false, tcpFastOpenQueueSize=0, interface=\"\", cpus={}}", "listen to incoming DNSCrypt queries on 127.0.0.1 port 8443, with a provider name of `provider name`, using a resolver certificate and associated key stored respectively in the `resolver.cert` and `resolver.key` files. The fifth optional parameter is a table of parameters" },
   { "addDOHLocal", true, "addr, certFile, keyFile [, urls [, vars]]", "listen to incoming DNS over HTTPS queries on the specified address using the specified certificate and key. The last two parameters are tables" },
+  { "addDOQLocal", true, "addr, certFile, keyFile [, vars]", "listen to incoming DNS over QUIC queries on the specified address using the specified certificate and key. The last parameter is a table" },
   { "addDynBlocks", true, "addresses, message[, seconds[, action]]", "block the set of addresses with message `msg`, for `seconds` seconds (10 by default), applying `action` (default to the one set with `setDynBlocksAction()`)" },
   { "addDynBlockSMT", true, "names, message[, seconds [, action]]", "block the set of names with message `msg`, for `seconds` seconds (10 by default), applying `action` (default to the one set with `setDynBlocksAction()`)" },
   { "addLocal", true, "addr [, {doTCP=true, reusePort=false, tcpFastOpenQueueSize=0, interface=\"\", cpus={}}]", "add `addr` to the list of addresses we listen on" },
   { "addCacheHitResponseAction", true, "DNS rule, DNS response action [, {uuid=\"UUID\", name=\"name\"}}]", "add a cache hit response rule" },
+  { "addCacheInsertedResponseAction", true, "DNS rule, DNS response action [, {uuid=\"UUID\", name=\"name\"}}]", "add a cache inserted response rule" },
   { "addResponseAction", true, "DNS rule, DNS response action [, {uuid=\"UUID\", name=\"name\"}}]", "add a response rule" },
   { "addSelfAnsweredResponseAction", true, "DNS rule, DNS response action [, {uuid=\"UUID\", name=\"name\"}}]", "add a self-answered response rule" },
   { "addTLSLocal", true, "addr, certFile(s), keyFile(s) [,params]", "listen to incoming DNS over TLS queries on the specified address using the specified certificate (or list of) and key (or list of). The last parameter is a table" },
@@ -493,6 +491,8 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "clearRules", true, "", "remove all current rules" },
   { "controlSocket", true, "addr", "open a control socket on this address / connect to this address in client mode" },
   { "ContinueAction", true, "action", "execute the specified action and continue the processing of the remaining rules, regardless of the return of the action" },
+  { "declareMetric", true, "name, type, description [, prometheusName]", "Declare a custom metric" },
+  { "decMetric", true, "name", "Decrement a custom metric" },
   { "DelayAction", true, "milliseconds", "delay the response by the specified amount of milliseconds (UDP-only)" },
   { "DelayResponseAction", true, "milliseconds", "delay the response by the specified amount of milliseconds (UDP-only)" },
   { "delta", true, "", "shows all commands entered that changed the configuration" },
@@ -520,29 +520,41 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "getAction", true, "n", "Returns the Action associated with rule n" },
   { "getBind", true, "n", "returns the listener at index n" },
   { "getBindCount", true, "", "returns the number of listeners all kinds" },
+  { "getCacheHitResponseRule", true, "selector", "Return the cache-hit response rule corresponding to the selector, if any" },
+  { "getCacheInsertedResponseRule", true, "selector", "Return the cache-inserted response rule corresponding to the selector, if any" },
+  { "getCurrentTime", true, "", "returns the current time" },
   { "getDNSCryptBind", true, "n", "return the `DNSCryptContext` object corresponding to the bind `n`" },
   { "getDNSCryptBindCount", true, "", "returns the number of DNSCrypt listeners" },
   { "getDOHFrontend", true, "n", "returns the DOH frontend with index n" },
   { "getDOHFrontendCount", true, "", "returns the number of DoH listeners" },
   { "getListOfAddressesOfNetworkInterface", true, "itf", "returns the list of addresses configured on a given network interface, as strings" },
   { "getListOfNetworkInterfaces", true, "", "returns the list of network interfaces present on the system, as strings" },
+  { "getListOfRangesOfNetworkInterface", true, "itf", "returns the list of network ranges configured on a given network interface, as strings" },
+  { "getMACAddress", true, "IP addr", "return the link-level address (MAC) corresponding to the supplied neighbour  IP address, if known by the kernel" },
+  { "getMetric", true, "name", "Get the value of a custom metric" },
   { "getOutgoingTLSSessionCacheSize", true, "", "returns the number of TLS sessions (for outgoing connections) currently cached" },
   { "getPool", true, "name", "return the pool named `name`, or \"\" for the default pool" },
   { "getPoolServers", true, "pool", "return servers part of this pool" },
+  { "getPoolNames", true, "", "returns a table with all the pool names" },
   { "getQueryCounters", true, "[max=10]", "show current buffer of query counters, limited by 'max' if provided" },
   { "getResponseRing", true, "", "return the current content of the response ring" },
+  { "getResponseRule", true, "selector", "Return the response rule corresponding to the selector, if any" },
   { "getRespRing", true, "", "return the qname/rcode content of the response ring" },
+  { "getRule", true, "selector", "Return the rule corresponding to the selector, if any" },
+  { "getSelfAnsweredResponseRule", true, "selector", "Return the self-answered response rule corresponding to the selector, if any" },
   { "getServer", true, "id", "returns server with index 'n' or whose uuid matches if 'id' is an UUID string" },
   { "getServers", true, "", "returns a table with all defined servers" },
   { "getStatisticsCounters", true, "", "returns a map of statistic counters" },
   { "getTopCacheHitResponseRules", true, "[top]", "return the `top` cache-hit response rules" },
+  { "getTopCacheInsertedResponseRules", true, "[top]", "return the `top` cache-inserted response rules" },
   { "getTopResponseRules", true, "[top]", "return the `top` response rules" },
   { "getTopRules", true, "[top]", "return the `top` rules" },
   { "getTopSelfAnsweredResponseRules", true, "[top]", "return the `top` self-answered response rules" },
   { "getTLSContext", true, "n", "returns the TLS context with index n" },
   { "getTLSFrontend", true, "n", "returns the TLS frontend with index n" },
   { "getTLSFrontendCount", true, "", "returns the number of DoT listeners" },
-  { "grepq", true, "Netmask|DNS Name|100ms|{\"::1\", \"powerdns.com\", \"100ms\"} [, n]", "shows the last n queries and responses matching the specified client address or range (Netmask), or the specified DNS Name, or slower than 100ms" },
+  { "getVerbose", true, "", "get whether log messages at the verbose level will be logged" },
+  { "grepq", true, "Netmask|DNS Name|100ms|{\"::1\", \"powerdns.com\", \"100ms\"} [, n] [,options]", "shows the last n queries and responses matching the specified client address or range (Netmask), or the specified DNS Name, or slower than 100ms" },
   { "hashPassword", true, "password [, workFactor]", "Returns a hashed and salted version of the supplied password, usable with 'setWebserverConfig()'"},
   { "HTTPHeaderRule", true, "name, regex", "matches DoH queries with a HTTP header 'name' whose content matches the regular expression 'regex'"},
   { "HTTPPathRegexRule", true, "regex", "matches DoH queries whose HTTP path matches 'regex'"},
@@ -550,6 +562,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "HTTPStatusAction", true, "status, reason, body", "return an HTTP response"},
   { "inClientStartup", true, "", "returns true during console client parsing of configuration" },
   { "includeDirectory", true, "path", "include configuration files from `path`" },
+  { "incMetric", true, "name", "Increment a custom metric" },
   { "KeyValueLookupKeyQName", true, "[wireFormat]", "Return a new KeyValueLookupKey object that, when passed to KeyValueStoreLookupAction or KeyValueStoreLookupRule, will return the qname of the query, either in wire format (default) or in plain text if 'wireFormat' is false" },
   { "KeyValueLookupKeySourceIP", true, "[v4Mask [, v6Mask [, includePort]]]", "Return a new KeyValueLookupKey object that, when passed to KeyValueStoreLookupAction or KeyValueStoreLookupRule, will return the (possibly bitmasked) source IP of the client in network byte-order." },
   { "KeyValueLookupKeySuffix", true, "[minLabels [,wireFormat]]", "Return a new KeyValueLookupKey object that, when passed to KeyValueStoreLookupAction or KeyValueStoreLookupRule, will return a vector of keys based on the labels of the qname in DNS wire format or plain text" },
@@ -559,7 +572,12 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "KeyValueStoreLookupRule", true, "kvs, lookupKey", "matches queries if the key is found in the specified Key Value store" },
   { "KeyValueStoreRangeLookupRule", true, "kvs, lookupKey", "matches queries if the key is found in the specified Key Value store" },
   { "leastOutstanding", false, "", "Send traffic to downstream server with least outstanding queries, with the lowest 'order', and within that the lowest recent latency"},
+#if defined(HAVE_LIBSSL) && !defined(HAVE_TLS_PROVIDERS)
   { "loadTLSEngine", true, "engineName [, defaultString]", "Load the OpenSSL engine named 'engineName', setting the engine default string to 'defaultString' if supplied"},
+#endif
+#if defined(HAVE_LIBSSL) && OPENSSL_VERSION_MAJOR >= 3 && defined(HAVE_TLS_PROVIDERS)
+  { "loadTLSProvider", true, "providerName", "Load the OpenSSL provider named 'providerName'"},
+#endif
   { "LogAction", true, "[filename], [binary], [append], [buffered]", "Log a line for each query, to the specified file if any, to the console (require verbose) otherwise. When logging to a file, the `binary` optional parameter specifies whether we log in binary form (default) or in textual form, the `append` optional parameter specifies whether we open the file for appending or truncate each time (default), and the `buffered` optional parameter specifies whether writes to the file are buffered (default) or not." },
   { "LogResponseAction", true, "[filename], [append], [buffered]", "Log a line for each response, to the specified file if any, to the console (require verbose) otherwise. The `append` optional parameter specifies whether we open the file for appending or truncate each time (default), and the `buffered` optional parameter specifies whether writes to the file are buffered (default) or not." },
   { "LuaAction", true, "function", "Invoke a Lua function that accepts a DNSQuestion" },
@@ -575,10 +593,12 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
 #endif /* HAVE_IPCIPHER */
   { "makeKey", true, "", "generate a new server access key, emit configuration line ready for pasting" },
   { "makeRule", true, "rule", "Make a NetmaskGroupRule() or a SuffixMatchNodeRule(), depending on how it is called" }  ,
-  { "MaxQPSIPRule", true, "qps, [v4Mask=32 [, v6Mask=64 [, burst=qps [, expiration=300 [, cleanupDelay=60]]]]]", "matches traffic exceeding the qps limit per subnet" },
+  { "MaxQPSIPRule", true, "qps, [v4Mask=32 [, v6Mask=64 [, burst=qps [, expiration=300 [, cleanupDelay=60 [, scanFraction=10 [, shards=10]]]]]]]", "matches traffic exceeding the qps limit per subnet" },
   { "MaxQPSRule", true, "qps", "matches traffic **not** exceeding this qps limit" },
   { "mvCacheHitResponseRule", true, "from, to", "move cache hit response rule 'from' to a position where it is in front of 'to'. 'to' can be one larger than the largest rule" },
   { "mvCacheHitResponseRuleToTop", true, "", "move the last cache hit response rule to the first position" },
+  { "mvCacheInsertedResponseRule", true, "from, to", "move cache inserted response rule 'from' to a position where it is in front of 'to'. 'to' can be one larger than the largest rule" },
+  { "mvCacheInsertedResponseRuleToTop", true, "", "move the last cache inserted response rule to the first position" },
   { "mvResponseRule", true, "from, to", "move response rule 'from' to a position where it is in front of 'to'. 'to' can be one larger than the largest rule" },
   { "mvResponseRuleToTop", true, "", "move the last response rule to the first position" },
   { "mvRule", true, "from, to", "move rule 'from' to a position where it is in front of 'to'. 'to' can be one larger than the largest rule, in which case the rule will be moved to the last position" },
@@ -586,7 +606,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "mvSelfAnsweredResponseRule", true, "from, to", "move self-answered response rule 'from' to a position where it is in front of 'to'. 'to' can be one larger than the largest rule" },
   { "mvSelfAnsweredResponseRuleToTop", true, "", "move the last self-answered response rule to the first position" },
   { "NetmaskGroupRule", true, "nmg[, src]", "Matches traffic from/to the network range specified in nmg. Set the src parameter to false to match nmg against destination address instead of source address. This can be used to differentiate between clients" },
-  { "newBPFFilter", true, "maxV4, maxV6, maxQNames", "Return a new eBPF socket filter with a maximum of maxV4 IPv4, maxV6 IPv6 and maxQNames qname entries in the block table" },
+  { "newBPFFilter", true, "{ipv4MaxItems=int, ipv4PinnedPath=string, ipv6MaxItems=int, ipv6PinnedPath=string, cidr4MaxItems=int, cidr4PinnedPath=string, cidr6MaxItems=int, cidr6PinnedPath=string, qnamesMaxItems=int, qnamesPinnedPath=string, external=bool}", "Return a new eBPF socket filter with specified options." },
   { "newCA", true, "address", "Returns a ComboAddress based on `address`" },
 #ifdef HAVE_CDB
   { "newCDBKVStore", true, "fname, refreshDelay", "Return a new KeyValueStore object associated to the corresponding CDB database" },
@@ -613,7 +633,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "NotRule", true, "selector", "Matches the traffic if the selector rule does not match" },
   { "OpcodeRule", true, "code", "Matches queries with opcode code. code can be directly specified as an integer, or one of the built-in DNSOpcodes" },
   { "OrRule", true, "selectors", "Matches the traffic if one or more of the the selectors rules does match" },
-  { "PoolAction", true, "poolname", "set the packet into the specified pool" },
+  { "PoolAction", true, "poolname [, stop]", "set the packet into the specified pool" },
   { "PoolAvailableRule", true, "poolname", "Check whether a pool has any servers available to handle queries" },
   { "PoolOutstandingRule", true, "poolname, limit", "Check whether a pool has outstanding queries above limit" },
   { "printDNSCryptProviderFingerprint", true, "\"/path/to/providerPublic.key\"", "display the fingerprint of the provided resolver public key" },
@@ -625,7 +645,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "QNameSetRule", true, "set", "Matches if the set contains exact qname" },
   { "QNameWireLengthRule", true, "min, max", "matches if the qname's length on the wire is less than `min` or more than `max` bytes" },
   { "QPSAction", true, "maxqps", "Drop a packet if it does exceed the maxqps queries per second limits. Letting the subsequent rules apply otherwise" },
-  { "QPSPoolAction", true, "maxqps, poolname", "Send the packet into the specified pool only if it does not exceed the maxqps queries per second limits. Letting the subsequent rules apply otherwise" },
+  { "QPSPoolAction", true, "maxqps, poolname [, stop]", "Send the packet into the specified pool only if it does not exceed the maxqps queries per second limits. Letting the subsequent rules apply otherwise" },
   { "QTypeRule", true, "qtype", "matches queries with the specified qtype" },
   { "RCodeAction", true, "rcode", "Reply immediately by turning the query into a response with the specified rcode" },
   { "RCodeRule", true, "rcode", "matches responses with the specified rcode" },
@@ -640,6 +660,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "requestTCPStatesDump", true, "", "Request a dump of the TCP states (incoming connections, outgoing connections) during the next scan. Useful for debugging purposes only" },
   { "rmACL", true, "netmask", "remove netmask from ACL" },
   { "rmCacheHitResponseRule", true, "id", "remove cache hit response rule in position 'id', or whose uuid matches if 'id' is an UUID string, or finally whose name matches if 'id' is a string but not a valid UUID" },
+  { "rmCacheInsertedResponseRule", true, "id", "remove cache inserted response rule in position 'id', or whose uuid matches if 'id' is an UUID string, or finally whose name matches if 'id' is a string but not a valid UUID" },
   { "rmResponseRule", true, "id", "remove response rule in position 'id', or whose uuid matches if 'id' is an UUID string, or finally whose name matches if 'id' is a string but not a valid UUID" },
   { "rmRule", true, "id", "remove rule in position 'id', or whose uuid matches if 'id' is an UUID string, or finally whose name matches if 'id' is a string but not a valid UUID" },
   { "rmSelfAnsweredResponseRule", true, "id", "remove self-answered response rule in position 'id', or whose uuid matches if 'id' is an UUID string, or finally whose name matches if 'id' is a string but not a valid UUID" },
@@ -677,6 +698,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "setMaxTCPQueriesPerConnection", true, "n", "set the maximum number of queries in an incoming TCP connection. 0 means unlimited" },
   { "setMaxTCPQueuedConnections", true, "n", "set the maximum number of TCP connections queued (waiting to be picked up by a client thread)" },
   { "setMaxUDPOutstanding", true, "n", "set the maximum number of outstanding UDP queries to a given backend server. This can only be set at configuration time and defaults to 65535" },
+  { "setMetric", true, "name, value", "Set the value of a custom metric to the supplied value" },
   { "setPayloadSizeOnSelfGeneratedAnswers", true, "payloadSize", "set the UDP payload size advertised via EDNS on self-generated responses" },
   { "setPoolServerPolicy", true, "policy, pool", "set the server selection policy for this pool to that policy" },
   { "setPoolServerPolicyLua", true, "name, function, pool", "set the server selection policy for this pool to one named 'name' and provided by 'function'" },
@@ -687,7 +709,9 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "setProxyProtocolMaximumPayloadSize", true, "max", "Set the maximum size of a Proxy Protocol payload, in bytes" },
   { "setQueryCount", true, "bool", "set whether queries should be counted" },
   { "setQueryCountFilter", true, "func", "filter queries that would be counted, where `func` is a function with parameter `dq` which decides whether a query should and how it should be counted" },
+  { "SetReducedTTLResponseAction", true, "percentage", "Reduce the TTL of records in a response to a given percentage" },
   { "setRingBuffersLockRetries", true, "n", "set the number of attempts to get a non-blocking lock to a ringbuffer shard before blocking" },
+  { "setRingBuffersOptions", true, "{ lockRetries=int, recordQueries=true, recordResponses=true }", "set ringbuffer options" },
   { "setRingBuffersSize", true, "n [, numberOfShards]", "set the capacity of the ringbuffers used for live traffic inspection to `n`, and optionally the number of shards to use to `numberOfShards`" },
   { "setRoundRobinFailOnNoServer", true, "value", "By default the roundrobin load-balancing policy will still try to select a backend even if all backends are currently down. Setting this to true will make the policy fail and return that no server is available instead" },
   { "setRules", true, "list of rules", "replace the current rules with the supplied list of pairs of DNS Rules and DNS Actions (see `newRuleAction()`)" },
@@ -709,7 +733,9 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "setUDPMultipleMessagesVectorSize", true, "n", "set the size of the vector passed to recvmmsg() to receive UDP messages. Default to 1 which means that the feature is disabled and recvmsg() is used instead" },
   { "setUDPSocketBufferSizes", true, "recv, send", "Set the size of the receive (SO_RCVBUF) and send (SO_SNDBUF) buffers for incoming UDP sockets" },
   { "setUDPTimeout", true, "n", "set the maximum time dnsdist will wait for a response from a backend over UDP, in seconds" },
+  { "setVerbose", true, "bool", "set whether log messages at the verbose level will be logged" },
   { "setVerboseHealthChecks", true, "bool", "set whether health check errors will be logged" },
+  { "setVerboseLogDestination", true, "destination file", "Set a destination file to write the 'verbose' log messages to, instead of sending them to syslog and/or the standard output" },
   { "setWebserverConfig", true, "[{password=string, apiKey=string, customHeaders, statsRequireAuthentication}]", "Updates webserver configuration" },
   { "setWeightedBalancingFactor", true, "factor", "Set the balancing factor for bounded-load weighted policies (whashed, wrandom)" },
   { "setWHashedPertubation", true, "value", "Set the hash perturbation value to be used in the whashed policy instead of a random one, allowing to have consistent whashed results on different instance" },
@@ -721,6 +747,7 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "showDNSCryptBinds", true, "", "display the currently configured DNSCrypt binds" },
   { "showDOHFrontends", true, "", "list all the available DOH frontends" },
   { "showDOHResponseCodes", true, "", "show the HTTP response code statistics for the DoH frontends"},
+  { "showDOQFrontends", true, "", "list all the available DOQ frontends" },
   { "showDynBlocks", true, "", "show dynamic blocks in force" },
   { "showPools", true, "", "show the available pools" },
   { "showPoolServerPolicy", true, "pool", "show server selection policy for this pool" },
@@ -765,11 +792,12 @@ const std::vector<ConsoleKeyword> g_consoleKeywords{
   { "TagRule", true, "name [, value]", "matches if the tag named 'name' is present, with the given 'value' matching if any" },
   { "TCAction", true, "", "create answer to query with TC and RD bits set, to move to TCP" },
   { "TCPRule", true, "[tcp]", "Matches question received over TCP if tcp is true, over UDP otherwise" },
-  { "TeeAction", true, "remote [, addECS]", "send copy of query to remote, optionally adding ECS info" },
+  { "TeeAction", true, "remote [, addECS [, local]]", "send copy of query to remote, optionally adding ECS info, optionally set local address" },
   { "testCrypto", true, "", "test of the crypto all works" },
-  { "TimedIPSetRule", true, "", "Create a rule which matches a set of IP addresses which expire"}, 
+  { "TimedIPSetRule", true, "", "Create a rule which matches a set of IP addresses which expire"},
   { "topBandwidth", true, "top", "show top-`top` clients that consume the most bandwidth over length of ringbuffer" },
   { "topCacheHitResponseRules", true, "[top][, vars]", "show `top` cache-hit response rules" },
+  { "topCacheInsertedResponseRules", true, "[top][, vars]", "show `top` cache-inserted response rules" },
   { "topClients", true, "n", "show top-`n` clients sending the most queries over length of ringbuffer" },
   { "topQueries", true, "n[, labels]", "show top 'n' queries, as grouped when optionally cut down to 'labels' labels" },
   { "topResponses", true, "n, kind[, labels]", "show top 'n' responses with RCODE=kind (0=NO Error, 2=ServFail, 3=NXDomain), as grouped when optionally cut down to 'labels' labels" },
@@ -840,8 +868,8 @@ static void controlClientThread(ConsoleConnection&& conn)
 
     SodiumNonce theirs, ours, readingNonce, writingNonce;
     ours.init();
-    readn2(conn.getFD(), (char*)theirs.value, sizeof(theirs.value));
-    writen2(conn.getFD(), (char*)ours.value, sizeof(ours.value));
+    readn2(conn.getFD(), theirs.value.data(), theirs.value.size());
+    writen2(conn.getFD(), ours.value.data(), ours.value.size());
     readingNonce.merge(ours, theirs);
     writingNonce.merge(theirs, ours);
 
@@ -870,13 +898,13 @@ static void controlClientThread(ConsoleConnection&& conn)
       retry:;
         try {
           auto lua = g_lua.lock();
-        
+
           g_outputBuffer.clear();
           resetLuaSideEffect();
           auto ret = lua->executeCode<
             boost::optional<
               boost::variant<
-                string, 
+                string,
                 shared_ptr<DownstreamState>,
                 ClientState*,
                 std::unordered_map<string, double>
@@ -962,7 +990,7 @@ static void controlClientThread(ConsoleConnection&& conn)
     }
   }
   catch (const std::exception& e) {
-    errlog("Got an exception in client connection from %s: %s", conn.getClient().toStringWithPort(), e.what());
+    infolog("Got an exception in client connection from %s: %s", conn.getClient().toStringWithPort(), e.what());
   }
 }
 
@@ -1000,7 +1028,7 @@ void controlThread(int fd, ComboAddress local)
         t.detach();
       }
       catch (const std::exception& e) {
-        errlog("Control connection died: %s", e.what());
+        infolog("Control connection died: %s", e.what());
       }
     }
   }

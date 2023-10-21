@@ -49,7 +49,7 @@ void Logger::info(Logr::Priority p, const std::string& msg) const
 
 void Logger::logMessage(const std::string& msg, boost::optional<const std::string> err) const
 {
-  return logMessage(msg, Logr::Absent, err);
+  return logMessage(msg, Logr::Absent, std::move(err));
 }
 
 void Logger::logMessage(const std::string& msg, Logr::Priority p, boost::optional<const std::string> err) const
@@ -106,27 +106,6 @@ std::shared_ptr<Logr::Logger> Logger::withValues(const std::map<std::string, std
   return res;
 }
 
-template struct Loggable<DNSName>;
-template struct Loggable<ComboAddress>;
-template struct Loggable<std::string>;
-template struct Loggable<size_t>;
-
-template <>
-std::string Loggable<DNSName>::to_string() const
-{
-  return _t.toLogString();
-}
-template <>
-std::string Loggable<ComboAddress>::to_string() const
-{
-  return _t.toLogString();
-}
-template <>
-std::string Loggable<std::string>::to_string() const
-{
-  return _t;
-}
-
 std::shared_ptr<Logr::Logger> Logger::withName(const std::string& name) const
 {
   std::shared_ptr<Logger> res;
@@ -163,11 +142,11 @@ Logger::Logger(EntryLogger callback) :
 {
 }
 Logger::Logger(EntryLogger callback, boost::optional<std::string> name) :
-  _callback(callback), _name(name)
+  _callback(callback), _name(std::move(name))
 {
 }
 Logger::Logger(std::shared_ptr<const Logger> parent, boost::optional<std::string> name, size_t verbosity, size_t lvl, EntryLogger callback) :
-  _parent(parent), _callback(callback), _name(name), _level(lvl), _verbosity(verbosity)
+  _parent(std::move(parent)), _callback(callback), _name(std::move(name)), _level(lvl), _verbosity(verbosity)
 {
 }
 

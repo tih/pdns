@@ -34,11 +34,11 @@ typedef unsigned long long uint64_t;
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/uio.h>
-#include <signal.h>
+#include <csignal>
 #include <pthread.h>
 #include <semaphore.h>
-#include <signal.h>
-#include <errno.h>
+#include <csignal>
+#include <cerrno>
 #include <unistd.h>
 #include <string>
 
@@ -120,9 +120,6 @@ public:
 
   //! Writes a vector.
   static int writev( Utility::sock_t socket, const iovec *vector, size_t count );
-
-  //! Sets the random seed.
-  static void srandom(void);
 
   //! Drops the program's group privileges.
   static void dropGroupPrivs( uid_t uid, gid_t gid );

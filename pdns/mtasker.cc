@@ -252,9 +252,36 @@ template<class EventKey, class EventVal, class Cmp>int MTasker<EventKey,EventVal
   auto userspace=std::move(waiter->context);
   d_waiters.erase(waiter);             // removes the waitpoint
   notifyStackSwitch(d_threads[d_tid].startOfStack, d_stacksize);
-  pdns_swapcontext(d_kernel,*userspace); // swaps back to the above point 'A'
+  try {
+    pdns_swapcontext(d_kernel,*userspace); // swaps back to the above point 'A'
+  }
+  catch (...) {
+    notifyStackSwitchDone();
+    throw;
+  }
   notifyStackSwitchDone();
   return 1;
+}
+
+template<class Key, class Val, class Cmp> std::shared_ptr<pdns_ucontext_t> MTasker<Key,Val,Cmp>::getUContext()
+{
+  auto uc = std::make_shared<pdns_ucontext_t>();
+  if (d_cachedStacks.empty()) {
+    uc->uc_stack.resize(d_stacksize + 1);
+  }
+  else {
+    uc->uc_stack = std::move(d_cachedStacks.top());
+    d_cachedStacks.pop();
+  }
+
+  uc->uc_link = &d_kernel; // come back to kernel after dying
+
+#ifdef PDNS_USE_VALGRIND
+  uc->valgrind_id = VALGRIND_STACK_REGISTER(&uc->uc_stack[0],
+                                            &uc->uc_stack[uc->uc_stack.size()-1]);
+#endif /* PDNS_USE_VALGRIND */
+
+  return uc;
 }
 
 //! launches a new thread
@@ -264,14 +291,7 @@ template<class EventKey, class EventVal, class Cmp>int MTasker<EventKey,EventVal
 */
 template<class Key, class Val, class Cmp>void MTasker<Key,Val,Cmp>::makeThread(tfunc_t *start, void* val)
 {
-  auto uc=std::make_shared<pdns_ucontext_t>();
-  
-  uc->uc_link = &d_kernel; // come back to kernel after dying
-  uc->uc_stack.resize (d_stacksize+1);
-#ifdef PDNS_USE_VALGRIND
-  uc->valgrind_id = VALGRIND_STACK_REGISTER(&uc->uc_stack[0],
-                                            &uc->uc_stack[uc->uc_stack.size()-1]);
-#endif /* PDNS_USE_VALGRIND */
+  auto uc = getUContext();
 
   ++d_threadsCount;
   auto& thread = d_threads[d_maxtid];
@@ -311,14 +331,31 @@ template<class Key, class Val, class Cmp>bool MTasker<Key,Val,Cmp>::schedule(con
     d_threads[d_tid].dt.start();
 #endif
     notifyStackSwitch(d_threads[d_tid].startOfStack, d_stacksize);
-    pdns_swapcontext(d_kernel, *d_threads[d_tid].context);
+    try {
+      pdns_swapcontext(d_kernel, *d_threads[d_tid].context);
+    }
+    catch (...) {
+      notifyStackSwitchDone();
+      // It is not clear if the d_runQueue.pop() should be done in this case
+      throw;
+    }
     notifyStackSwitchDone();
 
     d_runQueue.pop();
     return true;
   }
-  if(!d_zombiesQueue.empty()) {
-    d_threads.erase(d_zombiesQueue.front());
+  if (!d_zombiesQueue.empty()) {
+    auto zombi = d_zombiesQueue.front();
+    if (d_cachedStacks.size() < d_maxCachedStacks) {
+      auto thread = d_threads.find(zombi);
+      if (thread != d_threads.end()) {
+        d_cachedStacks.push(std::move(thread->second.context->uc_stack));
+      }
+      d_threads.erase(thread);
+    }
+    else {
+      d_threads.erase(zombi);
+    }
     --d_threadsCount;
     d_zombiesQueue.pop();
     return true;
@@ -343,7 +380,13 @@ template<class Key, class Val, class Cmp>bool MTasker<Key,Val,Cmp>::schedule(con
         ttdindex.erase(i++);                  // removes the waitpoint
 
         notifyStackSwitch(d_threads[d_tid].startOfStack, d_stacksize);
-        pdns_swapcontext(d_kernel, *uc); // swaps back to the above point 'A'
+        try {
+          pdns_swapcontext(d_kernel, *uc); // swaps back to the above point 'A'
+        }
+        catch (...) {
+          notifyStackSwitchDone();
+          throw;
+        }
         notifyStackSwitchDone();
       }
       else if(i->ttd.tv_sec)

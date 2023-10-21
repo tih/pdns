@@ -6,6 +6,26 @@
 
 BOOST_AUTO_TEST_SUITE(aggressive_nsec_cc)
 
+BOOST_AUTO_TEST_CASE(test_small_coverering_nsec3)
+{
+  AggressiveNSECCache::s_maxNSEC3CommonPrefix = 1;
+
+  const std::vector<std::tuple<string, string, uint8_t, bool>> table = {
+    {"gujhshp2lhmnpoo9qde4blg4gq3hgl99", "gujhshp2lhmnpoo9qde4blg4gq3hgl9a", 157, true},
+    {"gujhshp2lhmnpoo9qde4blg4gq3hgl99", "gujhshp2lhmnpoo9qde4blg4gq3hgl9a", 158, false},
+    {"0ujhshp2lhmnpoo9qde4blg4gq3hgl99", "vujhshp2lhmnpoo9qde4blg4gq3hgl9a", 0, false},
+    {"0ujhshp2lhmnpoo9qde4blg4gq3hgl99", "7ujhshp2lhmnpoo9qde4blg4gq3hgl9a", 1, true},
+    {"0ujhshp2lhmnpoo9qde4blg4gq3hgl99", "7ujhshp2lhmnpoo9qde4blg4gq3hgl9a", 2, false},
+    {"0ujhshp2lhmnpoo9qde4blg4gq3hgl99", "fujhshp2lhmnpoo9qde4blg4gq3hgl9a", 1, false},
+    {"0ujhshp2lhmnpoo9qde4blg4gq3hgl99", "8ujhshp2lhmnpoo9qde4blg4gq3hgl9a", 1, false},
+  };
+
+  for (const auto& [owner, next, boundary, result] : table) {
+    AggressiveNSECCache::s_maxNSEC3CommonPrefix = boundary;
+    BOOST_CHECK_EQUAL(AggressiveNSECCache::isSmallCoveringNSEC3(DNSName(owner), fromBase32Hex(next)), result);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(test_aggressive_nsec_nxdomain)
 {
   std::unique_ptr<SyncRes> sr;
@@ -31,7 +51,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_nxdomain)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target1, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target1, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -127,7 +147,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_nodata)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -213,7 +233,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_nodata_wildcard)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -306,7 +326,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -420,7 +440,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_wildcard_synthesis)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -514,6 +534,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_nxdomain)
 {
   std::unique_ptr<SyncRes> sr;
   initSR(sr, true);
+  AggressiveNSECCache::s_maxNSEC3CommonPrefix = 159;
   g_aggressiveNSECCache = make_unique<AggressiveNSECCache>(10000);
 
   setDNSSECValidation(sr, DNSSECMode::ValidateAll);
@@ -536,7 +557,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_nxdomain)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target1, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target1, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -639,7 +660,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_nodata)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -706,6 +727,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_nodata_wildcard)
 {
   std::unique_ptr<SyncRes> sr;
   initSR(sr, true);
+  AggressiveNSECCache::s_maxNSEC3CommonPrefix = 159;
   g_aggressiveNSECCache = make_unique<AggressiveNSECCache>(10000);
 
   setDNSSECValidation(sr, DNSSECMode::ValidateAll);
@@ -725,7 +747,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_nodata_wildcard)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -830,7 +852,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -950,7 +972,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_wildcard_synthesis)
 
   size_t queriesCount = 0;
 
-  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool doTCP, bool sendRDQuery, int EDNS0Level, struct timeval* now, boost::optional<Netmask>& srcmask, boost::optional<const ResolveContext&> context, LWResult* res, bool* chained) {
+  sr->setAsyncCallback([target, &queriesCount, keys](const ComboAddress& ip, const DNSName& domain, int type, bool /* doTCP */, bool /* sendRDQuery */, int /* EDNS0Level */, struct timeval* /* now */, boost::optional<Netmask>& /* srcmask */, boost::optional<const ResolveContext&> /* context */, LWResult* res, bool* /* chained */) {
     queriesCount++;
 
     if (type == QType::DS || type == QType::DNSKEY) {
@@ -1054,6 +1076,54 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_wildcard_synthesis)
   BOOST_CHECK_EQUAL(queriesCount, 5U);
 }
 
+BOOST_AUTO_TEST_CASE(test_aggressive_nsec_replace)
+{
+  const size_t testSize = 10000;
+  auto cache = make_unique<AggressiveNSECCache>(testSize);
+
+  struct timeval now
+  {
+  };
+  Utility::gettimeofday(&now, nullptr);
+
+  vector<DNSName> names;
+  names.reserve(testSize);
+  for (size_t i = 0; i < testSize; i++) {
+    names.emplace_back(std::to_string(i) + "powerdns.com");
+  }
+
+  DTime time;
+  time.set();
+
+  for (const auto& name : names) {
+    DNSRecord rec;
+    rec.d_name = name;
+    rec.d_type = QType::NSEC3;
+    rec.d_ttl = now.tv_sec + 10;
+    rec.setContent(getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3"));
+    auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
+    cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, true);
+  }
+  auto diff1 = time.udiff(true);
+
+  BOOST_CHECK_EQUAL(cache->getEntriesCount(), testSize);
+  for (const auto& name : names) {
+    DNSRecord rec;
+    rec.d_name = name;
+    rec.d_type = QType::NSEC3;
+    rec.d_ttl = now.tv_sec + 10;
+    rec.setContent(getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3"));
+    auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data");
+    cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, true);
+  }
+
+  BOOST_CHECK_EQUAL(cache->getEntriesCount(), testSize);
+
+  auto diff2 = time.udiff(true);
+  // Check that replace is about equally fast as insert
+  BOOST_CHECK(diff1 < diff2 * 2 && diff2 < diff1 * 2);
+}
+
 BOOST_AUTO_TEST_CASE(test_aggressive_nsec_wiping)
 {
   auto cache = make_unique<AggressiveNSECCache>(10000);
@@ -1065,18 +1135,18 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_wiping)
   rec.d_name = DNSName("www.powerdns.com");
   rec.d_type = QType::NSEC;
   rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC"));
   auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   rec.d_name = DNSName("z.powerdns.com");
-  rec.d_content = getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC"));
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   rec.d_name = DNSName("www.powerdns.org");
   rec.d_type = QType::NSEC3;
   rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3");
+  rec.setContent(getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3"));
   rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.org"), rec.d_name, rec, {rrsig}, true);
 
@@ -1114,12 +1184,12 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_pruning)
   rec.d_name = DNSName("www.powerdns.com");
   rec.d_type = QType::NSEC;
   rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC"));
   auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   rec.d_name = DNSName("z.powerdns.com");
-  rec.d_content = getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC"));
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   BOOST_CHECK_EQUAL(cache->getEntriesCount(), 2U);
@@ -1130,26 +1200,21 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_pruning)
 
   rec.d_name = DNSName("www.powerdns.org");
   rec.d_type = QType::NSEC3;
-  rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3");
+  rec.d_ttl = now.tv_sec + 20;
+  rec.setContent(getRecordContent(QType::NSEC3, "1 0 500 ab HASG==== A RRSIG NSEC3"));
   rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.org"), rec.d_name, rec, {rrsig}, true);
 
   BOOST_CHECK_EQUAL(cache->getEntriesCount(), 3U);
 
   /* we have set a upper bound to 2 entries, so we are above,
-     and all entries are actually expired, so we will prune one entry
+     and one entry is actually expired, so we will prune one entry
      to get below the limit */
-  cache->prune(now.tv_sec + 600);
+  cache->prune(now.tv_sec + 15);
   BOOST_CHECK_EQUAL(cache->getEntriesCount(), 2U);
 
-  /* now we are at the limit, so we will scan 1/5th of the entries,
-     and prune the expired ones, which mean we will also remove only one */
-  cache->prune(now.tv_sec + 600);
-  BOOST_CHECK_EQUAL(cache->getEntriesCount(), 1U);
-
-  /* now we are below the limit, so we will scan 1/5th of the entries again,
-     and prune the expired ones, which mean we will remove the last one */
+  /* now we are at the limit, so we will scan 1/10th of all zones entries, rounded up,
+     and prune the expired ones, which mean we will also be removing the remaining two */
   cache->prune(now.tv_sec + 600);
   BOOST_CHECK_EQUAL(cache->getEntriesCount(), 0U);
 }
@@ -1159,53 +1224,84 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_dump)
   auto cache = make_unique<AggressiveNSECCache>(10000);
 
   std::vector<std::string> expected;
-  expected.push_back("; Zone powerdns.com.\n");
-  expected.push_back("www.powerdns.com. 10 IN NSEC z.powerdns.com. A RRSIG NSEC\n");
-  expected.push_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
-  expected.push_back("z.powerdns.com. 10 IN NSEC zz.powerdns.com. AAAA RRSIG NSEC\n");
-  expected.push_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
-  expected.push_back("; Zone powerdns.org.\n");
-  expected.push_back("www.powerdns.org. 10 IN NSEC3 1 0 50 ab HASG==== A RRSIG NSEC3\n");
-  expected.push_back("- RRSIG NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+  expected.emplace_back("; Zone powerdns.com.\n");
+  expected.emplace_back("www.powerdns.com. 10 IN NSEC z.powerdns.com. A RRSIG NSEC\n");
+  expected.emplace_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+  expected.emplace_back("z.powerdns.com. 10 IN NSEC zz.powerdns.com. AAAA RRSIG NSEC\n");
+  expected.emplace_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+  expected.emplace_back("; Zone powerdns.org.\n");
+  expected.emplace_back("www.powerdns.org. 10 IN NSEC3 1 0 50 ab HASG==== A RRSIG NSEC3\n");
+  expected.emplace_back("- RRSIG NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
 
-  struct timeval now;
-  Utility::gettimeofday(&now, 0);
+  struct timeval now
+  {
+  };
+  Utility::gettimeofday(&now, nullptr);
 
   DNSRecord rec;
   rec.d_name = DNSName("www.powerdns.com");
   rec.d_type = QType::NSEC;
   rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "z.powerdns.com. A RRSIG NSEC"));
   auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   rec.d_name = DNSName("z.powerdns.com");
-  rec.d_content = getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC");
+  rec.setContent(getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC"));
   cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
 
   rec.d_name = DNSName("www.powerdns.org");
   rec.d_type = QType::NSEC3;
   rec.d_ttl = now.tv_sec + 10;
-  rec.d_content = getRecordContent(QType::NSEC3, "1 0 50 ab HASG==== A RRSIG NSEC3");
+  rec.setContent(getRecordContent(QType::NSEC3, "1 0 50 ab HASG==== A RRSIG NSEC3"));
   rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(DNSName("powerdns.org"), rec.d_name, rec, {rrsig}, true);
 
   BOOST_CHECK_EQUAL(cache->getEntriesCount(), 3U);
 
-  auto fp = std::unique_ptr<FILE, int (*)(FILE*)>(tmpfile(), fclose);
-  if (!fp) {
+  auto filePtr = std::unique_ptr<FILE, int (*)(FILE*)>(tmpfile(), fclose);
+  if (!filePtr) {
     BOOST_FAIL("Temporary file could not be opened");
   }
 
-  BOOST_CHECK_EQUAL(cache->dumpToFile(fp, now), 3U);
+  BOOST_CHECK_EQUAL(cache->dumpToFile(filePtr, now), 3U);
 
-  rewind(fp.get());
+  rewind(filePtr.get());
   char* line = nullptr;
   size_t len = 0;
-  ssize_t read;
 
-  for (auto str : expected) {
-    read = getline(&line, &len, fp.get());
+  for (const auto& str : expected) {
+    auto read = getline(&line, &len, filePtr.get());
+    if (read == -1) {
+      BOOST_FAIL("Unable to read a line from the temp file");
+    }
+    BOOST_CHECK_EQUAL(line, str);
+  }
+
+  expected.clear();
+  expected.emplace_back("; Zone powerdns.com.\n");
+  expected.emplace_back("www.powerdns.com. 10 IN NSEC z.powerdns.com. A RRSIG NSEC\n");
+  expected.emplace_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+  expected.emplace_back("z.powerdns.com. 30 IN NSEC zz.powerdns.com. AAAA RRSIG NSEC\n");
+  expected.emplace_back("- RRSIG NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+  expected.emplace_back("; Zone powerdns.org.\n");
+  expected.emplace_back("www.powerdns.org. 10 IN NSEC3 1 0 50 ab HASG==== A RRSIG NSEC3\n");
+  expected.emplace_back("- RRSIG NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data\n");
+
+  rec.d_name = DNSName("z.powerdns.com");
+  rec.d_type = QType::NSEC;
+  rec.d_ttl = now.tv_sec + 30;
+  rec.setContent(getRecordContent(QType::NSEC, "zz.powerdns.com. AAAA RRSIG NSEC"));
+  rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 dummy. data");
+  cache->insertNSEC(DNSName("powerdns.com"), rec.d_name, rec, {rrsig}, false);
+
+  rewind(filePtr.get());
+  BOOST_CHECK_EQUAL(cache->dumpToFile(filePtr, now), 3U);
+
+  rewind(filePtr.get());
+
+  for (const auto& str : expected) {
+    auto read = getline(&line, &len, filePtr.get());
     if (read == -1) {
       BOOST_FAIL("Unable to read a line from the temp file");
     }
@@ -1215,13 +1311,14 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_dump)
   /* getline() allocates a buffer when called with a nullptr,
      then reallocates it when needed, but we need to free the
      last allocation if any. */
-  free(line);
+  free(line); // NOLINT: it's the API.
 }
 
 BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_rollover)
 {
   /* test that we don't compare a hash using the wrong (former) salt or iterations count in case of a rollover,
      or when different servers use different parameters */
+  AggressiveNSECCache::s_maxNSEC3CommonPrefix = 159;
   auto cache = make_unique<AggressiveNSECCache>(10000);
   g_recCache = std::make_unique<MemRecursorCache>();
 
@@ -1235,7 +1332,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_rollover)
   drSOA.d_name = zone;
   drSOA.d_type = QType::SOA;
   drSOA.d_class = QClass::IN;
-  drSOA.d_content = std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600");
+  drSOA.setContent(std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600"));
   drSOA.d_ttl = static_cast<uint32_t>(ttd); // XXX truncation
   drSOA.d_place = DNSResourceRecord::ANSWER;
   records.push_back(drSOA);
@@ -1266,7 +1363,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_rollover)
     nrc.set(type);
   }
 
-  rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+  rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
   auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1295,7 +1392,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_rollover)
     nrc.set(type);
   }
 
-  rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+  rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
   rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1325,7 +1422,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_rollover)
     nrc.set(type);
   }
 
-  rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+  rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
   rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 dummy. data");
   cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1355,7 +1452,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
   drSOA.d_name = zone;
   drSOA.d_type = QType::SOA;
   drSOA.d_class = QClass::IN;
-  drSOA.d_content = std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600");
+  drSOA.setContent(std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600"));
   drSOA.d_ttl = static_cast<uint32_t>(ttd); // XXX truncation
   drSOA.d_place = DNSResourceRecord::ANSWER;
   records.push_back(drSOA);
@@ -1378,7 +1475,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSECRecordContent>(nrc);
+    rec.setContent(std::make_shared<NSECRecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 sub.powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, false);
 
@@ -1411,7 +1508,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSECRecordContent>(nrc);
+    rec.setContent(std::make_shared<NSECRecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, false);
 
@@ -1443,7 +1540,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSECRecordContent>(nrc);
+    rec.setContent(std::make_shared<NSECRecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, false);
 
@@ -1481,7 +1578,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSECRecordContent>(nrc);
+      rec.setContent(std::make_shared<NSECRecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, false);
 
@@ -1500,7 +1597,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSECRecordContent>(nrc);
+      rec.setContent(std::make_shared<NSECRecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, false);
 
@@ -1524,6 +1621,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec_ancestor_cases)
 
 BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
 {
+  AggressiveNSECCache::s_maxNSEC3CommonPrefix = 159;
   auto cache = make_unique<AggressiveNSECCache>(10000);
   g_recCache = std::make_unique<MemRecursorCache>();
 
@@ -1537,7 +1635,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
   drSOA.d_name = zone;
   drSOA.d_type = QType::SOA;
   drSOA.d_class = QClass::IN;
-  drSOA.d_content = std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600");
+  drSOA.setContent(std::make_shared<SOARecordContent>("pdns-public-ns1.powerdns.com. pieter\\.lexis.powerdns.com. 2017032301 10800 3600 604800 3600"));
   drSOA.d_ttl = static_cast<uint32_t>(ttd); // XXX truncation
   drSOA.d_place = DNSResourceRecord::ANSWER;
   records.push_back(drSOA);
@@ -1569,7 +1667,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+    rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 sub.powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1608,7 +1706,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+    rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1646,7 +1744,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
       nrc.set(type);
     }
 
-    rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+    rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
     auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
     cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1693,7 +1791,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1721,7 +1819,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1749,7 +1847,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1798,7 +1896,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1826,7 +1924,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 
@@ -1854,7 +1952,7 @@ BOOST_AUTO_TEST_CASE(test_aggressive_nsec3_ancestor_cases)
         nrc.set(type);
       }
 
-      rec.d_content = std::make_shared<NSEC3RecordContent>(nrc);
+      rec.setContent(std::make_shared<NSEC3RecordContent>(nrc));
       auto rrsig = std::make_shared<RRSIGRecordContent>("NSEC3 5 3 10 20370101000000 20370101000000 24567 powerdns.com. data");
       cache->insertNSEC(zone, rec.d_name, rec, {rrsig}, true);
 

@@ -34,39 +34,10 @@ std::vector<std::unique_ptr<ClientState>> g_frontends;
 /* add stub implementations, we don't want to include the corresponding object files
    and their dependencies */
 
-#ifdef HAVE_DNS_OVER_HTTPS
-std::unordered_map<std::string, std::string> DOHUnit::getHTTPHeaders() const
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): this is a stub, the real one is not that simple..
+bool TLSFrontend::setupTLS()
 {
-  return {};
-}
-
-std::string DOHUnit::getHTTPPath() const
-{
-  return "";
-}
-
-std::string DOHUnit::getHTTPHost() const
-{
-  return "";
-}
-
-std::string DOHUnit::getHTTPScheme() const
-{
-  return "";
-}
-
-std::string DOHUnit::getHTTPQueryString() const
-{
-  return "";
-}
-
-void DOHUnit::setHTTPResponse(uint16_t statusCode, PacketBuffer&& body_, const std::string& contentType_)
-{
-}
-#endif /* HAVE_DNS_OVER_HTTPS */
-
-void handleDOHTimeout(DOHUnitUniquePtr&& oldDU)
-{
+  return true;
 }
 
 std::string DNSQuestion::getTrailingData() const
@@ -108,17 +79,17 @@ std::atomic<bool> g_configurationDone{false};
 static DNSQuestion getDQ(const DNSName* providedName = nullptr)
 {
   static const DNSName qname("powerdns.com.");
-  static const ComboAddress lc("127.0.0.1:53");
-  static const ComboAddress rem("192.0.2.1:42");
-  static struct timespec queryRealTime;
   static PacketBuffer packet(sizeof(dnsheader));
+  static InternalQueryState ids;
+  ids.origDest = ComboAddress("127.0.0.1:53");
+  ids.origRemote = ComboAddress("192.0.2.1:42");
+  ids.qname = providedName ? *providedName : qname;
+  ids.qtype = QType::A;
+  ids.qclass = QClass::IN;
+  ids.protocol = dnsdist::Protocol::DoUDP;
+  ids.queryRealTime.start();
 
-  uint16_t qtype = QType::A;
-  uint16_t qclass = QClass::IN;
-  auto proto = dnsdist::Protocol::DoUDP;
-  gettime(&queryRealTime, true);
-
-  DNSQuestion dq(providedName ? providedName : &qname, qtype, qclass, &lc, &rem, packet, proto, &queryRealTime);
+  DNSQuestion dq(ids, packet);
   return dq;
 }
 

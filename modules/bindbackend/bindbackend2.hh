@@ -150,7 +150,7 @@ public:
   }
 
   DNSName d_name; //!< actual name of the domain
-  DomainInfo::DomainKind d_kind; //!< the kind of domain
+  DomainInfo::DomainKind d_kind{DomainInfo::Native}; //!< the kind of domain
   string d_filename; //!< full absolute filename of the zone on disk
   string d_status; //!< message describing status of a domain, for human consumption
   vector<ComboAddress> d_masters; //!< IP address of the master of this domain
@@ -159,16 +159,16 @@ public:
   time_t d_ctime{0}; //!< last known ctime of the file on disk
   time_t d_lastcheck{0}; //!< last time domain was checked for freshness
   uint32_t d_lastnotified{0}; //!< Last serial number we notified our slaves of
-  unsigned int d_id; //!< internal id of the domain
+  unsigned int d_id{0}; //!< internal id of the domain
   mutable bool d_checknow; //!< if this domain has been flagged for a check
-  bool d_loaded; //!< if a domain is loaded
+  bool d_loaded{false}; //!< if a domain is loaded
   bool d_wasRejectedLastReload{false}; //!< if the domain was rejected during Bind2Backend::queueReloadAndStore
   bool d_nsec3zone{false};
   NSEC3PARAMRecordContent d_nsec3param;
 
 private:
   time_t getCtime();
-  time_t d_checkinterval;
+  time_t d_checkinterval{0};
 };
 
 class SSQLite3;
@@ -184,7 +184,7 @@ public:
   Bind2Backend(const string& suffix = "", bool loadZones = true);
   ~Bind2Backend();
   void getUnfreshSlaveInfos(vector<DomainInfo>* unfreshDomains) override;
-  void getUpdatedMasters(vector<DomainInfo>* changedDomains) override;
+  void getUpdatedMasters(vector<DomainInfo>& changedDomains, std::unordered_set<DNSName>& catalogs, CatalogHashMap& catalogHashes) override;
   bool getDomainInfo(const DNSName& domain, DomainInfo& di, bool getSerial = true) override;
   time_t getCtime(const string& fname);
   // DNSSEC
@@ -218,7 +218,7 @@ public:
   bool deactivateDomainKey(const DNSName& name, unsigned int id) override;
   bool publishDomainKey(const DNSName& name, unsigned int id) override;
   bool unpublishDomainKey(const DNSName& name, unsigned int id) override;
-  bool getTSIGKey(const DNSName& name, DNSName* algorithm, string* content) override;
+  bool getTSIGKey(const DNSName& name, DNSName& algorithm, string& content) override;
   bool setTSIGKey(const DNSName& name, const DNSName& algorithm, const string& content) override;
   bool deleteTSIGKey(const DNSName& name) override;
   bool getTSIGKeys(std::vector<struct TSIGKey>& keys) override;
@@ -268,10 +268,10 @@ private:
     DNSName qname;
     DNSName domain;
 
-    int id;
+    int id{-1};
     QType qtype;
-    bool d_list;
-    bool mustlog;
+    bool d_list{false};
+    bool mustlog{false};
 
   private:
     bool get_normal(DNSResourceRecord&);

@@ -1,173 +1,21 @@
-#include <net/sock.h>
-#include <uapi/linux/udp.h>
-#include <uapi/linux/ip.h>
-#include <uapi/linux/ipv6.h>
-
-#define DNS_PORT      53
-
-// do not use libc includes because this causes clang
-// to include 32bit headers on 64bit ( only ) systems.
-typedef __u8  uint8_t;
-typedef __u16 uint16_t;
-typedef __u32 uint32_t;
-typedef __u64 uint64_t;
-#define memcpy __builtin_memcpy
-
-/*
- * Helper pointer to parse the incoming packets
- * Copyright 2020, NLnet Labs, All rights reserved.
- */
-struct cursor {
-  void *pos;
-  void *end;
-};
-
-/*
- * Store the VLAN header
- * Copyright 2020, NLnet Labs, All rights reserved.
- */
-struct vlanhdr {
-  uint16_t tci;
-  uint16_t encap_proto;
-};
-
-/*
- * Store the DNS header
- * Copyright 2020, NLnet Labs, All rights reserved.
- */
-struct dnshdr {
-  uint16_t id;
-  union {
-  	struct {
-#if BYTE_ORDER == LITTLE_ENDIAN
-  		uint8_t  rd     : 1;
-  		uint8_t  tc     : 1;
-  		uint8_t  aa     : 1;
-  		uint8_t  opcode : 4;
-  		uint8_t  qr     : 1;
-
-  		uint8_t  rcode  : 4;
-  		uint8_t  cd     : 1;
-  		uint8_t  ad     : 1;
-  		uint8_t  z      : 1;
-  		uint8_t  ra     : 1;
-#elif BYTE_ORDER == BIG_ENDIAN || BYTE_ORDER == PDP_ENDIAN
-  		uint8_t  qr     : 1;
-  		uint8_t  opcode : 4;
-  		uint8_t  aa     : 1;
-  		uint8_t  tc     : 1;
-  		uint8_t  rd     : 1;
-
-  		uint8_t  ra     : 1;
-  		uint8_t  z      : 1;
-  		uint8_t  ad     : 1;
-  		uint8_t  cd     : 1;
-  		uint8_t  rcode  : 4;
-#endif
-  	}        as_bits_and_pieces;
-  	uint16_t as_value;
-  } flags;
-  uint16_t qdcount;
-  uint16_t ancount;
-  uint16_t nscount;
-  uint16_t arcount;
-};
-
-/*
- * Store the qname and qtype
- */
-struct dns_qname
-{
-  uint8_t qname[255];
-  uint16_t qtype;
-};
-
-/*
- * The possible actions to perform on the packet
- * PASS: XDP_PASS
- * DROP: XDP_DROP
- * TC: set TC bit and XDP_TX
- */
-enum dns_action : uint8_t {
-  PASS = 0,
-  DROP = 1,
-  TC = 2
-};
-
-/*
- * Store the matching counter and the associated action for a blocked element
- */
-struct map_value
-{
-  uint64_t counter;
-  enum dns_action action;
-};
+#include "xdp.h"
 
 BPF_TABLE_PINNED("hash", uint32_t, struct map_value, v4filter, 1024, "/sys/fs/bpf/dnsdist/addr-v4");
 BPF_TABLE_PINNED("hash", struct in6_addr, struct map_value, v6filter, 1024, "/sys/fs/bpf/dnsdist/addr-v6");
 BPF_TABLE_PINNED("hash", struct dns_qname, struct map_value, qnamefilter, 1024, "/sys/fs/bpf/dnsdist/qnames");
+BPF_TABLE_PINNED("prog", int, int, progsarray, 2, "/sys/fs/bpf/dnsdist/progs");
 
 /*
- * Initializer of a cursor pointer
- *  Copyright 2020, NLnet Labs, All rights reserved.
+ * bcc has added BPF_TABLE_PINNED7 to the latest commit of the master branch, but it has not yet been released.
+ * https://github.com/iovisor/bcc/commit/fff25a8d4d445c6156b65aa8a4016ce0d78ab7fb
  */
-static inline void cursor_init(struct cursor *c, struct xdp_md *ctx)
-{
-  c->end = (void *)(long)ctx->data_end;
-  c->pos = (void *)(long)ctx->data;
-}
+#ifndef BPF_TABLE_PINNED7
+#define BPF_TABLE_PINNED7(_table_type, _key_type, _leaf_type, _name, _max_entries, _pinned, _flags) \
+  BPF_F_TABLE(_table_type ":" _pinned, _key_type, _leaf_type, _name, _max_entries, _flags)
+#endif
 
-/* 
- * Header parser functions
- * Copyright 2020, NLnet Labs, All rights reserved.
- */
-#define PARSE_FUNC_DECLARATION(STRUCT)                            \
-static inline struct STRUCT *parse_ ## STRUCT (struct cursor *c)  \
-{                                                                 \
-  struct STRUCT *ret = c->pos;                                    \
-  if (c->pos + sizeof(struct STRUCT) > c->end)                    \
-  	return 0;                                                 \
-  c->pos += sizeof(struct STRUCT);                                \
-  return ret;                                                     \
-}
-
-PARSE_FUNC_DECLARATION(ethhdr)
-PARSE_FUNC_DECLARATION(vlanhdr)
-PARSE_FUNC_DECLARATION(iphdr)
-PARSE_FUNC_DECLARATION(ipv6hdr)
-PARSE_FUNC_DECLARATION(udphdr)
-PARSE_FUNC_DECLARATION(dnshdr)
-
-/*
- * Parse ethernet frame and fill the struct
- * Copyright 2020, NLnet Labs, All rights reserved.
- */
-static inline struct ethhdr *parse_eth(struct cursor *c, uint16_t *eth_proto)
-{
-  struct ethhdr  *eth;
-
-  if (!(eth = parse_ethhdr(c)))
-  	return 0;
-
-  *eth_proto = eth->h_proto;
-  if (*eth_proto == bpf_htons(ETH_P_8021Q)
-  ||  *eth_proto == bpf_htons(ETH_P_8021AD)) {
-  	struct vlanhdr *vlan;
-
-  	if (!(vlan = parse_vlanhdr(c)))
-  		return 0;
-
-  	*eth_proto = vlan->encap_proto;
-  	if (*eth_proto == bpf_htons(ETH_P_8021Q)
-  	||  *eth_proto == bpf_htons(ETH_P_8021AD)) {
-  		if (!(vlan = parse_vlanhdr(c)))
-  			return 0;
-
-  		*eth_proto = vlan->encap_proto;
-  	}
-  }
-  return eth;
-}
+BPF_TABLE_PINNED7("lpm_trie", struct CIDR4, struct map_value, cidr4filter, 1024, "/sys/fs/bpf/dnsdist/cidr4", BPF_F_NO_PREALLOC);
+BPF_TABLE_PINNED7("lpm_trie", struct CIDR6, struct map_value, cidr6filter, 1024, "/sys/fs/bpf/dnsdist/cidr6", BPF_F_NO_PREALLOC);
 
 /*
  * Recalculate the checksum
@@ -282,7 +130,7 @@ static inline enum dns_action check_qname(struct cursor *c)
  *         TC if (modified) message needs to be replied
  *         DROP if message needs to be blocked
  */
-static inline enum dns_action udp_dns_reply_v4(struct cursor *c, uint32_t key)
+static inline enum dns_action udp_dns_reply_v4(struct cursor *c, struct CIDR4 *key)
 {
   struct udphdr  *udp;
   struct dnshdr  *dns;
@@ -297,7 +145,7 @@ static inline enum dns_action udp_dns_reply_v4(struct cursor *c, uint32_t key)
   }	
 
   // if the address is blocked, perform the corresponding action
-  struct map_value* value = v4filter.lookup(&key);
+  struct map_value* value = v4filter.lookup(&key->addr);
 
   if (value) {
     __sync_fetch_and_add(&value->counter, 1);
@@ -306,16 +154,26 @@ static inline enum dns_action udp_dns_reply_v4(struct cursor *c, uint32_t key)
     } else {
       return value->action;
     }
-  } else {
-    enum dns_action action = check_qname(c);
-  	if (action == TC) {
-  		return set_tc_bit(udp, dns);
-  	} else {
-      return action;
+  }
+
+  key->cidr = 32;
+  key->addr = bpf_htonl(key->addr);
+  value = cidr4filter.lookup(key);
+  if (value) {
+    __sync_fetch_and_add(&value->counter, 1);
+    if (value->action == TC) {
+      return set_tc_bit(udp, dns);
+    }
+    else {
+      return value->action;
     }
   }
 
-  return PASS;
+  enum dns_action action = check_qname(c);
+  if (action == TC) {
+    return set_tc_bit(udp, dns);
+  }
+  return action;
 }
 
 /*
@@ -324,7 +182,7 @@ static inline enum dns_action udp_dns_reply_v4(struct cursor *c, uint32_t key)
  *         TC if (modified) message needs to be replied
  *         DROP if message needs to be blocked
  */
-static inline enum dns_action udp_dns_reply_v6(struct cursor *c, struct in6_addr key)
+static inline enum dns_action udp_dns_reply_v6(struct cursor *c, struct CIDR6* key)
 {
    struct udphdr  *udp;
    struct dnshdr  *dns;
@@ -341,7 +199,7 @@ static inline enum dns_action udp_dns_reply_v6(struct cursor *c, struct in6_addr
   }
 
   // if the address is blocked, perform the corresponding action
-  struct map_value* value = v6filter.lookup(&key);
+  struct map_value* value = v6filter.lookup(&key->addr);
 
   if (value) {
     __sync_fetch_and_add(&value->counter, 1);
@@ -350,19 +208,28 @@ static inline enum dns_action udp_dns_reply_v6(struct cursor *c, struct in6_addr
     } else {
       return value->action;
     }
-  } else {
-    enum dns_action action = check_qname(c);
-  	if (action == TC) {
-  		return set_tc_bit(udp, dns);
-  	} else {
-      return action;
+  }
+
+  key->cidr = 128;
+  value = cidr6filter.lookup(key);
+  if (value) {
+    __sync_fetch_and_add(&value->counter, 1);
+    if (value->action == TC) {
+      return set_tc_bit(udp, dns);
+    }
+    else {
+      return value->action;
     }
   }
 
-  return PASS;
+  enum dns_action action = check_qname(c);
+  if (action == TC) {
+    return set_tc_bit(udp, dns);
+  }
+  return action;
 }
 
-int xdp_dns_filter(struct xdp_md *ctx)
+int xdp_dns_filter(struct xdp_md* ctx)
 {
   // store variables
   struct cursor   c;
@@ -377,46 +244,58 @@ int xdp_dns_filter(struct xdp_md *ctx)
 
   // pass the packet if it is not an ethernet one
   if ((eth = parse_eth(&c, &eth_proto))) {
-  	// IPv4 packets
-  	if (eth_proto == bpf_htons(ETH_P_IP))
-  	{
-  		if (!(ipv4 = parse_iphdr(&c)) || bpf_htons(ipv4->protocol != IPPROTO_UDP)) {
-  			return XDP_PASS;
-  		}
-      // if TC bit must not be set, apply the action
-  		if ((r = udp_dns_reply_v4(&c, bpf_htonl(ipv4->saddr))) != TC) {
-  	    return r == DROP ? XDP_DROP : XDP_PASS;
-  		}
-  
-      // swap src/dest IP addresses
-  		uint32_t swap_ipv4 = ipv4->daddr;
-  		ipv4->daddr = ipv4->saddr;
-  		ipv4->saddr = swap_ipv4;
-  	}
-  	// IPv6 packets
-  	else if (eth_proto == bpf_htons(ETH_P_IPV6))
-  	{
-  		;
-  		if (!(ipv6 = parse_ipv6hdr(&c)) || bpf_htons(ipv6->nexthdr != IPPROTO_UDP)) {
-  			return XDP_PASS;
-  		} 
-      // if TC bit must not be set, apply the action
-  		if ((r = udp_dns_reply_v6(&c, ipv6->saddr)) != TC) {
-  			return r == DROP ? XDP_DROP : XDP_PASS;
-  		}
-  
-      // swap src/dest IP addresses
-  		struct in6_addr swap_ipv6 = ipv6->daddr;
-  		ipv6->daddr = ipv6->saddr;
-  		ipv6->saddr = swap_ipv6;
+    // IPv4 packets
+    if (eth_proto == bpf_htons(ETH_P_IP))
+    {
+      if (!(ipv4 = parse_iphdr(&c)) || bpf_htons(ipv4->protocol != IPPROTO_UDP)) {
+        return XDP_PASS;
+      }
 
-  	}
-  	// pass all non-IP packets
-  	else {
-  		return XDP_PASS;
-  	}
-  } else {
-  	return XDP_PASS;
+      struct CIDR4 key;
+      key.addr = bpf_htonl(ipv4->saddr);
+      // if TC bit must not be set, apply the action
+      if ((r = udp_dns_reply_v4(&c, &key)) != TC) {
+        if (r == DROP) {
+          progsarray.call(ctx, 0);
+          return XDP_DROP;
+        }
+        return XDP_PASS;
+      }
+
+      // swap src/dest IP addresses
+      uint32_t swap_ipv4 = ipv4->daddr;
+      ipv4->daddr = ipv4->saddr;
+      ipv4->saddr = swap_ipv4;
+    }
+    // IPv6 packets
+    else if (eth_proto == bpf_htons(ETH_P_IPV6)) {
+      if (!(ipv6 = parse_ipv6hdr(&c)) || bpf_htons(ipv6->nexthdr != IPPROTO_UDP)) {
+        return XDP_PASS;
+      }
+      struct CIDR6 key;
+      key.addr = ipv6->saddr;
+
+      // if TC bit must not be set, apply the action
+      if ((r = udp_dns_reply_v6(&c, &key)) != TC) {
+        if (r == DROP) {
+          progsarray.call(ctx, 0);
+          return XDP_DROP;
+        }
+        return XDP_PASS;
+      }
+
+      // swap src/dest IP addresses
+      struct in6_addr swap_ipv6 = ipv6->daddr;
+      ipv6->daddr = ipv6->saddr;
+      ipv6->saddr = swap_ipv6;
+    }
+    // pass all non-IP packets
+    else {
+      return XDP_PASS;
+    }
+  }
+  else {
+    return XDP_PASS;
   }
 
   // swap MAC addresses
@@ -424,6 +303,8 @@ int xdp_dns_filter(struct xdp_md *ctx)
   memcpy(swap_eth, eth->h_dest, ETH_ALEN);
   memcpy(eth->h_dest, eth->h_source, ETH_ALEN);
   memcpy(eth->h_source, swap_eth, ETH_ALEN);
+
+  progsarray.call(ctx, 1);
 
   // bounce the request
   return XDP_TX;

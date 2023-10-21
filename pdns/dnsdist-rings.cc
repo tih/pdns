@@ -48,8 +48,12 @@ void Rings::init()
   /* resize all the rings */
   for (auto& shard : d_shards) {
     shard = std::make_unique<Shard>();
-    shard->queryRing.lock()->set_capacity(d_capacity / d_numberOfShards);
-    shard->respRing.lock()->set_capacity(d_capacity / d_numberOfShards);
+    if (shouldRecordQueries()) {
+      shard->queryRing.lock()->set_capacity(d_capacity / d_numberOfShards);
+    }
+    if (shouldRecordResponses()) {
+      shard->respRing.lock()->set_capacity(d_capacity / d_numberOfShards);
+    }
   }
 
   /* we just recreated the shards so they are now empty */
@@ -64,6 +68,16 @@ void Rings::setNumberOfLockRetries(size_t retries)
   } else {
     d_nbLockTries = retries;
   }
+}
+
+void Rings::setRecordQueries(bool record)
+{
+  d_recordQueries = record;
+}
+
+void Rings::setRecordResponses(bool record)
+{
+  d_recordResponses = record;
 }
 
 size_t Rings::numDistinctRequestors()
@@ -111,9 +125,9 @@ std::unordered_map<int, vector<boost::variant<string,double>>> Rings::getTopBand
 	       });
   std::unordered_map<int, vector<boost::variant<string,double>>> ret;
   uint64_t rest = 0;
-  unsigned int count = 1;
+  int count = 1;
   for(const auto& rc : rcounts) {
-    if(count==numentries+1) {
+    if (count == static_cast<int>(numentries + 1)) {
       rest+=rc.first;
     }
     else {

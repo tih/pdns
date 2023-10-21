@@ -27,13 +27,13 @@
 #include "../../namespaces.hh"
 #include "../../misc.hh"
 
-class SSqlException 
+class SSqlException
 {
-public: 
+public:
   SSqlException(const string &reason) : d_reason(reason)
   {
   }
-  
+
   string txtReason()
   {
     return d_reason;
@@ -41,7 +41,7 @@ public:
 private:
   string d_reason;
 };
- 
+
 class SSqlStatement
 {
 public:
@@ -57,7 +57,10 @@ public:
   virtual SSqlStatement* bind(const string& name, unsigned long long value)=0;
   virtual SSqlStatement* bind(const string& name, const std::string& value)=0;
   SSqlStatement* bind(const string& name, const DNSName& value) {
-    return bind(name, value.makeLowerCase().toStringRootDot());
+    if (!value.empty()) {
+      return bind(name, value.makeLowerCase().toStringRootDot());
+    }
+    return bind(name, string(""));
   }
   virtual SSqlStatement* bindNull(const string& name)=0;
   virtual SSqlStatement* execute()=0;;
@@ -78,7 +81,7 @@ public:
   virtual void startTransaction()=0;
   virtual void rollback()=0;
   virtual void commit()=0;
-  virtual void setLog(bool state){}
+  virtual void setLog(bool /* state */){}
   virtual bool isConnectionUsable()
   {
     return true;

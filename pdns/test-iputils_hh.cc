@@ -21,16 +21,16 @@ BOOST_AUTO_TEST_CASE(test_ComboAddress) {
   ComboAddress remote("130.161.33.15", 53);
   BOOST_CHECK(!(local == remote));
   BOOST_CHECK_EQUAL(remote.sin4.sin_port, htons(53));
-  
+
   ComboAddress withport("213.244.168.210:53");
   BOOST_CHECK_EQUAL(withport.sin4.sin_port, htons(53));
-  
+
   ComboAddress withportO("213.244.168.210:53", 5300);
   BOOST_CHECK_EQUAL(withportO.sin4.sin_port, htons(53));
- 
+
   withport = ComboAddress("[::]:53");
   BOOST_CHECK_EQUAL(withport.sin4.sin_port, htons(53));
-  
+
   withport = ComboAddress("[::]:5300", 53);
   BOOST_CHECK_EQUAL(withport.sin4.sin_port, htons(5300));
 
@@ -112,7 +112,7 @@ BOOST_AUTO_TEST_CASE(test_ComboAddressTruncate) {
 
   ca4.truncate(29);
   BOOST_CHECK_EQUAL(ca4.toString(), "130.161.252.24");
-  
+
   ca4.truncate(23);
   BOOST_CHECK_EQUAL(ca4.toString(), "130.161.252.0");
 
@@ -139,7 +139,7 @@ BOOST_AUTO_TEST_CASE(test_ComboAddressTruncate) {
   BOOST_CHECK_EQUAL(ca6.toString(), "2001::");
   ca6.truncate(8);
   BOOST_CHECK_EQUAL(ca6.toString(), "2000::");
-  
+
 
   orig=ca6=ComboAddress("2001:888:2000:1d::2");
   for(int n=128; n; --n) {
@@ -162,6 +162,27 @@ BOOST_AUTO_TEST_CASE(test_ComboAddressTruncate) {
   }
 }
 
+BOOST_AUTO_TEST_CASE(test_ComboAddressReverse)
+{
+  ComboAddress a{"1.2.3.4"};
+  BOOST_CHECK_EQUAL(a.toStringReversed(), "4.3.2.1");
+
+  ComboAddress b{"192.168.0.1"};
+  BOOST_CHECK_EQUAL(b.toStringReversed(), "1.0.168.192");
+
+  ComboAddress c{"2001:db8::567:89ab"};
+  BOOST_CHECK_EQUAL(c.toStringReversed(), "b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2");
+
+  ComboAddress d{"::1"};
+  BOOST_CHECK_EQUAL(d.toStringReversed(), "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0");
+
+  ComboAddress e{"ab:cd::10"};
+  BOOST_CHECK_EQUAL(e.toStringReversed(), "0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.c.0.0.b.a.0.0");
+
+  ComboAddress f{"4321:0:1:2:3:4:567:89ab"};
+  BOOST_CHECK_EQUAL(f.toStringReversed(), "b.a.9.8.7.6.5.0.4.0.0.0.3.0.0.0.2.0.0.0.1.0.0.0.0.0.0.0.1.2.3.4");
+}
+
 BOOST_AUTO_TEST_CASE(test_Mapping)
 {
   ComboAddress lh("::1");
@@ -171,7 +192,7 @@ BOOST_AUTO_TEST_CASE(test_Mapping)
 BOOST_AUTO_TEST_CASE(test_Netmask) {
   ComboAddress local("127.0.0.1", 53);
   ComboAddress remote("130.161.252.29", 53);
-  
+
   Netmask nm("127.0.0.1/24");
   BOOST_CHECK(nm.getBits() == 24);
   BOOST_CHECK(nm.match(local));
@@ -243,6 +264,24 @@ BOOST_AUTO_TEST_CASE(test_Netmask) {
   BOOST_CHECK(all < empty);
   BOOST_CHECK(empty > full);
   BOOST_CHECK(full < empty);
+
+  /* invalid (too large) mask */
+  {
+    Netmask invalidMaskV4("192.0.2.1/33");
+    BOOST_CHECK_EQUAL(invalidMaskV4.getBits(), 32U);
+    BOOST_CHECK(invalidMaskV4.getNetwork() == ComboAddress("192.0.2.1"));
+    Netmask invalidMaskV6("fe80::92fb:a6ff:fe4a:51da/129");
+    BOOST_CHECK_EQUAL(invalidMaskV6.getBits(), 128U);
+    BOOST_CHECK(invalidMaskV6.getNetwork() == ComboAddress("fe80::92fb:a6ff:fe4a:51da"));
+  }
+  {
+    Netmask invalidMaskV4(ComboAddress("192.0.2.1"), 33);
+    BOOST_CHECK_EQUAL(invalidMaskV4.getBits(), 32U);
+    BOOST_CHECK(invalidMaskV4.getNetwork() == ComboAddress("192.0.2.1"));
+    Netmask invalidMaskV6(ComboAddress("fe80::92fb:a6ff:fe4a:51da"), 129);
+    BOOST_CHECK_EQUAL(invalidMaskV6.getBits(), 128U);
+    BOOST_CHECK(invalidMaskV6.getNetwork() == ComboAddress("fe80::92fb:a6ff:fe4a:51da"));
+  }
 }
 
 static std::string NMGOutputToSorted(const std::string& str)

@@ -49,6 +49,7 @@
 #include "dnssecinfra.hh"
 #include "base64.hh"
 #include "ednssubnet.hh"
+#include "gss_context.hh"
 #include "dns_random.hh"
 #include "shuffle.hh"
 
@@ -62,10 +63,10 @@ DNSPacket::DNSPacket(bool isQuery): d_isQuery(isQuery)
   memset(&d, 0, sizeof(d));
 }
 
-const string& DNSPacket::getString()
+const string& DNSPacket::getString(bool throwsOnTruncation)
 {
   if(!d_wrapped)
-    wrapup();
+    wrapup(throwsOnTruncation);
 
   return d_rawpacket;
 }
@@ -173,7 +174,7 @@ void DNSPacket::addRecord(DNSZoneRecord&& rr)
   // in case we are not compressing for AXFR, no such checking is performed!
 
   if(d_compress) {
-    std::string ser = const_cast<DNSZoneRecord&>(rr).dr.d_content->serialize(rr.dr.d_name);
+    std::string ser = rr.dr.getContent()->serialize(rr.dr.d_name);
     auto hash = boost::hash< std::pair<DNSName, std::string> >()({rr.dr.d_name, ser});
     if(d_dedup.count(hash)) { // might be a dup
       for(auto & i : d_rrs) {
@@ -262,7 +263,7 @@ bool DNSPacket::isEmpty()
 /** Must be called before attempting to access getData(). This function stuffs all resource
  *  records found in rrs into the data buffer. It also frees resource records queued for us.
  */
-void DNSPacket::wrapup()
+void DNSPacket::wrapup(bool throwsOnTruncation)
 {
   if(d_wrapped) {
     return;
@@ -332,7 +333,7 @@ void DNSPacket::wrapup()
 
   if (d_haveednscookie) {
     if (d_eco.isWellFormed()) {
-        optsize += EDNSCookiesOpt::EDNSCookieOptSize;
+        optsize += EDNS_OPTION_CODE_SIZE + EDNS_OPTION_LENGTH_SIZE + EDNSCookiesOpt::EDNSCookieOptSize;
     }
   }
 
@@ -353,8 +354,11 @@ void DNSPacket::wrapup()
         maxScopeMask = max(maxScopeMask, pos->scopeMask);
         
         pw.startRecord(pos->dr.d_name, pos->dr.d_type, pos->dr.d_ttl, pos->dr.d_class, pos->dr.d_place);
-        pos->dr.d_content->toPacket(pw);
+        pos->dr.getContent()->toPacket(pw);
         if(pw.size() + optsize > (d_tcp ? 65535 : getMaxReplyLen())) {
+          if (throwsOnTruncation) {
+            throw PDNSException("attempt to write an oversized chunk");
+          }
           pw.rollback();
           pw.truncate();
           pw.getHeader()->tc=1;
@@ -512,7 +516,7 @@ bool DNSPacket::getTSIGDetails(TSIGRecordContent* trc, DNSName* keyname, uint16_
   for(const auto & answer : mdp.d_answers) {
     if(answer.first.d_type == QType::TSIG && answer.first.d_class == QType::ANY) {
       // cast can fail, f.e. if d_content is an UnknownRecordContent.
-      shared_ptr<TSIGRecordContent> content = std::dynamic_pointer_cast<TSIGRecordContent>(answer.first.d_content);
+      auto content = getRR<TSIGRecordContent>(answer.first);
       if (!content) {
         g_log<<Logger::Error<<"TSIG record has no or invalid content (invalid packet)"<<endl;
         return false;
@@ -545,7 +549,7 @@ bool DNSPacket::getTKEYRecord(TKEYRecordContent *tr, DNSName *keyname) const
 
     if(answer.first.d_type == QType::TKEY) {
       // cast can fail, f.e. if d_content is an UnknownRecordContent.
-      shared_ptr<TKEYRecordContent> content = std::dynamic_pointer_cast<TKEYRecordContent>(answer.first.d_content);
+      auto content = getRR<TKEYRecordContent>(answer.first);
       if (!content) {
         g_log<<Logger::Error<<"TKEY record has no or invalid content (invalid packet)"<<endl;
         return false;
@@ -732,13 +736,15 @@ bool DNSPacket::checkForCorrectTSIG(UeberBackend* B, DNSName* keyname, string* s
   if (tt.algo == DNSName("hmac-md5.sig-alg.reg.int"))
     tt.algo = DNSName("hmac-md5");
 
-  string secret64;
-  if(!B->getTSIGKey(*keyname, &tt.algo, &secret64)) {
-    g_log<<Logger::Error<<"Packet for domain '"<<this->qdomain<<"' denied: can't find TSIG key with name '"<<*keyname<<"' and algorithm '"<<tt.algo<<"'"<<endl;
-    return false;
+  if (tt.algo != DNSName("gss-tsig")) {
+    string secret64;
+    if(!B->getTSIGKey(*keyname, tt.algo, secret64)) {
+      g_log << Logger::Error << "Packet for domain '" << this->qdomain << "' denied: can't find TSIG key with name '" << *keyname << "' and algorithm '" << tt.algo << "'" << endl;
+      return false;
+    }
+    B64Decode(secret64, *secret);
+    tt.secret = *secret;
   }
-  B64Decode(secret64, *secret);
-  tt.secret = *secret;
 
   bool result;
 
@@ -756,3 +762,16 @@ bool DNSPacket::checkForCorrectTSIG(UeberBackend* B, DNSName* keyname, string* s
 const DNSName& DNSPacket::getTSIGKeyname() const {
   return d_tsigkeyname;
 }
+
+#ifdef ENABLE_GSS_TSIG
+void DNSPacket::cleanupGSS(int rcode)
+{
+  // We cannot check g_doGssTSIG here, as this code is also included in other executables
+  // than pdns_server.
+  if (rcode != RCode::NoError && d_tsig_algo == TSIG_GSS && !getTSIGKeyname().empty()) {
+    GssContext ctx(getTSIGKeyname());
+    ctx.destroy();
+  }
+}
+#endif
+

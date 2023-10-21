@@ -38,23 +38,30 @@ public:
   DNSDistPacketCache(size_t maxEntries, uint32_t maxTTL=86400, uint32_t minTTL=0, uint32_t tempFailureTTL=60, uint32_t maxNegativeTTL=3600, uint32_t staleTTL=60, bool dontAge=false, uint32_t shards=1, bool deferrableInsertLock=true, bool parseECS=false);
 
   void insert(uint32_t key, const boost::optional<Netmask>& subnet, uint16_t queryFlags, bool dnssecOK, const DNSName& qname, uint16_t qtype, uint16_t qclass, const PacketBuffer& response, bool receivedOverUDP, uint8_t rcode, boost::optional<uint32_t> tempFailureTTL);
-  bool get(DNSQuestion& dq, uint16_t queryId, uint32_t* keyOut, boost::optional<Netmask>& subnet, bool dnssecOK, bool receivedOverUDP, uint32_t allowExpired = 0, bool skipAging = false);
+  bool get(DNSQuestion& dq, uint16_t queryId, uint32_t* keyOut, boost::optional<Netmask>& subnet, bool dnssecOK, bool receivedOverUDP, uint32_t allowExpired = 0, bool skipAging = false, bool truncatedOK = true, bool recordMiss = true);
   size_t purgeExpired(size_t upTo, const time_t now);
   size_t expunge(size_t upTo=0);
   size_t expungeByName(const DNSName& name, uint16_t qtype=QType::ANY, bool suffixMatch=false);
   bool isFull();
   string toString();
   uint64_t getSize();
-  uint64_t getHits() const { return d_hits; }
-  uint64_t getMisses() const { return d_misses; }
-  uint64_t getDeferredLookups() const { return d_deferredLookups; }
-  uint64_t getDeferredInserts() const { return d_deferredInserts; }
-  uint64_t getLookupCollisions() const { return d_lookupCollisions; }
-  uint64_t getInsertCollisions() const { return d_insertCollisions; }
+  uint64_t getHits() const { return d_hits.load(); }
+  uint64_t getMisses() const { return d_misses.load(); }
+  uint64_t getDeferredLookups() const { return d_deferredLookups.load(); }
+  uint64_t getDeferredInserts() const { return d_deferredInserts.load(); }
+  uint64_t getLookupCollisions() const { return d_lookupCollisions.load(); }
+  uint64_t getInsertCollisions() const { return d_insertCollisions.load(); }
   uint64_t getMaxEntries() const { return d_maxEntries; }
-  uint64_t getTTLTooShorts() const { return d_ttlTooShorts; }
+  uint64_t getTTLTooShorts() const { return d_ttlTooShorts.load(); }
+  uint64_t getCleanupCount() const { return d_cleanupCount.load(); }
   uint64_t getEntriesCount();
   uint64_t dump(int fd);
+
+  /* get the list of domains (qnames) that contains the given address in an A or AAAA record */
+  std::set<DNSName> getDomainsContainingRecords(const ComboAddress& addr);
+  /* get the list of IP addresses contained in A or AAAA for a given domains (qname) */
+  std::set<ComboAddress> getRecordsForDomain(const DNSName& domain);
+
   void setSkippedOptions(const std::unordered_set<uint16_t>& optionsToSkip);
 
   bool isECSParsingEnabled() const { return d_parseECS; }
@@ -103,7 +110,7 @@ private:
     CacheShard()
     {
     }
-    CacheShard(const CacheShard& old)
+    CacheShard(const CacheShard& /* old */)
     {
     }
 
@@ -130,6 +137,7 @@ private:
   pdns::stat_t d_insertCollisions{0};
   pdns::stat_t d_lookupCollisions{0};
   pdns::stat_t d_ttlTooShorts{0};
+  pdns::stat_t d_cleanupCount{0};
 
   size_t d_maxEntries;
   uint32_t d_shardCount;

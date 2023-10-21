@@ -46,17 +46,17 @@ struct dnsdist_ffi_dnsquestion_t
   }
 
   DNSQuestion* dq{nullptr};
-  std::vector<dnsdist_ffi_ednsoption_t> ednsOptionsVect;
-  std::vector<dnsdist_ffi_http_header_t> httpHeadersVect;
-  std::vector<dnsdist_ffi_tag_t> tagsVect;
-  std::unordered_map<std::string, std::string> httpHeaders;
-  std::string trailingData;
   ComboAddress maskedRemote;
+  std::string trailingData;
   boost::optional<std::string> result{boost::none};
   boost::optional<std::string> httpPath{boost::none};
   boost::optional<std::string> httpQueryString{boost::none};
   boost::optional<std::string> httpHost{boost::none};
   boost::optional<std::string> httpScheme{boost::none};
+  std::unique_ptr<std::vector<dnsdist_ffi_ednsoption_t>> ednsOptionsVect;
+  std::unique_ptr<std::vector<dnsdist_ffi_http_header_t>> httpHeadersVect;
+  std::unique_ptr<std::vector<dnsdist_ffi_tag_t>> tagsVect;
+  std::unique_ptr<std::unordered_map<std::string, std::string>> httpHeaders;
 };
 
 // dnsdist_ffi_dnsresponse_t is a lightuserdata
@@ -126,6 +126,29 @@ struct dnsdist_ffi_servers_list_t
 
   std::vector<dnsdist_ffi_server_t> ffiServers;
   const ServerPolicy::NumberedServerVector& servers;
+};
+
+// dnsdist_ffi_network_message_t is a lightuserdata
+template<>
+struct LuaContext::Pusher<dnsdist_ffi_network_message_t*> {
+    static const int minSize = 1;
+    static const int maxSize = 1;
+
+    static PushedObject push(lua_State* state, dnsdist_ffi_network_message_t* ptr) noexcept {
+        lua_pushlightuserdata(state, ptr);
+        return PushedObject{state, 1};
+    }
+};
+
+struct dnsdist_ffi_network_message_t
+{
+  dnsdist_ffi_network_message_t(const std::string& payload_ ,const std::string& from_, uint16_t endpointID_): payload(payload_), from(from_), endpointID(endpointID_)
+  {
+  }
+
+  const std::string& payload;
+  const std::string& from;
+  uint16_t endpointID;
 };
 
 const char* getLuaFFIWrappers();

@@ -32,8 +32,10 @@
 #include "version.hh"
 #include "arguments.hh"
 #include "dnsparser.hh"
+#ifdef RECURSOR
+#include "syncres.hh"
+#else
 #include "responsestats.hh"
-#ifndef RECURSOR
 #include "statbag.hh"
 #endif
 #include <stdio.h>
@@ -44,8 +46,6 @@
 
 using json11::Json;
 
-extern string s_programname;
-extern ResponseStats g_rs;
 #ifndef RECURSOR
 extern StatBag S;
 #endif
@@ -117,7 +117,7 @@ void apiDiscovery(HttpRequest* req, HttpResponse* resp) {
     { "version", 1 },
     { "url", "/api/v1" }
   };
-  Json doc = Json::array { version1 };
+  Json doc = Json::array { std::move(version1) };
 
   resp->setJsonBody(doc);
 }
@@ -130,7 +130,7 @@ void apiDiscoveryV1(HttpRequest* req, HttpResponse* resp) {
     { "server_url", "/api/v1/servers{/server}" },
     { "api_features", Json::array {} }
   };
-  Json doc = Json::array { version1 };
+  Json doc = Json::array { std::move(version1) };
 
   resp->setJsonBody(doc);
 
@@ -208,9 +208,16 @@ void apiServerStatistics(HttpRequest* req, HttpResponse* resp) {
     });
   }
 
+#ifdef RECURSOR
+  auto stats = g_Counters.sum(rec::ResponseStats::responseStats);
+  auto resp_qtype_stats = stats.getQTypeResponseCounts();
+  auto resp_size_stats = stats.getSizeResponseCounts();
+  auto resp_rcode_stats = stats.getRCodeResponseCounts();
+#else
   auto resp_qtype_stats = g_rs.getQTypeResponseCounts();
   auto resp_size_stats = g_rs.getSizeResponseCounts();
   auto resp_rcode_stats = g_rs.getRCodeResponseCounts();
+#endif
   {
     Json::array values;
     for(const auto& item : resp_qtype_stats) {
