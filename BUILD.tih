@@ -1,3 +1,40 @@
+Here:
+
+# meson setup build -Dmodule-gpgsql=static
+# meson compile -C build
+# meson install -C build
+
+In pdns/recursordist:
+
+# meson setup build
+# meson compile -C build
+# meson install -C build
+
+In pdns/dnsdistdist:
+
+# meson setup build -Dyaml=auto
+# meson compile -C build
+# meson install -C build
+
+However, to get all this to work, I had to create a simplistic pkgconfig file for Boost:
+
+# cat > /usr/pkg/lib/pkgconfig/boost.pc <<EOF
+prefix=/usr/pkg
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include/boost
+
+Name: Boost
+Description: Boost
+Version: 1.92.0
+Libs: -L${exec_prefix}/lib  -lboost_stacktrace_dump -lboost_contract -lboost_random -lboost_timer -lboost_type_erasure -lboost_stacktrace_basic -lboost_math_tr1 -lboost_test_exec_monitor -lboost_graph -lboost_container -lboost_context -lboost_process -lboost_thread -lboost_unit_test_framework -lboost_regex -lboost_math_c99l -lboost_log -lboost_prg_exec_monitor -lboost_atomic -lboost_wserialization -lboost_nowide -lboost_chrono -lboost_math_c99f -lboost_stacktrace_noop -lboost_math_c99 -lboost_filesystem -lboost_log_setup -lboost_program_options -lboost_serialization -lboost_exception -lboost_wave -lboost_json -lboost_date_time -lboost_url -lboost_coroutine -lboost_fiber -lboost_stacktrace_from_exception -lboost_math_tr1l -lboost_charconv -lboost_locale -lboost_math_tr1f -lboost_iostreams -lboost_stacktrace_addr2line
+Cflags: -I${includedir}
+EOF
+
+
+
+PREVIOUSLY:
+
 Everywhere, before configuring: make distclean; autoreconf -vi
 
 Here: ./configure --with-modules='gpgsql' --with-dynmodules=''
