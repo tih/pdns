@@ -28,9 +28,24 @@
 
 namespace dnsdist
 {
-NetworkListener::NetworkListener() :
+NetworkListener::ListenerData::ListenerData() :
   d_mplexer(std::unique_ptr<FDMultiplexer>(FDMultiplexer::getMultiplexerSilent(10)))
 {
+}
+
+NetworkListener::NetworkListener() :
+  d_data(std::make_shared<ListenerData>())
+{
+}
+
+NetworkListener::~NetworkListener()
+{
+  d_data->d_exiting = true;
+
+  /* wake up the listening thread */
+  for (const auto& socket : d_data->d_sockets) {
+    shutdown(socket.second.getHandle(), SHUT_RD);
+  }
 }
 
 void NetworkListener::readCB(int desc, FDMultiplexer::funcparam_t& param)
@@ -40,45 +55,49 @@ void NetworkListener::readCB(int desc, FDMultiplexer::funcparam_t& param)
 
 #ifdef MSG_TRUNC
   /* first we peek to avoid allocating a very large buffer. "MSG_TRUNC [...] return the real length of the datagram, even when it was longer than the passed buffer" */
-  auto peeked = recvfrom(desc, nullptr, 0, MSG_PEEK | MSG_TRUNC, nullptr, 0);
+  auto peeked = recvfrom(desc, nullptr, 0, MSG_PEEK | MSG_TRUNC, nullptr, nullptr);
   if (peeked > 0) {
     packet.resize(static_cast<size_t>(peeked));
   }
 #endif
-  if (packet.size() == 0) {
+  if (packet.empty()) {
     packet.resize(65535);
   }
 
-  struct sockaddr_un from;
+  sockaddr_un from{};
   memset(&from, 0, sizeof(from));
 
   socklen_t fromLen = sizeof(from);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   auto got = recvfrom(desc, &packet.at(0), packet.size(), 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
   if (got > 0) {
     packet.resize(static_cast<size_t>(got));
     std::string fromAddr;
     if (fromLen <= sizeof(from)) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
       fromAddr = std::string(from.sun_path, strlen(from.sun_path));
     }
     try {
       cbData->d_cb(cbData->d_endpoint, std::move(packet), fromAddr);
     }
     catch (const std::exception& e) {
-      vinfolog("Exception in the read callback of a NetworkListener: %s", e.what());
+      VERBOSESLOG(infolog("Exception in the read callback of a NetworkListener: %s", e.what()),
+                  dnsdist::logging::getTopLogger("network-listener")->error(Logr::Info, e.what(), "Exception in the read callback of a NetworkListener"));
     }
     catch (...) {
-      vinfolog("Exception in the read callback of a NetworkListener");
+      VERBOSESLOG(infolog("Exception in the read callback of a NetworkListener"),
+                  dnsdist::logging::getTopLogger("network-listener")->info(Logr::Info, "Unknown exception in the read callback of a NetworkListener"));
     }
   }
 }
 
-bool NetworkListener::addUnixListeningEndpoint(const std::string& path, NetworkListener::EndpointID id, NetworkListener::NetworkDatagramCB cb)
+bool NetworkListener::addUnixListeningEndpoint(const std::string& path, NetworkListener::EndpointID endpointID, NetworkListener::NetworkDatagramCB callback)
 {
-  if (d_running == true) {
+  if (d_data->d_running) {
     throw std::runtime_error("NetworkListener should not be altered at runtime");
   }
 
-  struct sockaddr_un sun;
+  sockaddr_un sun{};
   if (makeUNsockaddr(path, &sun) != 0) {
     throw std::runtime_error("Invalid Unix socket path '" + path + "'");
   }
@@ -89,7 +108,8 @@ bool NetworkListener::addUnixListeningEndpoint(const std::string& path, NetworkL
     if (err != 0) {
       err = errno;
       if (err != ENOENT) {
-        vinfolog("Error removing Unix socket to path '%s': %s", path, stringerror(err));
+        VERBOSESLOG(infolog("Error removing Unix socket to path '%s': %s", path, stringerror(err)),
+                    dnsdist::logging::getTopLogger("network-listener")->error(Logr::Info, err, "Error removing unix socket when adding a listening endpoint to a NetworkListener", "path", Logging::Loggable(path)));
       }
     }
   }
@@ -101,6 +121,7 @@ bool NetworkListener::addUnixListeningEndpoint(const std::string& path, NetworkL
     sunLength = sizeof(sa_family_t) + path.size();
   }
 
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (bind(sock.getHandle(), reinterpret_cast<const struct sockaddr*>(&sun), sunLength) != 0) {
     std::string sanitizedPath(path);
     if (abstractPath) {
@@ -112,38 +133,49 @@ bool NetworkListener::addUnixListeningEndpoint(const std::string& path, NetworkL
   sock.setNonBlocking();
 
   auto cbData = std::make_shared<CBData>();
-  cbData->d_endpoint = id;
-  cbData->d_cb = std::move(cb);
-  d_mplexer->addReadFD(sock.getHandle(), readCB, cbData);
+  cbData->d_endpoint = endpointID;
+  cbData->d_cb = std::move(callback);
+  d_data->d_mplexer->addReadFD(sock.getHandle(), readCB, cbData);
 
-  d_sockets.insert({path, std::move(sock)});
+  d_data->d_sockets.insert({path, std::move(sock)});
   return true;
 }
 
-void NetworkListener::runOnce(struct timeval& now, uint32_t timeout)
+void NetworkListener::runOnce(ListenerData& data, timeval& now, uint32_t timeout)
 {
-  d_running = true;
-  if (d_sockets.empty()) {
+  if (data.d_exiting) {
+    return;
+  }
+
+  dnsdist::configuration::refreshLocalRuntimeConfiguration();
+  data.d_running = true;
+  if (data.d_sockets.empty()) {
     throw runtime_error("NetworkListener started with no sockets");
   }
 
-  d_mplexer->run(&now, timeout);
+  data.d_mplexer->run(&now, static_cast<int>(timeout));
 }
 
-void NetworkListener::mainThread()
+void NetworkListener::runOnce(timeval& now, uint32_t timeout)
+{
+  runOnce(*d_data, now, timeout);
+}
+
+// NOLINTNEXTLINE(performance-unnecessary-value-param): take our own copy of the shared_ptr so it's still alive if the NetworkListener object gets destroyed while we are still running
+void NetworkListener::mainThread(std::shared_ptr<ListenerData> data)
 {
   setThreadName("dnsdist/lua-net");
-  struct timeval now;
+  timeval now{};
 
-  while (true) {
-    runOnce(now, -1);
+  while (!data->d_exiting) {
+    runOnce(*data, now, -1);
   }
 }
 
 void NetworkListener::start()
 {
-  std::thread main = std::thread([this] {
-    mainThread();
+  std::thread main = std::thread([data = d_data]() mutable {
+    mainThread(std::move(data));
   });
   main.detach();
 }
@@ -151,7 +183,7 @@ void NetworkListener::start()
 NetworkEndpoint::NetworkEndpoint(const std::string& path) :
   d_socket(AF_UNIX, SOCK_DGRAM, 0)
 {
-  struct sockaddr_un sun;
+  sockaddr_un sun{};
   if (makeUNsockaddr(path, &sun) != 0) {
     throw std::runtime_error("Invalid Unix socket path '" + path + "'");
   }
@@ -163,6 +195,7 @@ NetworkEndpoint::NetworkEndpoint(const std::string& path) :
     /* abstract paths can contain null bytes so we need to set the actual size */
     sunLength = sizeof(sa_family_t) + path.size();
   }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (connect(d_socket.getHandle(), reinterpret_cast<const struct sockaddr*>(&sun), sunLength) != 0) {
     std::string sanitizedPath(path);
     if (abstractPath) {

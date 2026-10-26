@@ -22,7 +22,7 @@
 #pragma once
 
 #include "config.h"
-#ifdef HAVE_NGHTTP2
+#if defined(HAVE_DNS_OVER_HTTPS) && defined(HAVE_NGHTTP2)
 #include <nghttp2/nghttp2.h>
 
 #include "dnsdist-tcp-upstream.hh"
@@ -55,6 +55,7 @@ public:
     size_t d_queryPos{0};
     uint32_t d_statusCode{0};
     Method d_method{Method::Unknown};
+    bool d_sendingResponse{false};
   };
 
   IncomingHTTP2Connection(ConnectionInfo&& connectionInfo, TCPClientThreadData& threadData, const struct timeval& now);
@@ -76,6 +77,12 @@ private:
   static void handleWritableIOCallback(int descriptor, FDMultiplexer::funcparam_t& param);
 
   static constexpr size_t s_initialReceiveBufferSize{256U};
+  enum class ErrorContext : uint8_t
+  {
+    ErrorWhileReadingFromClient = 0,
+    ErrorWhileProcessingContent,
+    ErrorWhileWritingToClient
+  };
 
   IOState sendResponse(const struct timeval& now, TCPResponse&& response) override;
   bool forwardViaUDPFirst() const override
@@ -86,9 +93,11 @@ private:
   std::unique_ptr<DOHUnitInterface> getDOHUnit(uint32_t streamID) override;
 
   void stopIO();
+  std::unordered_map<StreamID, PendingQuery>::iterator getStreamContext(StreamID streamID);
   uint32_t getConcurrentStreamsCount() const;
+  void updateIO(IOState newState, const timeval& now) override;
   void updateIO(IOState newState, const FDMultiplexer::callbackfunc_t& callback);
-  void handleIOError();
+  void handleIOError(ErrorContext context);
   bool sendResponse(StreamID streamID, PendingQuery& context, uint16_t responseCode, const HeadersMap& customResponseHeaders, const std::string& contentType = "", bool addContentType = true);
   void handleIncomingQuery(PendingQuery&& query, StreamID streamID);
   bool checkALPN();
@@ -97,10 +106,11 @@ private:
   IOState handleHandshake(const struct timeval& now) override;
   bool hasPendingWrite() const;
   void writeToSocket(bool socketReady);
-  boost::optional<struct timeval> getIdleClientReadTTD(struct timeval now) const;
+  std::optional<struct timeval> getIdleClientReadTTD(struct timeval now) const;
 
   std::unique_ptr<nghttp2_session, decltype(&nghttp2_session_del)> d_session{nullptr, nghttp2_session_del};
   std::unordered_map<StreamID, PendingQuery> d_currentStreams;
+  std::unordered_set<StreamID> d_killedStreams;
   PacketBuffer d_out;
   PacketBuffer d_in;
   size_t d_outPos{0};
@@ -116,6 +126,10 @@ private:
   /* Whether we have data that we want to write to the socket,
      but the socket is full. */
   bool d_pendingWrite{false};
+  /* Whether we are currently inside the readHTTPData function,
+     which is not reentrant and could be called from itself via
+     the nghttp2 callbacks */
+  bool d_inReadFunction{false};
 };
 
 class NGHTTP2Headers
@@ -156,4 +170,4 @@ public:
   static void addCustomDynamicHeader(std::vector<nghttp2_nv>& headers, const std::string& name, const std::string_view& value);
 };
 
-#endif /* HAVE_NGHTTP2 */
+#endif /* HAVE_DNS_OVER_HTTPS && HAVE_NGHTTP2 */

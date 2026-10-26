@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 
-import unittest
 import dns
 from dnsdisttests import DNSDistTest
 
-class TestAdvancedLuaFFI(DNSDistTest):
 
+class TestAdvancedLuaFFI(DNSDistTest):
     _config_template = """
     local ffi = require("ffi")
 
@@ -70,6 +69,18 @@ class TestAdvancedLuaFFI(DNSDistTest):
         return false
       end
 
+      local ednsVersion = ffi.C.dnsdist_ffi_dnsquestion_get_edns_version(dq)
+      if ednsVersion ~= 0 then
+        print('invalid EDNS version')
+        return false
+      end
+
+      local ednsExtendedRCode = ffi.C.dnsdist_ffi_dnsquestion_get_edns_extended_rcode(dq)
+      if ednsExtendedRCode ~= 0 then
+        print('invalid EDNS Extended RCode')
+        return false
+      end
+
       local len = ffi.C.dnsdist_ffi_dnsquestion_get_len(dq)
       if len ~= 52 then
         print('invalid length')
@@ -80,6 +91,13 @@ class TestAdvancedLuaFFI(DNSDistTest):
       local tag = ffi.C.dnsdist_ffi_dnsquestion_get_tag(dq, 'a-tag')
       if ffi.string(tag) ~= 'a-value' then
         print('invalid tag value')
+        print(ffi.string(tag))
+        return false
+      end
+
+      tag = ffi.C.dnsdist_ffi_dnsquestion_get_tag(dq, 'b-tag')
+      if tag ~= nil then
+        print('invalid B tag value')
         print(ffi.string(tag))
         return false
       end
@@ -112,6 +130,12 @@ class TestAdvancedLuaFFI(DNSDistTest):
 
     function luaffiactionsettag(dq)
       ffi.C.dnsdist_ffi_dnsquestion_set_tag(dq, 'a-tag', 'a-value')
+      ffi.C.dnsdist_ffi_dnsquestion_set_tag(dq, 'b-tag', 'b-value')
+      return DNSAction.None
+    end
+
+    function luaffiactionunsettag(dq)
+      ffi.C.dnsdist_ffi_dnsquestion_unset_tag(dq, 'b-tag')
       return DNSAction.None
     end
 
@@ -123,25 +147,22 @@ class TestAdvancedLuaFFI(DNSDistTest):
 
     addAction(AllRule(), LuaFFIAction(luaffiactionsettag))
     addAction(AllRule(), LuaFFIAction(luaffiactionsettagraw))
+    addAction(AllRule(), LuaFFIAction(luaffiactionunsettag))
     addAction(LuaFFIRule(luaffirulefunction), LuaFFIAction(luaffiactionfunction))
-    -- newServer{address="127.0.0.1:%s"}
+    -- newServer{address="127.0.0.1:%d"}
     """
 
     def testAdvancedLuaFFI(self):
         """
         Lua FFI: Test the Lua FFI interface
         """
-        name = 'luaffi.advanced.tests.powerdns.com.'
-        query = dns.message.make_query(name, 'A', 'IN')
+        name = "luaffi.advanced.tests.powerdns.com."
+        query = dns.message.make_query(name, "A", "IN")
         # dnsdist set RA = RD for spoofed responses
         query.flags &= ~dns.flags.RD
 
         response = dns.message.make_response(query)
-        rrset = dns.rrset.from_text(name,
-                                    60,
-                                    dns.rdataclass.IN,
-                                    dns.rdatatype.A,
-                                    '192.0.2.1')
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
         response.answer.append(rrset)
 
         for method in ("sendUDPQuery", "sendTCPQuery"):
@@ -153,8 +174,8 @@ class TestAdvancedLuaFFI(DNSDistTest):
         """
         Lua FFI: Test the Lua FFI interface via an update
         """
-        name = 'luaffi.advanced.tests.powerdns.com.'
-        query = dns.message.make_query(name, 'SOA', 'IN')
+        name = "luaffi.advanced.tests.powerdns.com."
+        query = dns.message.make_query(name, "SOA", "IN")
         query.set_opcode(dns.opcode.UPDATE)
         # dnsdist set RA = RD for spoofed responses
         query.flags &= ~dns.flags.RD
@@ -167,8 +188,8 @@ class TestAdvancedLuaFFI(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.assertEqual(receivedResponse, response)
 
-class TestAdvancedLuaFFIPerThread(DNSDistTest):
 
+class TestAdvancedLuaFFIPerThread(DNSDistTest):
     _config_template = """
 
     local rulefunction = [[
@@ -226,7 +247,19 @@ class TestAdvancedLuaFFIPerThread(DNSDistTest):
           return false
         end
 
-        local len = ffi.C.dnsdist_ffi_dnsquestion_get_len(dq)
+        local ednsVersion = ffi.C.dnsdist_ffi_dnsquestion_get_edns_version(dq)
+        if ednsVersion ~= 0 then
+          print('invalid EDNS version')
+          return false
+        end
+
+        local ednsExtendedRCode = ffi.C.dnsdist_ffi_dnsquestion_get_edns_extended_rcode(dq)
+        if ednsExtendedRCode ~= 0 then
+          print('invalid EDNS Extended RCode')
+          return false
+        end
+
+      local len = ffi.C.dnsdist_ffi_dnsquestion_get_len(dq)
         if len ~= 61 then
           print('invalid length')
           print(len)
@@ -273,24 +306,20 @@ class TestAdvancedLuaFFIPerThread(DNSDistTest):
 
     addAction(AllRule(), LuaFFIPerThreadAction(settagfunction))
     addAction(LuaFFIPerThreadRule(rulefunction), LuaFFIPerThreadAction(actionfunction))
-    -- newServer{address="127.0.0.1:%s"}
+    -- newServer{address="127.0.0.1:%d"}
     """
 
     def testAdvancedLuaPerthreadFFI(self):
         """
         Lua FFI: Test the Lua FFI per-thread interface
         """
-        name = 'luaffiperthread.advanced.tests.powerdns.com.'
-        query = dns.message.make_query(name, 'A', 'IN')
+        name = "luaffiperthread.advanced.tests.powerdns.com."
+        query = dns.message.make_query(name, "A", "IN")
         # dnsdist set RA = RD for spoofed responses
         query.flags &= ~dns.flags.RD
 
         response = dns.message.make_response(query)
-        rrset = dns.rrset.from_text(name,
-                                    60,
-                                    dns.rdataclass.IN,
-                                    dns.rdatatype.A,
-                                    '192.0.2.1')
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
         response.answer.append(rrset)
 
         for method in ("sendUDPQuery", "sendTCPQuery"):
@@ -302,8 +331,8 @@ class TestAdvancedLuaFFIPerThread(DNSDistTest):
         """
         Lua FFI: Test the Lua FFI per-thread interface via an update
         """
-        name = 'luaffiperthread.advanced.tests.powerdns.com.'
-        query = dns.message.make_query(name, 'SOA', 'IN')
+        name = "luaffiperthread.advanced.tests.powerdns.com."
+        query = dns.message.make_query(name, "SOA", "IN")
         query.set_opcode(dns.opcode.UPDATE)
         # dnsdist set RA = RD for spoofed responses
         query.flags &= ~dns.flags.RD
@@ -315,3 +344,139 @@ class TestAdvancedLuaFFIPerThread(DNSDistTest):
             sender = getattr(self, method)
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.assertEqual(receivedResponse, response)
+
+
+class TestLuaFFIHeader(DNSDistTest):
+    _config_template = """
+    local bit = require("bit")
+    local ffi = require("ffi")
+
+    -- check that the AA bit is clear, set the rcode to REFUSED otherwise
+    function checkAAResponseAction(dr)
+      local header_ptr = ffi.new("char [12]")
+      ffi.C.dnsdist_ffi_dnsquestion_get_header_copy(dr, header_ptr, 12)
+      -- get AA
+      local aa = bit.band(header_ptr[2], bit.lshift(1, 2)) ~= 0
+      if aa then
+          ffi.C.dnsdist_ffi_dnsquestion_set_rcode(dr, DNSRCode.REFUSED)
+          -- prevent subsequent rules from being applied
+          return DNSResponseAction.HeaderModify
+      end
+      return DNSResponseAction.None
+    end
+
+    -- set the AA bit to 1
+    function setAAResponseAction(dr)
+      local header_ptr = ffi.new("char [12]")
+      ffi.C.dnsdist_ffi_dnsquestion_get_header_copy(dr, header_ptr, 12)
+      -- set AA=1
+      header_ptr[2] = bit.bor(header_ptr[2], bit.lshift(1, 2))
+      ffi.C.dnsdist_ffi_dnsquestion_set_header(dr, header_ptr)
+      return DNSResponseAction.None
+    end
+
+    addResponseAction(AllRule(), LuaFFIResponseAction(checkAAResponseAction))
+    addResponseAction(AllRule(), LuaFFIResponseAction(setAAResponseAction))
+    newServer{address="127.0.0.1:%d"}
+    """
+
+    def testLuaFFISetAAHeader(self):
+        """
+        Lua FFI: Set AA=1
+        """
+        name = "dnsheader-set-aa.luaffi.tests.powerdns.com."
+        query = dns.message.make_query(name, "A", "IN")
+
+        response = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
+        response.answer.append(rrset)
+        expectedResponse = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
+        expectedResponse.answer.append(rrset)
+        expectedResponse.flags |= dns.flags.AA
+
+        for method in ("sendUDPQuery", "sendTCPQuery"):
+            sender = getattr(self, method)
+            (receivedQuery, receivedResponse) = sender(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(expectedResponse, receivedResponse)
+
+    def testLuaFFIGetAAHeader(self):
+        """
+        Lua FFI: check AA=0, return REFUSED otherwise
+        """
+        name = "dnsheader-get-aa.luaffi.tests.powerdns.com."
+        query = dns.message.make_query(name, "A", "IN")
+
+        response = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
+        response.answer.append(rrset)
+        response.flags |= dns.flags.AA
+        expectedResponse = dns.message.make_response(query)
+        expectedResponse.flags |= dns.flags.AA
+        expectedResponse.set_rcode(dns.rcode.REFUSED)
+        expectedResponse.answer.append(rrset)
+
+        for method in ("sendUDPQuery", "sendTCPQuery"):
+            sender = getattr(self, method)
+            (receivedQuery, receivedResponse) = sender(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(expectedResponse, receivedResponse)
+
+
+class TestLuaFFISetAlternateName(DNSDistTest):
+    _config_template = """
+    local ffi = require("ffi")
+
+    local alternateNameTag = "alternate-name-tag"
+    local alternateNameTagValue = "set"
+    local alternateNameFormerNameTag = "alternate-name-former-name-tag"
+
+    local bufferSize = 256
+    local buffer = ffi.new("char[?]", bufferSize)
+
+    function setAlternateName(dq)
+      local alternateName = "\\7dnsdist\\3org\\0"
+      ffi.C.dnsdist_ffi_dnsquestion_set_alternate_name(dq, alternateName, #alternateName, alternateNameTag, #alternateNameTag, alternateNameTagValue, #alternateNameTagValue, alternateNameFormerNameTag, #alternateNameFormerNameTag)
+      return DNSAction.None
+    end
+
+    function restoreInitialName(dr)
+       local alternateTagValueSize = ffi.C.dnsdist_ffi_dnsquestion_get_tag_raw(dr, alternateNameFormerNameTag, buffer, bufferSize)
+       if alternateTagValueSize ~= 0 then
+          ffi.C.dnsdist_ffi_dnsresponse_rebase(dr, buffer, alternateTagValueSize)
+       end
+       return DNSResponseAction.None
+    end
+
+    addAction(AllRule(), LuaFFIAction(setAlternateName))
+    addResponseAction(TagRule(alternateNameTag, alternateNameTagValue), LuaFFIResponseAction(restoreInitialName))
+
+    newServer{address="127.0.0.1:%d"}
+    """
+
+    def testLuaFFISetAlternateName(self):
+        """
+        Lua FFI: Set alternate name
+        """
+        name = "alternate-name.luaffi.tests.powerdns.com."
+        alternateName = "dnsdist.org."
+        query = dns.message.make_query(name, "A", "IN")
+        alternateQuery = dns.message.make_query(alternateName, "A", "IN")
+
+        response = dns.message.make_response(alternateQuery)
+        rrset = dns.rrset.from_text(alternateName, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
+        response.answer.append(rrset)
+
+        expectedResponse = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name, 60, dns.rdataclass.IN, dns.rdatatype.A, "192.0.2.1")
+        expectedResponse.answer.append(rrset)
+
+        for method in ("sendUDPQuery", "sendTCPQuery"):
+            sender = getattr(self, method)
+            (receivedQuery, receivedResponse) = sender(query, response)
+            receivedQuery.id = alternateQuery.id
+            self.assertEqual(alternateQuery, receivedQuery)
+            self.assertEqual(expectedResponse, receivedResponse)

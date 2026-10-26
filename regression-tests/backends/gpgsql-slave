@@ -6,8 +6,9 @@
 	createdb --user="$GPGSQL2USER" "$GPGSQL2DB" || echo ignoring createdb failure
 	psql --user="$GPGSQL2USER" "$GPGSQL2DB" < ../modules/gpgsqlbackend/schema.pgsql.sql
 
+	backend=gpgsql2
 	cat > pdns-gpgsql2.conf << __EOF__
-module-dir=./modules
+module-dir=$PDNS_MODULE_PATH
 launch=gpgsql
 gpgsql-dbname=$GPGSQL2DB
 gpgsql-user=$GPGSQL2USER
@@ -27,7 +28,7 @@ __EOF__
 		"$GPGSQL2DB"
 		if [ "$zone" = "tsig.com" ]; then
 			$PDNSUTIL --config-dir=. --config-name=gpgsql2 import-tsig-key test $ALGORITHM $KEY
-			$PDNSUTIL --config-dir=. --config-name=gpgsql2 activate-tsig-key tsig.com test slave
+			$PDNSUTIL --config-dir=. --config-name=gpgsql2 activate-tsig-key tsig.com test secondary
 		fi
 		if [ "$zone" = "stest.com" ]; then
 			if [[ $skipreasons != *nolua* ]]; then
@@ -40,8 +41,8 @@ __EOF__
 
 	$RUNWRAPPER $PDNS2 --daemon=no --local-port=$port --config-dir=. \
 		--config-name=gpgsql2 --socket-dir=./ --no-shuffle \
-		--slave --retrieval-threads=4 \
-		--slave-cycle-interval=300 --dname-processing &
+		--secondary --retrieval-threads=4 \
+		--xfr-cycle-interval=300 --dname-processing &
 
 	echo 'waiting for zones to be slaved'
 	loopcount=0
@@ -59,6 +60,6 @@ __EOF__
 	done
 	if [ $todo -ne 0 ]
 	then
-		echo "AXFR FAILED" >> failed_tests
+		echo "AXFR FAILED" | tee -a failed_tests
 		exit
 	fi

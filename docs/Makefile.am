@@ -36,10 +36,8 @@ MANPAGES_DIST += $(MANPAGES_TARGET_TOOLS) \
 	dnsbulktest.1 \
 	dnstcpbench.1
 
-if HAVE_BOOST_GE_148
 MANPAGES_INSTALL += dnsbulktest.1 \
 	dnstcpbench.1
-endif
 
 if TOOLS
 MANPAGES_INSTALL += $(MANPAGES_TARGET_TOOLS)
@@ -51,7 +49,9 @@ endif
 
 man_MANS = $(MANPAGES_INSTALL)
 
-EXTRA_DIST = $(MANPAGES_DIST)
+EXTRA_DIST = \
+	$(MANPAGES_DIST) \
+	http-api/openapi/authoritative-api-openapi.yaml
 
 if HAVE_VENV
 if !HAVE_MANPAGES
@@ -62,14 +62,14 @@ endif # if !HAVE_MANPAGES
 mans/.complete: manpages := $(addprefix manpages/,$(addsuffix .rst,$(MANPAGES_DIST)))
 mans/.complete: .venv
 	rm -rf "$(@D).tmp"
-	.venv/bin/python -msphinx -b man . "$(@D).tmp" $(manpages) && rm -rf "$(@D)" && mv "$(@D).tmp" "$(@D)"
+	(cd "${srcdir}" && $(CURDIR)/.venv/bin/python -msphinx -b man . "$(CURDIR)/$(@D).tmp" $(manpages)) && rm -rf "$(@D)" && mv "$(@D).tmp" "$(@D)"
 	touch "$@"
 	rm -rf "$(@D).tmp"
 
 .venv: requirements.txt
 	$(PYTHON) -m venv .venv
-	.venv/bin/pip install -U pip setuptools setuptools-git wheel
-	.venv/bin/pip install -r requirements.txt
+	.venv/bin/pip install -U pip "setuptools<82"
+	.venv/bin/pip install -r ${srcdir}/requirements.txt
 
 .NOTPARALLEL: \
 	all-docs \
@@ -88,10 +88,13 @@ if !HAVE_MANPAGES
 endif
 	rm -rf mans
 
-html-docs: common/** manpages/** .venv *.rst
+http-api/openapi/authoritative-api-schema.yaml: .venv generate-jsonschema.py http-api/openapi/authoritative-api-openapi.yaml
+	.venv/bin/python ./generate-jsonschema.py http-api/openapi/authoritative-api-openapi.yaml $@
+
+html-docs: common/** manpages/** .venv *.rst http-api/openapi/authoritative-api-schema.yaml
 	.venv/bin/python -msphinx -b html . html-docs
 
-latex/PowerDNS-Authoritative.pdf: common/** manpages/** .venv *.rst
+latex/PowerDNS-Authoritative.pdf: common/** manpages/** .venv *.rst http-api/openapi/authoritative-api-schema.yaml
 	.venv/bin/python -msphinx -M latexpdf . .
 
 PowerDNS-Authoritative.pdf: latex/PowerDNS-Authoritative.pdf

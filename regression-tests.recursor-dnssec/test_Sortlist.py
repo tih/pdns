@@ -2,8 +2,9 @@ import dns
 from recursortests import RecursorTest
 
 
-class testSortlist(RecursorTest):
-    _confdir = 'Sortlist'
+class SortlistTest(RecursorTest):
+    _confdir = "Sortlist"
+    _auth_zones = RecursorTest._default_auth_zones
 
     _config_template = """dnssec=off"""
     _lua_config_file = """addSortList("0.0.0.0/0", 
@@ -14,11 +15,13 @@ class testSortlist(RecursorTest):
 
     def testSortlist(self):
         msg = dns.message.make_query("sortcname.example.", dns.rdatatype.ANY)
-        msg.flags = dns.flags.from_text('RD')
+        msg.flags = dns.flags.from_text("RD")
 
         res = self.sendUDPQuery(msg, fwparams=dict(one_rr_per_rrset=True))
+        self.assertMessageHasFlags(res, ["QR", "RA", "RD", "TC"], [])
 
-        self.assertMessageHasFlags(res, ['QR', 'RA', 'RD'], [])
+        res = self.sendTCPQuery(msg, fwparams=dict(one_rr_per_rrset=True))
+        self.assertMessageHasFlags(res, ["QR", "RA", "RD"], [])
         self.assertRcodeEqual(res, dns.rcode.NOERROR)
 
         indexCNAME = -1
@@ -38,4 +41,4 @@ class testSortlist(RecursorTest):
         self.assertEqual(indexCNAME, 0)
         self.assertGreater(indexMX, 0)
 
-        self.assertEqual(recordsA, ['17.238.240.5', '17.38.42.80', '192.168.0.1'])
+        self.assertEqual(recordsA, ["17.238.240.5", "17.38.42.80", "192.168.0.1"])

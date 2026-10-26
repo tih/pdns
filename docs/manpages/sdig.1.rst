@@ -13,7 +13,7 @@ Description
 If the address starts with an ``h``, it is assumed to be a DoH endpoint, and *PORT* is ignored.
 If qname and qtype are both `-` and tcp is used, multiple lines are read from stdin, where each line contains a qname and a type.
 If the address is ``stdin``, a DNS packet is read from stdin instead of from the network, and *PORT* is ignored.
-All input is literal and case sensitive.
+All input is literal and case-sensitive.
 Queries need option `recurse` to expect a resource record reply if the query target is not known to be the authoritative server for that record.
 
 Options
@@ -55,18 +55,21 @@ caStore *file*
     when using DoT, read the trusted CA certificates from *file*. Default is to use the system provided CA store.
 tlsProvider *name*
     when using DoT, use TLS provider *name*. Currently supported (if compiled in): `openssl` and `gnutls`. Default is `openssl` if available.
-xpf *XPFCODE* *XPFVERSION* *XPFPROTO* *XPFSRC* *XPFDST*
-	Send an *XPF* additional with these parameters.
 opcode *OPNUM*
     Use opcode *OPNUM* instead of 0 (Query). For example, ``sdig 192.0.2.1 53 example.com SOA opcode 4`` sends a ``NOTIFY``.
-
+cookie *COOKIE*
+    if *COOKIE* is ``-`` send a random client cookie. Otherwise, send the given cookie, which should be a hex string received from a server earlier.
+traceid *TraceID*
+    include a TraceID and an empty SpanID value into the EDNS data. If TraceID is ``-``, a random TraceID is generated; otherwise, it is a hex string.
+    
 Examples
 --------
 
 Simple queries to local resolvers 
-    sdig 127.0.0.1 53 example.com AAAA recurse
-    sdig ::1 53 example.com A recurse
+    ``sdig 127.0.0.1 53 example.com AAAA recurse``
+
+    ``sdig ::1 53 example.com A recurse``
 
 Query to a DNS-over-HTTPS server requesting dnssec and recursion
-    sdig https://dns.example.net/dns-query 443 example.com A dnssec recurse
+    ``sdig https://dns.example.net/dns-query 443 example.com A dnssec recurse``
 

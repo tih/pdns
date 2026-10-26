@@ -19,7 +19,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #include <boost/test/unit_test.hpp>
@@ -68,8 +71,9 @@ public:
   {
   }
 
-  void release()
+  static void release(bool removeFromCache)
   {
+    (void)removeFromCache;
   }
 
   std::shared_ptr<DownstreamState> getDS() const
@@ -78,10 +82,8 @@ public:
   }
 
   std::shared_ptr<DownstreamState> d_ds;
-  struct timeval d_lastDataReceivedTime
-  {
-    0, 0
-  };
+  struct timeval d_lastDataReceivedTime{
+    0, 0};
   bool d_reusable{true};
   bool d_usable{true};
   bool d_idle{false};

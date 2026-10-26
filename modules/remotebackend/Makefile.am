@@ -1,5 +1,6 @@
 AM_CPPFLAGS += \
 	-I$(top_srcdir)/ext/json11 \
+	-I$(top_srcdir)/ext/protozero/include \
 	$(YAHTTP_CFLAGS) \
 	$(LIBCRYPTO_CFLAGS) \
 	$(LIBCRYPTO_INCLUDES) \
@@ -21,15 +22,15 @@ ARC4RANDOM_LIBS = $(top_builddir)/ext/arc4random/libarc4random.la
 EXTRA_DIST = \
 	OBJECTFILES \
 	OBJECTLIBS \
+	meson.build \
 	testrunner.sh \
-	unittest_http.rb \
-	unittest_json.rb \
-	unittest_pipe.rb \
-	unittest_zeromq.rb \
-	unittest_post.rb \
-	unittest.rb \
-	Gemfile \
-	Gemfile.lock
+	unittest_http.py \
+	unittest_json.py \
+	unittest_pipe.py \
+	unittest_zeromq.py \
+	unittest_post.py \
+	pdns_unittest.py \
+	requirements.txt
 
 EXTRA_PROGRAMS = \
 	remotebackend_pipe.test \
@@ -54,7 +55,11 @@ libremotebackend_la_SOURCES = \
 	unixconnector.cc \
 	zmqconnector.cc
 
+if REMOTEBACKEND_DYNMODULE
 libremotebackend_la_LDFLAGS = -module -avoid-version
+else
+libremotebackend_la_LDFLAGS = -static -avoid-version
+endif
 
 libremotebackend_la_LIBADD = $(YAHTTP_LIBS) $(JSON11_LIBS)
 
@@ -66,7 +71,9 @@ TESTS_ENVIRONMENT = \
 	BOOST_TEST_LOG_LEVEL=message; \
 	export BOOST_TEST_LOG_LEVEL; \
 	REMOTEBACKEND_ZEROMQ=$(REMOTEBACKEND_ZEROMQ); \
-	export REMOTEBACKEND_ZEROMQ;
+	export REMOTEBACKEND_ZEROMQ; \
+	abs_srcdir=$(abs_srcdir)
+	export abs_srcdir;
 
 TEST_EXTENSIONS = .test
 
@@ -125,7 +132,8 @@ libtestremotebackend_la_SOURCES = \
 	../../pdns/gss_context.cc ../../pdns/gss_context.hh \
 	../../pdns/iputils.cc \
 	../../pdns/json.hh ../../pdns/json.cc \
-	../../pdns/logger.cc \
+	../../pdns/logger.cc ../../pdns/logger.hh \
+	../../pdns/logging.cc ../../pdns/logging.hh \
 	../../pdns/misc.cc \
 	../../pdns/nameserver.cc \
 	../../pdns/nsecrecords.cc \

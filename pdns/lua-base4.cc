@@ -1,8 +1,10 @@
+#include "config.h"
 #include <cassert>
 #include <fstream>
 #include <unordered_set>
 #include <unordered_map>
 #include <typeinfo>
+#include <sys/stat.h>
 #include "logger.hh"
 #include "logging.hh"
 #include "iputils.hh"
@@ -15,25 +17,31 @@
 #include "ext/luawrapper/include/LuaContext.hpp"
 #include "dns_random.hh"
 
-BaseLua4::BaseLua4() {
-}
-
-void BaseLua4::loadFile(const std::string& fname)
+void BaseLua4::loadFile(const std::string& fname, bool doPostLoad)
 {
   std::ifstream ifs(fname);
   if (!ifs) {
     auto ret = errno;
     auto msg = stringerror(ret);
     SLOG(g_log << Logger::Error << "Unable to read configuration file from '" << fname << "': " << msg << endl,
-         g_slog->withName("lua")->error(Logr::Error, ret, "Unable to read configuration file", "file", Logging::Loggable(fname), "msg", Logging::Loggable(msg)));
+         g_slog->withName("lua")->error(Logr::Error, msg, "Unable to read configuration file", "file", Logging::Loggable(fname)));
     throw std::runtime_error(msg);
   }
-  loadStream(ifs);
+  loadStream(ifs, doPostLoad);
 };
 
 void BaseLua4::loadString(const std::string &script) {
   std::istringstream iss(script);
-  loadStream(iss);
+  loadStream(iss, true);
+};
+
+void BaseLua4::includePath(const std::string& directory) {
+  const std::string& suffix = "lua";
+  std::vector<std::string> vec = pdns::list_directory(directory, suffix, g_slog->withName("lua"));
+  std::sort(vec.begin(), vec.end(), CIStringComparePOSIX());
+  for(const auto& file: vec) {
+    loadFile(file, false);
+  }
 };
 
 //  By default no features
@@ -65,9 +73,9 @@ void BaseLua4::prepareContext() {
   // DNSName
   d_lw->writeFunction("newDN", [](const std::string& dom){ return DNSName(dom); });
   d_lw->registerFunction("__lt", &DNSName::operator<);
-  d_lw->registerFunction("canonCompare", &DNSName::canonCompare);
-  d_lw->registerFunction("makeRelative", &DNSName::makeRelative);
-  d_lw->registerFunction("isPartOf", &DNSName::isPartOf);
+  d_lw->registerFunction<bool(DNSName::*)(const DNSName&)>("canonCompare", [](const DNSName& name, const DNSName& rhs) { return name.canonCompare(rhs); });
+  d_lw->registerFunction<DNSName(DNSName::*)(const DNSName&)>("makeRelative", [](const DNSName& name, const DNSName& zone) { return name.makeRelative(zone); });
+  d_lw->registerFunction<bool(DNSName::*)(const DNSName&)>("isPartOf", [](const DNSName& name, const DNSName& rhs) { return name.isPartOf(rhs); });
   d_lw->registerFunction("getRawLabels", &DNSName::getRawLabels);
   d_lw->registerFunction<unsigned int(DNSName::*)()>("countLabels", [](const DNSName& name) { return name.countLabels(); });
   d_lw->registerFunction<size_t(DNSName::*)()>("wireLength", [](const DNSName& name) { return name.wirelength(); });
@@ -110,22 +118,18 @@ void BaseLua4::prepareContext() {
   d_lw->registerFunction<bool(DNSResourceRecord::*)()>("disabled", [](DNSResourceRecord& rec) { return rec.disabled; });
 
   // ComboAddress
-  d_lw->registerFunction<bool(ComboAddress::*)()>("isIPv4", [](const ComboAddress& ca) { return ca.sin4.sin_family == AF_INET; });
-  d_lw->registerFunction<bool(ComboAddress::*)()>("isIPv6", [](const ComboAddress& ca) { return ca.sin4.sin_family == AF_INET6; });
-  d_lw->registerFunction<uint16_t(ComboAddress::*)()>("getPort", [](const ComboAddress& ca) { return ntohs(ca.sin4.sin_port); } );
-  d_lw->registerFunction<bool(ComboAddress::*)()>("isMappedIPv4", [](const ComboAddress& ca) { return ca.isMappedIPv4(); });
-  d_lw->registerFunction<ComboAddress(ComboAddress::*)()>("mapToIPv4", [](const ComboAddress& ca) { return ca.mapToIPv4(); });
-  d_lw->registerFunction<void(ComboAddress::*)(unsigned int)>("truncate", [](ComboAddress& ca, unsigned int bits) { ca.truncate(bits); });
-  d_lw->registerFunction<string(ComboAddress::*)()>("toString", [](const ComboAddress& ca) { return ca.toString(); });
-  d_lw->registerToStringFunction<string(ComboAddress::*)()>([](const ComboAddress& ca) { return ca.toString(); });
-  d_lw->registerFunction<string(ComboAddress::*)()>("toStringWithPort", [](const ComboAddress& ca) { return ca.toStringWithPort(); });
-  d_lw->registerFunction<string(ComboAddress::*)()>("getRaw", [](const ComboAddress& ca) {
-      if(ca.sin4.sin_family == AF_INET) {
-        auto t=ca.sin4.sin_addr.s_addr; return string((const char*)&t, 4);
-      }
-      else
-        return string((const char*)&ca.sin6.sin6_addr.s6_addr, 16);
-    } );
+  d_lw->registerFunction<bool(ComboAddress::*)()>("isIPv4", [](const ComboAddress& addr) { return addr.sin4.sin_family == AF_INET; });
+  d_lw->registerFunction<bool(ComboAddress::*)()>("isIPv6", [](const ComboAddress& addr) { return addr.sin4.sin_family == AF_INET6; });
+  d_lw->registerFunction<uint16_t(ComboAddress::*)()>("getPort", [](const ComboAddress& addr) { return ntohs(addr.sin4.sin_port); } );
+  d_lw->registerFunction<bool(ComboAddress::*)()>("isMappedIPv4", [](const ComboAddress& addr) { return addr.isMappedIPv4(); });
+  d_lw->registerFunction<ComboAddress(ComboAddress::*)()>("mapToIPv4", [](const ComboAddress& addr) { return addr.mapToIPv4(); });
+  d_lw->registerFunction<void(ComboAddress::*)(unsigned int)>("truncate", [](ComboAddress& addr, unsigned int bits) { addr.truncate(bits); });
+  d_lw->registerFunction<string(ComboAddress::*)()>("toString", [](const ComboAddress& addr) { return addr.toString(); });
+  d_lw->registerToStringFunction<string(ComboAddress::*)()>([](const ComboAddress& addr) { return addr.toString(); });
+  d_lw->registerFunction<string (ComboAddress::*)() const>("toStringNoInterface", [](const ComboAddress& addr) { return addr.toStringNoInterface(); });
+  d_lw->registerFunction<string (ComboAddress::*)() const>("toStringReversed", [](const ComboAddress& addr) { return addr.toStringReversed(); });
+  d_lw->registerFunction<string(ComboAddress::*)()>("toStringWithPort", [](const ComboAddress& addr) { return addr.toStringWithPort(); });
+  d_lw->registerFunction<string(ComboAddress::*)()>("getRaw", [](const ComboAddress& addr) { return addr.toByteString(); });
 
   d_lw->writeFunction("newCA", [](const std::string& a) { return ComboAddress(a); });
   d_lw->writeFunction("newCAFromRaw", [](const std::string& raw, boost::optional<uint16_t> port) {
@@ -217,7 +221,7 @@ void BaseLua4::prepareContext() {
   d_lw->registerFunction("match", (bool (NetmaskGroup::*)(const ComboAddress&) const)&NetmaskGroup::match);
 
   // DNSRecord
-  d_lw->writeFunction("newDR", [](const DNSName &name, const std::string &type, unsigned int ttl, const std::string &content, int place){ QType qtype; qtype = type; auto dr = DNSRecord(); dr.d_name = name; dr.d_type = qtype.getCode(); dr.d_ttl = ttl; dr.setContent(shared_ptr<DNSRecordContent>(DNSRecordContent::mastermake(dr.d_type, QClass::IN, content))); dr.d_place = static_cast<DNSResourceRecord::Place>(place); return dr; });
+  d_lw->writeFunction("newDR", [](const DNSName& name, const std::string& type, unsigned int ttl, const std::string& content, int place) { QType qtype; qtype = type; auto dr = DNSRecord(); dr.d_name = name; dr.d_type = qtype.getCode(); dr.d_ttl = ttl; dr.setContent(shared_ptr<DNSRecordContent>(DNSRecordContent::make(dr.d_type, QClass::IN, content))); dr.d_place = static_cast<DNSResourceRecord::Place>(place); return dr; });
   d_lw->registerMember("name", &DNSRecord::d_name);
   d_lw->registerMember("type", &DNSRecord::d_type);
   d_lw->registerMember("ttl", &DNSRecord::d_ttl);
@@ -232,13 +236,35 @@ void BaseLua4::prepareContext() {
         ret=aaaarec->getCA(53);
       return ret;
     });
-  d_lw->registerFunction<void(DNSRecord::*)(const std::string&)>("changeContent", [](DNSRecord& dr, const std::string& newContent) { dr.setContent(shared_ptr<DNSRecordContent>(DNSRecordContent::mastermake(dr.d_type, 1, newContent))); });
+  d_lw->registerFunction<void (DNSRecord::*)(const std::string&)>("changeContent", [](DNSRecord& dr, const std::string& newContent) { dr.setContent(shared_ptr<DNSRecordContent>(DNSRecordContent::make(dr.d_type, 1, newContent))); });
 
-  // pdnsload
+  // pdnslog
+#if defined(PDNS_AUTH)
   d_lw->writeFunction("pdnslog", [](const std::string& msg, boost::optional<int> loglevel) {
-    SLOG(g_log << (Logger::Urgency)loglevel.get_value_or(Logger::Warning) << msg<<endl,
-         g_slog->withName("lua")->info(static_cast<Logr::Priority>(loglevel.get_value_or(Logr::Warning)), msg));
+    if (g_slogStructured) {
+      auto log = g_slog->withName("lua");
+      log->info(static_cast<Logr::Priority>(loglevel.get_value_or(Logr::Warning)), msg);
+    }
+    else {
+      g_log << (Logger::Urgency)loglevel.get_value_or(Logger::Warning)<<msg<<endl;
+    }
   });
+#elif defined(RECURSOR)
+  d_lw->writeFunction("pdnslog", [](const std::string& msg, boost::optional<int> loglevel, boost::optional<std::map<std::string, std::string>> values) {
+    auto log = g_slog->withName("lua");
+    if (values) {
+      for (const auto& [key, value] : *values) {
+        log = log->withValues(key, Logging::Loggable(value));
+      }
+    }
+    log->info(static_cast<Logr::Priority>(loglevel.get_value_or(Logr::Warning)), msg);
+  });
+#else /* DNSDIST */
+  d_lw->writeFunction("pdnslog", [](const std::string& msg, boost::optional<int> loglevel) {
+    g_log << (Logger::Urgency)loglevel.get_value_or(Logger::Warning)<<msg<<endl;
+  });
+#endif
+
   d_lw->writeFunction("pdnsrandom", [](boost::optional<uint32_t> maximum) {
     return maximum ? dns_random(*maximum) : dns_random_uint32();
   });
@@ -290,10 +316,12 @@ void BaseLua4::prepareContext() {
   d_lw->writeVariable("pdns", d_pd);
 }
 
-void BaseLua4::loadStream(std::istream &is) {
-  d_lw->executeCode(is);
+void BaseLua4::loadStream(std::istream &stream, bool doPostLoad) {
+  d_lw->executeCode(stream);
 
-  postLoad();
+  if (doPostLoad) {
+    postLoad();
+  }
 }
 
-BaseLua4::~BaseLua4() { }
+BaseLua4::~BaseLua4() = default;

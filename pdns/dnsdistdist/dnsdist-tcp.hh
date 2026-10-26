@@ -38,8 +38,8 @@ struct ConnectionInfo
     remote(remote_), cs(cs_), fd(-1)
   {
   }
-  ConnectionInfo(ConnectionInfo&& rhs) :
-    remote(rhs.remote), cs(rhs.cs), fd(rhs.fd)
+  ConnectionInfo(ConnectionInfo&& rhs) noexcept :
+    remote(rhs.remote), cs(rhs.cs), fd(rhs.fd), d_restricted(rhs.d_restricted)
   {
     rhs.cs = nullptr;
     rhs.fd = -1;
@@ -48,13 +48,14 @@ struct ConnectionInfo
   ConnectionInfo(const ConnectionInfo& rhs) = delete;
   ConnectionInfo& operator=(const ConnectionInfo& rhs) = delete;
 
-  ConnectionInfo& operator=(ConnectionInfo&& rhs)
+  ConnectionInfo& operator=(ConnectionInfo&& rhs) noexcept
   {
     remote = rhs.remote;
     cs = rhs.cs;
     rhs.cs = nullptr;
     fd = rhs.fd;
     rhs.fd = -1;
+    d_restricted = rhs.d_restricted;
     return *this;
   }
 
@@ -73,6 +74,7 @@ struct ConnectionInfo
   ComboAddress remote;
   ClientState* cs{nullptr};
   int fd{-1};
+  bool d_restricted{false};
 };
 
 class InternalQuery
@@ -102,10 +104,10 @@ public:
   std::string d_proxyProtocolPayload;
   PacketBuffer d_buffer;
   uint32_t d_ixfrQuerySerial{0};
-  uint32_t d_xfrMasterSerial{0};
+  uint32_t d_xfrPrimarySerial{0};
   uint32_t d_xfrSerialCount{0};
   uint32_t d_downstreamFailures{0};
-  uint8_t d_xfrMasterSerialCount{0};
+  uint8_t d_xfrPrimarySerialCount{0};
   bool d_xfrStarted{false};
   bool d_proxyProtocolPayloadAdded{false};
 };
@@ -218,7 +220,7 @@ struct CrossProtocolQuery
 class TCPClientCollection
 {
 public:
-  TCPClientCollection(size_t maxThreads, std::vector<ClientState*> tcpStates);
+  TCPClientCollection(size_t maxThreads, std::vector<ClientState*> tcpAcceptStates);
 
   bool passConnectionToThread(std::unique_ptr<ConnectionInfo>&& conn)
   {
@@ -228,7 +230,7 @@ public:
 
     uint64_t pos = d_pos++;
     /* we need to increment this counter _before_ writing to the pipe,
-       otherwise there is a very real possiblity that the other end
+       otherwise there is a very real possibility that the other end
        decrement the counter before we can increment it, leading to an underflow */
     ++d_queued;
     if (!d_tcpclientthreads.at(pos % d_numthreads).d_querySender.send(std::move(conn))) {
@@ -305,6 +307,30 @@ private:
   const uint64_t d_maxthreads{0};
 };
 
+namespace dnsdist::tcp
+{
+class HandlingIOGuard
+{
+public:
+  HandlingIOGuard(bool& handlingIO) :
+    d_handlingIO(handlingIO)
+  {
+    d_handlingIO = true;
+  }
+  HandlingIOGuard(const HandlingIOGuard&) = delete;
+  HandlingIOGuard(HandlingIOGuard&&) = delete;
+  HandlingIOGuard& operator=(const HandlingIOGuard& rhs) = delete;
+  HandlingIOGuard& operator=(HandlingIOGuard&&) = delete;
+  ~HandlingIOGuard()
+  {
+    d_handlingIO = false;
+  }
+
+private:
+  bool& d_handlingIO;
+};
+}
+
 extern std::unique_ptr<TCPClientCollection> g_tcpclientthreads;
 
-std::unique_ptr<CrossProtocolQuery> getTCPCrossProtocolQueryFromDQ(DNSQuestion& dq);
+std::unique_ptr<CrossProtocolQuery> getTCPCrossProtocolQueryFromDQ(DNSQuestion& dnsQuestion);

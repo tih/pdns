@@ -65,8 +65,9 @@ static bool realTestResult(SQLRETURN result, SQLSMALLINT type, SQLHANDLE handle,
 class SODBCStatement : public SSqlStatement
 {
 public:
-  SODBCStatement(const string& query, bool dolog, int nparams, SQLHDBC connection)
+  SODBCStatement(Logr::log_t log, const string& query, bool dolog, int nparams, SQLHDBC connection)
   {
+    d_slog = log;
     d_query = query;
     d_conn = connection;
     d_dolog = dolog;
@@ -112,64 +113,70 @@ public:
     return this;
   }
 
-  SSqlStatement* bind(const string& name, bool value)
+  SSqlStatement* bind(const string& name, bool value) override
   {
     prepareStatement();
     return bind(name, (uint32_t)value);
   }
 
-  SSqlStatement* bind(const string& name, long value)
+  SSqlStatement* bind(const string& name, long value) override
   {
     prepareStatement();
     return bind(name, (unsigned long)value);
   }
 
-  SSqlStatement* bind(const string& name, int value)
+  SSqlStatement* bind(const string& name, int value) override
   {
     prepareStatement();
     return bind(name, (uint32_t)value);
   }
 
-  SSqlStatement* bind(const string& name, long long value)
+  SSqlStatement* bind(const string& name, long long value) override
   {
     prepareStatement();
     return bind(name, (unsigned long long)value);
   }
 
-  SSqlStatement* bind(const string& name, uint32_t value)
+  SSqlStatement* bind(const string& name, uint32_t value) override
   {
     prepareStatement();
     ODBCParam p;
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory)
     p.ParameterValuePtr = new UDWORD{value};
     p.LenPtr = new SQLLEN{sizeof(UDWORD)};
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     p.ParameterType = SQL_INTEGER;
     p.ValueType = SQL_INTEGER;
     return bind(name, p);
   }
 
-  SSqlStatement* bind(const string& name, unsigned long value)
+  SSqlStatement* bind(const string& name, unsigned long value) override
   {
     prepareStatement();
     ODBCParam p;
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory)
     p.ParameterValuePtr = new ULONG{value};
     p.LenPtr = new SQLLEN{sizeof(ULONG)};
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     p.ParameterType = SQL_INTEGER;
     p.ValueType = SQL_INTEGER;
     return bind(name, p);
   }
 
-  SSqlStatement* bind(const string& name, unsigned long long value)
+  SSqlStatement* bind(const string& name, unsigned long long value) override
   {
     prepareStatement();
     ODBCParam p;
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory)
     p.ParameterValuePtr = new unsigned long long{value};
     p.LenPtr = new SQLLEN{sizeof(unsigned long long)};
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     p.ParameterType = SQL_BIGINT;
     p.ValueType = SQL_C_UBIGINT;
     return bind(name, p);
   }
 
-  SSqlStatement* bind(const string& name, const std::string& value)
+  SSqlStatement* bind(const string& name, const std::string& value) override
   {
 
     // cerr<<"asked to bind string "<<value<<endl;
@@ -179,18 +186,19 @@ public:
     prepareStatement();
     ODBCParam p;
 
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory)
     p.ParameterValuePtr = (char*)new char[value.size() + 1];
     value.copy((char*)p.ParameterValuePtr, value.size());
     ((char*)p.ParameterValuePtr)[value.size()] = 0;
-    p.LenPtr = new SQLLEN;
-    *(p.LenPtr) = value.size();
+    p.LenPtr = new SQLLEN{static_cast<SQLLEN>(value.size())};
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     p.ParameterType = SQL_VARCHAR;
     p.ValueType = SQL_C_CHAR;
 
     return bind(name, p);
   }
 
-  SSqlStatement* bindNull(const string& name)
+  SSqlStatement* bindNull(const string& name) override
   {
     if (d_req_bind.size() > (d_parnum + 1))
       throw SSqlException("Trying to bind too many parameters.");
@@ -199,21 +207,23 @@ public:
     ODBCParam p;
 
     p.ParameterValuePtr = NULL;
-    p.LenPtr = new SQLLEN;
-    *(p.LenPtr) = SQL_NULL_DATA;
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory)
+    p.LenPtr = new SQLLEN{SQL_NULL_DATA};
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     p.ParameterType = SQL_VARCHAR;
     p.ValueType = SQL_C_CHAR;
 
     return bind(name, p);
   }
 
-  SSqlStatement* execute()
+  SSqlStatement* execute() override
   {
     prepareStatement();
     SQLRETURN result;
     // cerr<<"execute("<<d_query<<")"<<endl;
     if (d_dolog) {
-      g_log << Logger::Warning << "Query: " << d_query << endl;
+      SLOG(g_log << Logger::Warning << "Query: " << d_query << endl,
+           d_slog->info(Logr::Warning, "execute ODBC query", "query", Logging::Loggable(d_query)));
     }
 
     result = SQLExecute(d_statement);
@@ -238,14 +248,14 @@ public:
     return this;
   }
 
-  bool hasNextRow()
+  bool hasNextRow() override
   {
     // cerr<<"hasNextRow d_result="<<d_result<<endl;
     return d_result != SQL_NO_DATA;
   }
-  SSqlStatement* nextRow(row_t& row);
+  SSqlStatement* nextRow(row_t& row) override;
 
-  SSqlStatement* getResult(result_t& result)
+  SSqlStatement* getResult(result_t& result) override
   {
     result.clear();
     // if (d_res == NULL) return this;
@@ -257,17 +267,28 @@ public:
     return this;
   }
 
-  SSqlStatement* reset()
+  SSqlStatement* reset() override
   {
     SQLCloseCursor(d_statement); // hack, this probably violates some state transitions
 
     for (auto& i : d_req_bind) {
-      if (i.ParameterType == SQL_VARCHAR)
-        delete[](char*) i.ParameterValuePtr;
-      else if (i.ParameterType == SQL_INTEGER)
-        delete (ULONG*)i.ParameterValuePtr;
-      else if (i.ParameterType == SQL_C_UBIGINT)
-        delete (unsigned long long*)i.ParameterValuePtr;
+      // NOLINTBEGIN(cppcoreguidelines-owning-memory)
+      if (i.ParameterType == SQL_VARCHAR) {
+        delete[] static_cast<char*>(i.ParameterValuePtr);
+      }
+      else if (i.ParameterType == SQL_INTEGER) {
+        if (*i.LenPtr == sizeof(UDWORD)) {
+          delete static_cast<UDWORD*>(i.ParameterValuePtr);
+        }
+        else {
+          delete static_cast<ULONG*>(i.ParameterValuePtr);
+        }
+      }
+      else if (i.ParameterType == SQL_C_UBIGINT) {
+        delete static_cast<unsigned long long*>(i.ParameterValuePtr);
+      }
+      // NOLINTEND(cppcoreguidelines-owning-memory)
+
       delete i.LenPtr;
     }
     d_req_bind.clear();
@@ -275,9 +296,9 @@ public:
     d_paridx = 0;
     return this;
   }
-  const std::string& getQuery() { return d_query; }
+  const std::string& getQuery() override { return d_query; }
 
-  ~SODBCStatement()
+  ~SODBCStatement() override
   {
     releaseStatement();
   }
@@ -329,6 +350,7 @@ private:
 
   string d_query;
   bool d_dolog;
+  std::shared_ptr<Logr::Logger> d_slog;
   bool d_prepared;
   int d_residx;
   size_t d_paridx, d_parnum;
@@ -400,11 +422,14 @@ SSqlStatement* SODBCStatement::nextRow(row_t& row)
 
 // Constructor.
 SODBC::SODBC(
+  Logr::log_t log,
   const std::string& dsn,
   const std::string& username,
   const std::string& password)
 {
   SQLRETURN result;
+
+  d_slog = log;
 
   // Allocate an environment handle.
   result = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &m_environment);
@@ -439,7 +464,7 @@ SODBC::SODBC(
 }
 
 // Destructor.
-SODBC::~SODBC(void)
+SODBC::~SODBC()
 {
   // Disconnect from database and free all used resources.
   // SQLFreeHandle( SQL_HANDLE_STMT, m_statement );
@@ -460,7 +485,7 @@ SODBC::~SODBC(void)
 // Executes a command.
 void SODBC::execute(const std::string& command)
 {
-  SODBCStatement stmt(command, m_log, 0, m_connection);
+  SODBCStatement stmt(d_slog, command, m_log, 0, m_connection);
 
   stmt.execute()->reset();
 }
@@ -479,7 +504,7 @@ SSqlException SODBC::sPerrorException(const std::string& reason)
 
 std::unique_ptr<SSqlStatement> SODBC::prepare(const string& query, int nparams)
 {
-  return std::make_unique<SODBCStatement>(query, m_log, nparams, m_connection);
+  return std::make_unique<SODBCStatement>(d_slog, query, m_log, nparams, m_connection);
 }
 
 void SODBC::startTransaction()

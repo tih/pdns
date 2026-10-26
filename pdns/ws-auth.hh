@@ -22,73 +22,72 @@
 #pragma once
 #include <string>
 #include <map>
-#include <time.h>
+#include <ctime>
 #include <pthread.h>
 #include "misc.hh"
 #include "namespaces.hh"
 #include "webserver.hh"
+#include "statbag.hh"
 
 class Ewma
 {
 public:
-  Ewma() : d_last(0), d_10(0), d_5(0), d_1(0), d_max(0){dt.set();}
-  void submit(int val) 
-  {
-    int rate=val-d_last;
-    double difft=dt.udiff()/1000000.0;
-    dt.set();
-    
-    d_10=((600.0-difft)*d_10+(difft*rate))/600.0;
-    d_5=((300.0-difft)*d_5+(difft*rate))/300.0;
-    d_1=((60.0-difft)*d_1+(difft*rate))/60.0;
-    d_max=max(d_1,d_max);
-      
-    d_last=val;
-  }
-  double get10()
-  {
-    return d_10;
-  }
-  double get5()
-  {
-    return d_5;
-  }
-  double get1()
-  {
-    return d_1;
-  }
-  double getMax()
-  {
-    return d_max;
-  }
+  Ewma();
+
+  void submit(unsigned long val);
+  [[nodiscard]] double get10() const;
+  [[nodiscard]] double get5() const;
+  [[nodiscard]] double get1() const;
+  [[nodiscard]] double getMax() const;
+
 private:
   DTime dt;
-  int d_last;
-  double d_10, d_5, d_1, d_max;
+  unsigned long d_last{};
+  double d_10{}, d_5{}, d_1{}, d_max{};
+};
+
+class ApiWebServer : public WebServer
+{
+public:
+  ApiWebServer(std::shared_ptr<ConcurrentConnectionManager> ccm, string listenaddress, int port, StatBag& stats);
+  virtual ~ApiWebServer() = default;
+
+  void registerApiHandler(const string& url, const HandlerFunction& handler, const std::string& method, bool allowPassword) override;
+
+protected:
+  AtomicCounter* d_api_queries{nullptr};
+  AtomicCounter* d_api_result_200{nullptr};
+  AtomicCounter* d_api_result_201{nullptr};
+  AtomicCounter* d_api_result_204{nullptr};
+  AtomicCounter* d_api_result_409{nullptr};
+  AtomicCounter* d_api_result_422{nullptr};
+  AtomicCounter* d_api_result_500{nullptr};
 };
 
 class AuthWebServer
 {
 public:
-  AuthWebServer();
-  void go();
+  AuthWebServer(StatBag& stats);
+  void go(Logr::log_t slog);
   static string makePercentage(const double& val);
 
 private:
-  void indexfunction(HttpRequest* req, HttpResponse* resp);
-  void cssfunction(HttpRequest* req, HttpResponse* resp);
-  void jsonstat(HttpRequest* req, HttpResponse* resp);
+  void indexGET(HttpRequest* req, HttpResponse* resp);
+  void indexPOST(HttpRequest* req, HttpResponse* resp);
   void registerApiHandler(const string& url, std::function<void(HttpRequest*, HttpResponse*)> handler);
-  void printvars(ostringstream &ret);
-  void printargs(ostringstream &ret);
-  void webThread();
-  void statThread();
+  void webThread(Logr::log_t slog);
+  void statThread(Logr::log_t slog, StatBag& stats);
 
   time_t d_start;
-  double d_min10, d_min5, d_min1;
+  double d_min10{0}, d_min5{0}, d_min1{0};
   Ewma d_queries, d_cachehits, d_cachemisses;
   Ewma d_qcachehits, d_qcachemisses;
+  Ewma d_api_queries;
   unique_ptr<WebServer> d_ws{nullptr};
+  std::string d_unique;
+
+  bool d_doApi{false};
+  StatBag& d_stats;
 };
 
 void apiDocs(HttpRequest* req, HttpResponse* resp);

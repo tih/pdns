@@ -1,4 +1,7 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #include <boost/test/unit_test.hpp>
 
 #include <cstdio>
@@ -25,17 +28,17 @@ struct Fixture
 {
   static std::shared_ptr<DNSRecordContent> makeLocalhostRootDRC()
   {
-    return DNSRecordContent::mastermake(QType::SOA, QClass::IN, "localhost. root 1 604800 86400 2419200 604800");
+    return DNSRecordContent::make(QType::SOA, QClass::IN, "localhost. root 1 604800 86400 2419200 604800");
   }
 
   static std::shared_ptr<DNSRecordContent> makeLocalhostDRC()
   {
-    return DNSRecordContent::mastermake(QType::NS, QClass::IN, "localhost.");
+    return DNSRecordContent::make(QType::NS, QClass::IN, "localhost.");
   }
 
   static std::shared_ptr<DNSRecordContent> makePtrDRC(const std::string& name)
   {
-    return DNSRecordContent::mastermake(QType::PTR, QClass::IN, name);
+    return DNSRecordContent::make(QType::PTR, QClass::IN, name);
   }
 
   static void addDomainMapFixtureEntry(SyncRes::domainmap_t& domainMap,
@@ -57,7 +60,7 @@ struct Fixture
   {
     domainMap[DNSName{name}] = SyncRes::AuthDomain{
       .d_records = {
-        DNSRecord(name, DNSRecordContent::mastermake(type, QClass::IN, address), type),
+        DNSRecord(name, DNSRecordContent::make(type, QClass::IN, address), type),
         DNSRecord(name, makeLocalhostDRC(), QType::NS),
         DNSRecord(name, makeLocalhostRootDRC(), QType::SOA),
       },
@@ -128,8 +131,8 @@ struct Fixture
       "localhost" + actualSearchSuffix,
       {DNSRecord("localhost" + actualSearchSuffix, makeLocalhostDRC(), QType::NS),
        DNSRecord("localhost" + actualSearchSuffix, makeLocalhostRootDRC(), QType::SOA),
-       DNSRecord("localhost" + actualSearchSuffix, DNSRecordContent::mastermake(QType::AAAA, QClass::IN, "::1"), QType::AAAA),
-       DNSRecord("localhost" + actualSearchSuffix, DNSRecordContent::mastermake(QType::A, QClass::IN, "127.0.0.1"), QType::A)});
+       DNSRecord("localhost" + actualSearchSuffix, DNSRecordContent::make(QType::AAAA, QClass::IN, "::1"), QType::AAAA),
+       DNSRecord("localhost" + actualSearchSuffix, DNSRecordContent::make(QType::A, QClass::IN, "127.0.0.1"), QType::A)});
     addDomainMapFixtureEntry(domainMap, "self" + actualSearchSuffix, QType::AAAA, "::1");
     addDomainMapFixtureEntry(
       domainMap,
@@ -269,25 +272,26 @@ const std::string hints = ". 3600 IN NS ns.\n"
 
 BOOST_AUTO_TEST_CASE(test_UserHints)
 {
-
+  MemRecursorCache::resetStaticsForTests();
   g_recCache = make_unique<MemRecursorCache>();
 
   ::arg().set("max-generate-steps") = "0";
   ::arg().set("max-include-depth") = "0";
-  char temp[] = "/tmp/hintsXXXXXXXXXX";
-  int fd = mkstemp(temp);
-  BOOST_REQUIRE(fd > 0);
-  FILE* fp = fdopen(fd, "w");
-  BOOST_REQUIRE(fp != nullptr);
-  size_t written = fwrite(hints.data(), 1, hints.length(), fp);
+  string temp{"/tmp/hintsXXXXXXXXXX"};
+  int fileDesc = mkstemp(temp.data());
+  BOOST_REQUIRE(fileDesc > 0);
+  FILE* filePointer = fdopen(fileDesc, "w");
+  BOOST_REQUIRE(filePointer != nullptr);
+  size_t written = fwrite(hints.data(), 1, hints.length(), filePointer);
   BOOST_REQUIRE(written == hints.length());
-  BOOST_REQUIRE(fclose(fp) == 0);
+  BOOST_REQUIRE(fclose(filePointer) == 0); // NOLINT
 
   time_t now = time(nullptr);
   std::vector<DNSRecord> nsvec;
 
-  auto ok = readHintsIntoCache(now, std::string(temp), nsvec);
-  BOOST_CHECK(ok);
+  auto readOK = readHintsIntoCache(now, std::string(temp), nsvec);
+  unlink(temp.data());
+  BOOST_CHECK(readOK);
   BOOST_CHECK_EQUAL(nsvec.size(), 2U);
 
   const MemRecursorCache::Flags flags = 0;

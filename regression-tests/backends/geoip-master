@@ -116,11 +116,13 @@ Rcode: 0 (No Error), RD: 0, QR: 1, TC: 0, AA: 1, opcode: 0
 Reply to question for qname='continent.geo.example.com.', qtype=TXT
 EOF
 		# generate pdns.conf for pdnsutil
+		backend=geoip
 		cat > pdns-geoip.conf <<EOF
-module-dir=./modules
+module-dir=$PDNS_MODULE_PATH
 launch=geoip
 geoip-zones-file=$testsdir/geo.yaml
 geoip-database-files=$geoipdatabase
+logging-structured
 EOF
 
 		if [ "$geoipdosec" = "yes" ]
@@ -132,12 +134,12 @@ EOF
 
 		geoipdatabase=${geoipdatabase:-$testsdir/GeoLiteCity.dat}
 
-		$RUNWRAPPER $PDNS --daemon=no --local-address=$address --local-port=$port --socket-dir=./ \
+		$RUNWRAPPER $PDNS --loglevel=7 --daemon=no --local-address=$address --local-port=$port --socket-dir=./ \
 			--no-shuffle --launch=geoip \
 			--cache-ttl=$cachettl --dname-processing --no-config \
 			--distributor-threads=1 \
                         --geoip-zones-file=$testsdir/geo.yaml --geoip-database-files="$geoipdatabase" \
-                        --module-dir=./modules --edns-subnet-processing=yes \
+                        --edns-subnet-processing=yes \
 			$geoipkeydir &
 		;;
 

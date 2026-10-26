@@ -1,5 +1,8 @@
 
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #include <boost/test/unit_test.hpp>
@@ -12,31 +15,32 @@ BOOST_AUTO_TEST_CASE(test_Basic)
 {
   DownstreamState::Config config;
   DownstreamState ds(std::move(config), nullptr, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Active);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), true);
 
   ds.setUp();
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Up);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Up);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "UP");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), false);
 
   ds.setDown();
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Down);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Down);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "DOWN");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), false);
 
   ds.setAuto();
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), true);
 
   ds.submitHealthCheckResult(true, true);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), true);
@@ -51,7 +55,8 @@ BOOST_AUTO_TEST_CASE(test_MaxCheckFailures)
   config.remote = ComboAddress("0.0.0.0");
 
   DownstreamState ds(std::move(config), nullptr, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Active);
   ds.setUpStatus(true);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
@@ -61,19 +66,19 @@ BOOST_AUTO_TEST_CASE(test_MaxCheckFailures)
   }
 
   /* four failed checks is not enough */
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
 
   /* but five is */
   ds.submitHealthCheckResult(false, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
 
   /* only one successful check is needed to go back up */
   ds.submitHealthCheckResult(false, true);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
 }
@@ -87,7 +92,8 @@ BOOST_AUTO_TEST_CASE(test_Rise)
   config.remote = ComboAddress("0.0.0.0");
 
   DownstreamState ds(std::move(config), nullptr, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Active);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
 
@@ -96,19 +102,19 @@ BOOST_AUTO_TEST_CASE(test_Rise)
   }
 
   /* four successful checks is not enough */
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
 
   /* but five is */
   ds.submitHealthCheckResult(false, true);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
 
   /* only one failed check is needed to go back down */
   ds.submitHealthCheckResult(false, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), false);
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
 }
@@ -121,12 +127,14 @@ BOOST_AUTO_TEST_CASE(test_Lazy)
   config.d_lazyHealthCheckMinSampleCount = 11;
   config.d_lazyHealthCheckThreshold = 20;
   config.d_lazyHealthCheckUseExponentialBackOff = false;
-  config.availability = DownstreamState::Availability::Lazy;
+  config.d_availability = DownstreamState::Availability::Auto;
+  config.d_healthCheckMode = DownstreamState::HealthCheckMode::Lazy;
   /* prevents a re-connection */
   config.remote = ComboAddress("0.0.0.0");
 
   DownstreamState ds(std::move(config), nullptr, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Lazy);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), false);
@@ -224,12 +232,14 @@ BOOST_AUTO_TEST_CASE(test_LazyExponentialBackOff)
   config.d_lazyHealthCheckUseExponentialBackOff = true;
   config.d_lazyHealthCheckMaxBackOff = 600;
   config.d_lazyHealthCheckFailedInterval = 15;
-  config.availability = DownstreamState::Availability::Lazy;
+  DownstreamState::parseAvailabilityConfigFromStr(config, "lazy");
+
   /* prevents a re-connection */
   config.remote = ComboAddress("0.0.0.0");
 
   DownstreamState ds(std::move(config), nullptr, false);
-  BOOST_CHECK(ds.d_config.availability == DownstreamState::Availability::Lazy);
+  BOOST_CHECK(ds.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(ds.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Lazy);
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), false);
@@ -261,8 +271,8 @@ BOOST_AUTO_TEST_CASE(test_LazyExponentialBackOff)
   BOOST_CHECK_EQUAL(ds.getStatus(), "down");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(currentTime), false);
   /* and the wait time between two checks will double every time a failure occurs */
-  BOOST_CHECK_EQUAL(ds.getNextLazyHealthCheck(), (currentTime + (config.d_lazyHealthCheckFailedInterval * std::pow(2U, ds.currentCheckFailures))));
-  BOOST_CHECK_EQUAL(ds.currentCheckFailures, 0U);
+  BOOST_CHECK_EQUAL(ds.getNextLazyHealthCheck(), (currentTime + (config.d_lazyHealthCheckFailedInterval * std::pow(2U, ds.currentCheckFailures - 1))));
+  BOOST_CHECK_EQUAL(ds.currentCheckFailures, 1U);
 
   /* so after 5 failures */
   const size_t nbFailures = 5;
@@ -271,8 +281,8 @@ BOOST_AUTO_TEST_CASE(test_LazyExponentialBackOff)
     BOOST_CHECK(ds.healthCheckRequired(currentTime));
     ds.submitHealthCheckResult(false, false);
   }
-  BOOST_CHECK_EQUAL(ds.currentCheckFailures, nbFailures);
-  BOOST_CHECK_EQUAL(ds.getNextLazyHealthCheck(), (currentTime + (config.d_lazyHealthCheckFailedInterval * std::pow(2U, ds.currentCheckFailures))));
+  BOOST_CHECK_EQUAL(ds.currentCheckFailures, nbFailures + 1);
+  BOOST_CHECK_EQUAL(ds.getNextLazyHealthCheck(), (currentTime + (config.d_lazyHealthCheckFailedInterval * std::pow(2U, ds.currentCheckFailures - 1))));
 
   /* we need minRiseSuccesses successful health-checks to go up */
   BOOST_REQUIRE(config.minRiseSuccesses >= 1);
@@ -286,6 +296,50 @@ BOOST_AUTO_TEST_CASE(test_LazyExponentialBackOff)
   BOOST_CHECK_EQUAL(ds.isUp(), true);
   BOOST_CHECK_EQUAL(ds.getStatus(), "up");
   BOOST_CHECK_EQUAL(ds.healthCheckRequired(), false);
+}
+
+BOOST_AUTO_TEST_CASE(test_CheckAutoRestorePreviousHealthCheckMode)
+{
+  DownstreamState::Config config;
+  DownstreamState::parseAvailabilityConfigFromStr(config, "lazy");
+  /* prevents a re-connection */
+  config.remote = ComboAddress("0.0.0.0");
+
+  DownstreamState downstream(std::move(config), nullptr, false);
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(downstream.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Lazy);
+  downstream.setUp();
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Up);
+  downstream.setAuto();
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(downstream.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Lazy);
+  downstream.setActiveAuto();
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(downstream.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Active);
+  downstream.setUp();
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Up);
+  downstream.setAuto();
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Auto);
+  BOOST_CHECK(downstream.d_config.d_healthCheckMode == DownstreamState::HealthCheckMode::Active);
+}
+
+BOOST_AUTO_TEST_CASE(test_MaxOutstandingQueries)
+{
+  DownstreamState::Config config;
+  config.d_maxOutstandingQueries = 2U;
+  /* prevents a re-connection */
+  config.remote = ComboAddress("0.0.0.0");
+
+  DownstreamState downstream(std::move(config), nullptr, false);
+  BOOST_CHECK(downstream.d_config.d_availability == DownstreamState::Availability::Auto);
+  downstream.setUp();
+  BOOST_CHECK(downstream.canAcceptNewQueries(true));
+  downstream.outstanding.store(1U);
+  BOOST_CHECK(downstream.canAcceptNewQueries(true));
+  downstream.outstanding.store(2U);
+  BOOST_CHECK(!downstream.canAcceptNewQueries(true));
+  downstream.outstanding.store(1U);
+  BOOST_CHECK(downstream.canAcceptNewQueries(true));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

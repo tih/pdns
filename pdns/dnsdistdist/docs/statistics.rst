@@ -14,8 +14,11 @@ To make sense of the statistics, the following relation should hold:
 
 	queries - noncompliant-queries
 	=
-	responses - noncompliant-responses + cache-hits + downstream-timeouts + self-answered + no-policy
-	+ rule-drop
+	responses - noncompliant-responses + downstream-timeouts + no-policy + rule-drop
+
+Before 1.8.0, cache hits and self-answered responses were not accounted in the responses counters, so the relation was:
+
+	responses - noncompliant-responses + cache-hits + downstream-timeouts + self-answered + no-policy + rule-drop
 
 Note that packets dropped by eBPF (see :doc:`../advanced/ebpf`) are
 accounted for in the eBPF statistics, and do not show up in the metrics
@@ -42,14 +45,10 @@ Number of times an answer was not found in the :doc:`packet cache <guides/cache>
 
 cpu-iowait
 ----------
-.. versionadded:: 1.5.0
-
 Time spent waiting for I/O to complete by the whole system, in units of USER_HZ.
 
 cpu-steal
 ---------
-.. versionadded:: 1.5.0
-
 Stolen time, which is the time spent by the whole system in other operating systems when running in a virtualized environment, in units of USER_HZ.
 
 cpu-sys-msec
@@ -68,13 +67,17 @@ doh-response-pipe-full
 ----------------------
 Number of responses dropped because the internal DoH pipe was full.
 
+doq-response-pipe-full
+----------------------
+Number of responses dropped because the internal DoQ pipe was full.
+
 downstream-send-errors
 ----------------------
 Number of errors when sending a query to a backend.
 
 downstream-timeouts
 -------------------
-Number of queries not answer in time by a backend.
+Number of queries not answered before the configured timeout, or at all.
 
 dyn-block-nmg-size
 ------------------
@@ -107,23 +110,23 @@ Number of ServFail answers sent to clients.
 
 latency-avg100
 --------------
-Average response latency in microseconds of the last 100 packets
+Average response latency in microseconds of the last 100 packets received over UDP.
 
 latency-avg1000
 ---------------
-Average response latency in microseconds of the last 1000 packets.
+Average response latency in microseconds of the last 1000 packets received over UDP.
 
 latency-avg10000
 ----------------
-Average response latency in microseconds of the last 10000 packets.
+Average response latency in microseconds of the last 10000 packets received over UDP.
 
 latency-avg1000000
 ------------------
-Average response latency in microseconds of the last 1000000 packets.
+Average response latency in microseconds of the last 1000000 packets received over UDP.
 
 latency-bucket
 --------------
-Histogram of response time latencies.
+Histogram of response time latencies for queries received over UDP.
 
 latency-count
 -------------
@@ -145,6 +148,22 @@ latency-doh-avg1000000
 ----------------------
 Average response latency, in microseconds, of the last 1000000 packets received over DoH.
 
+latency-doq-avg100
+------------------
+Average response latency, in microseconds, of the last 100 packets received over DoQ.
+
+latency-doq-avg1000
+-------------------
+Average response latency, in microseconds, of the last 1000 packets received over DoQ.
+
+latency-doq-avg10000
+--------------------
+Average response latency, in microseconds, of the last 10000 packets received over DoQ.
+
+latency-doq-avg1000000
+----------------------
+Average response latency, in microseconds, of the last 1000000 packets received over DoQ.
+
 latency-dot-avg100
 ------------------
 Average response latency, in microseconds, of the last 100 packets received over DoT.
@@ -163,12 +182,11 @@ Average response latency, in microseconds, of the last 1000000 packets received 
 
 latency-slow
 ------------
-Number of queries answered in more than 1 second.
+Number of queries received over UDP answered in more than 1 second.
 
 latency-sum
 -----------
-Total response time of all queries combined in milliseconds since the start of :program:`dnsdist`. Can be used to calculate the
-average response time over all queries.
+Total response time of all queries received over UDP combined in milliseconds since the start of :program:`dnsdist`. Can be used to calculate the average response time over all queries received over UDP.
 
 latency-tcp-avg100
 ------------------
@@ -188,23 +206,23 @@ Average response latency, in microseconds, of the last 1000000 packets received 
 
 latency0-1
 ----------
-Number of queries answered in less than 1 ms.
+Number of queries received over UDP answered in less than 1 ms.
 
 latency1-10
 -----------
-Number of queries answered in 1-10 ms.
+Number of queries received over UDP answered in 1-10 ms.
 
 latency10-50
 ------------
-Number of queries answered in 10-50 ms.
+Number of queries received over UDP answered in 10-50 ms.
 
 latency50-100
 -------------
-Number of queries answered in 50-100 ms.
+Number of queries received over UDP answered in 50-100 ms.
 
 latency100-1000
 ---------------
-Number of queries answered in 100-1000 ms.
+Number of queries received over UDP answered in 100-1000 ms.
 
 no-policy
 ---------
@@ -224,8 +242,6 @@ Number of outgoing DoH queries dropped because the internal pipe used to distrib
 
 proxy-protocol-invalid
 ----------------------
-.. versionadded:: 1.6.0
-
 Number of queries dropped because of an invalid Proxy Protocol header.
 
 queries
@@ -242,9 +258,9 @@ Current memory usage.
 
 responses
 ---------
-Number of responses received from backends. Note! This is not the number of
-responses sent to clients. To get that number, add 'cache-hits' and
-'responses'.
+Number of response sent to clients.
+
+Before 1.8.0, it was the number of responses received from backends, not accounting for cache hits or self-answered responses.
 
 rule-drop
 ---------
@@ -264,18 +280,16 @@ Number of ServFail answers returned because of a rule.
 
 rule-truncated
 --------------
-.. versionadded:: 1.6.0
-
 Number of truncated answers returned because of a rule.
 
 security-status
 ---------------
 The security status of :program:`dnsdist`. This is regularly polled.
 
- * 0 = Unknown status or unreleased version
- * 1 = OK
- * 2 = Upgrade recommended
- * 3 = Upgrade required (most likely because there is a known security issue)
+* 0 = Unknown status or unreleased version
+* 1 = OK
+* 2 = Upgrade recommended
+* 3 = Upgrade required (most likely because there is a known security issue)
 
 self-answered
 -------------
@@ -295,8 +309,6 @@ Number of TCP cross-protocol responses dropped because the internal pipe used to
 
 tcp-listen-overflows
 --------------------
-.. versionadded:: 1.6.0
-
 From ``/proc/net/netstat`` ``ListenOverflows``.
 
 tcp-query-pipe-full
@@ -309,62 +321,42 @@ Number of errors encountered while truncating an answer.
 
 udp-in-csum-errors
 ------------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp`` ``InErrors``.
 
 udp-in-errors
 -------------
-.. versionadded:: 1.5.0
-
 From ``/proc/net/snmp`` ``InErrors``.
 
 udp-noport-errors
 -----------------
-.. versionadded:: 1.5.0
-
 From ``/proc/net/snmp`` ``NoPorts``.
 
 udp-recvbuf-errors
 ------------------
-.. versionadded:: 1.5.0
-
 From ``/proc/net/snmp`` ``RcvbufErrors``.
 
 udp-sndbuf-errors
 -----------------
-.. versionadded:: 1.5.0
-
 From ``/proc/net/snmp`` ``SndbufErrors``.
 
 udp6-in-csum-errors
 -------------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp6`` ``InErrors``.
 
 udp6-in-errors
 --------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp6`` ``InErrors``.
 
 udp6-noport-errors
 ------------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp6`` ``NoPorts``.
 
 udp6-recvbuf-errors
 -------------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp6`` ``RcvbufErrors``.
 
 udp6-sndbuf-errors
 ------------------
-.. versionadded:: 1.7.0
-
 From ``/proc/net/snmp6`` ``SndbufErrors``.
 
 uptime

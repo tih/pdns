@@ -15,6 +15,8 @@
 #include "namespaces.hh"
 #include "statbag.hh"
 #include "stubresolver.hh"
+#include "ednsoptions.hh"
+#include "ednssubnet.hh"
 
 #define LOCAL_RESOLV_CONF_PATH "/etc/resolv.conf"
 // don't stat() for local resolv.conf more than once every INTERVAL secs.
@@ -34,10 +36,11 @@ static string logPrefix = "[stub-resolver] ";
 /*
  * Returns false if no resolvers are configured, while emitting a warning about this
  */
-bool resolversDefined()
+bool resolversDefined(Logr::log_t slog)
 {
   if (s_resolversForStub.read_lock()->empty()) {
-    g_log<<Logger::Warning<<logPrefix<<"No upstream resolvers configured, stub resolving (including secpoll and ALIAS) impossible."<<endl;
+    SLOG(g_log << Logger::Warning << logPrefix << "No upstream resolvers configured, stub resolving (including secpoll and ALIAS) impossible." << endl,
+         slog->info(Logr::Warning, "stub-resolver: no upstream resolvers configured, resolving (including secpoll and ALIAS) will not be possible"));
     return false;
   }
   return true;
@@ -48,14 +51,14 @@ bool resolversDefined()
  */
 static void parseLocalResolvConf_locked(vector<ComboAddress>& resolversForStub, const time_t& now)
 {
-  struct stat st;
+  struct stat statResult{};
   s_localResolvConfLastCheck = now;
 
-  if (stat(LOCAL_RESOLV_CONF_PATH, &st) != -1) {
-    if (st.st_mtime != s_localResolvConfMtime) {
+  if (stat(LOCAL_RESOLV_CONF_PATH, &statResult) != -1) {
+    if (statResult.st_mtime != s_localResolvConfMtime) {
       std::vector<ComboAddress> resolvers = getResolvers(LOCAL_RESOLV_CONF_PATH);
 
-      s_localResolvConfMtime = st.st_mtime;
+      s_localResolvConfMtime = statResult.st_mtime;
 
       if (resolvers.empty()) {
         return;
@@ -69,12 +72,12 @@ static void parseLocalResolvConf_locked(vector<ComboAddress>& resolversForStub, 
 static void parseLocalResolvConf()
 {
   const time_t now = time(nullptr);
-  if ((s_localResolvConfLastCheck + LOCAL_RESOLV_CONF_MAX_CHECK_INTERVAL) > now)
-    return ;
+  if ((s_localResolvConfLastCheck + LOCAL_RESOLV_CONF_MAX_CHECK_INTERVAL) > now) {
+    return;
+  }
 
   parseLocalResolvConf_locked(*(s_resolversForStub.write_lock()), now);
 }
-
 
 /*
  * Fill the s_resolversForStub vector with addresses for the upstream resolvers.
@@ -84,53 +87,70 @@ static void parseLocalResolvConf()
  *
  * mainthread() calls this so you don't have to.
  */
-void stubParseResolveConf()
+void stubParseResolveConf(Logr::log_t slog)
 {
-  if(::arg().mustDo("resolver")) {
+  if (::arg().mustDo("resolver")) {
     auto resolversForStub = s_resolversForStub.write_lock();
     vector<string> parts;
     stringtok(parts, ::arg()["resolver"], " ,\t");
-    for (const auto& addr : parts)
+    for (const auto& addr : parts) {
       resolversForStub->push_back(ComboAddress(addr, 53));
+    }
   }
 
   if (s_resolversForStub.read_lock()->empty()) {
     parseLocalResolvConf();
   }
   // Emit a warning if there are no stubs.
-  resolversDefined();
+  resolversDefined(slog);
   s_stubResolvConfigured = true;
 }
 
 // s_resolversForStub contains the ComboAddresses that are used to resolve the
-int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& ret)
+int stubDoResolve(Logr::log_t slog, const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& ret, const EDNSSubnetOpts* d_eso)
 {
   // ensure resolver gets always configured
   if (!s_stubResolvConfigured) {
-    stubParseResolveConf();
+    stubParseResolveConf(slog);
   }
   // only check if resolvers come from local resolv.conf in the first place
   if (s_localResolvConfMtime != 0) {
-        parseLocalResolvConf();
+    parseLocalResolvConf();
   }
-  if (!resolversDefined())
+  if (!resolversDefined(slog)) {
     return RCode::ServFail;
+  }
 
   auto resolversForStub = s_resolversForStub.read_lock();
   vector<uint8_t> packet;
 
-  DNSPacketWriter pw(packet, qname, qtype);
-  pw.getHeader()->id=dns_random_uint16();
-  pw.getHeader()->rd=1;
+  DNSPacketWriter packetWriter(packet, qname, qtype);
+  packetWriter.getHeader()->id = dns_random_uint16();
+  packetWriter.getHeader()->rd = 1;
 
-  string queryNameType = qname.toString() + "|" + QType(qtype).toString();
-  string msg ="Doing stub resolving for '" + queryNameType + "', using resolvers: ";
-  for (const auto& server : *resolversForStub) {
-    msg += server.toString() + ", ";
+  if (d_eso != nullptr) {
+    // pass along EDNS subnet from client if given - issue #5469
+    string origECSOptionStr = d_eso->makeOptString();
+    DNSPacketWriter::optvect_t opts;
+    opts.emplace_back(EDNSOptionCode::ECS, origECSOptionStr);
+    packetWriter.addOpt(512, 0, 0, opts);
+    packetWriter.commit();
   }
-  g_log<<Logger::Debug<<logPrefix<<msg.substr(0, msg.length() - 2)<<endl;
 
-  for(const ComboAddress& dest : *resolversForStub) {
+  string queryNameType;
+  if (g_slogStructured) {
+    slog->info(Logr::Debug, "stub-resolver: doing stub resolving", "query", Logging::Loggable(qname), "type", Logging::Loggable(QType(qtype)), "resolvers", Logging::IterLoggable(resolversForStub->cbegin(), resolversForStub->cend()));
+  }
+  else {
+    queryNameType = qname.toString() + "|" + QType(qtype).toString();
+    string msg = "Doing stub resolving for '" + queryNameType + "', using resolvers: ";
+    for (const auto& server : *resolversForStub) {
+      msg += server.toString() + ", ";
+    }
+    g_log << Logger::Debug << logPrefix << msg.substr(0, msg.length() - 2) << endl;
+  }
+
+  for (const ComboAddress& dest : *resolversForStub) {
     Socket sock(dest.sin4.sin_family, SOCK_DGRAM);
     sock.setNonBlocking();
     sock.connect(dest);
@@ -143,39 +163,52 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
     try {
     retry:
       sock.read(reply); // this calls recv
-      if(reply.size() > sizeof(struct dnsheader)) {
-        struct dnsheader d;
-        memcpy(&d, reply.c_str(), sizeof(d));
-        if(d.id != pw.getHeader()->id)
+      if (reply.size() > sizeof(struct dnsheader)) {
+        struct dnsheader dHeader{};
+        memcpy(&dHeader, reply.c_str(), sizeof(dHeader));
+        if (dHeader.id != packetWriter.getHeader()->id) {
           goto retry;
+        }
       }
     }
-    catch(...) {
+    catch (...) {
       continue;
     }
-    MOADNSParser mdp(false, reply);
-    if(mdp.d_header.rcode == RCode::ServFail)
-      continue;
 
-    for(const auto & answer : mdp.d_answers) {
-      if(answer.first.d_place == 1 && answer.first.d_type==qtype) {
-        DNSZoneRecord zrr;
-        zrr.dr = answer.first;
-        zrr.auth=true;
-        ret.push_back(zrr);
+    try {
+      MOADNSParser mdp(false, reply);
+      if (mdp.d_header.rcode == RCode::ServFail) {
+        continue;
       }
+
+      for (const auto& answer : mdp.d_answers) {
+        if (answer.d_place == 1 && answer.d_type == qtype) {
+          DNSZoneRecord zrr;
+          zrr.dr = answer;
+          zrr.auth = true;
+          // NOTE zrr.domain_id == UnknownDomainID
+          ret.push_back(std::move(zrr));
+        }
+      }
+      SLOG(g_log << Logger::Debug << logPrefix << "Question for '" << queryNameType << "' got answered by " << dest.toString() << endl,
+           slog->info(Logr::Debug, "stub-resolver: got an answer", "query", Logging::Loggable(qname), "type", Logging::Loggable(QType(qtype)), "resolver", Logging::Loggable(dest)));
+      return mdp.d_header.rcode;
     }
-    g_log<<Logger::Debug<<logPrefix<<"Question for '"<<queryNameType<<"' got answered by "<<dest.toString()<<endl;
-    return mdp.d_header.rcode;
+    catch (const MOADNSException& exc) {
+      SLOG(g_log << Logger::Debug << logPrefix << "Question for '" << queryNameType << "' got ill-formed answer from " << dest.toString() << ": " << exc.what() << endl,
+           slog->error(Logr::Debug, exc.what(), "stub-resolver: got an ill-formed answer", "query", Logging::Loggable(qname), "type", Logging::Loggable(QType(qtype)), "resolver", Logging::Loggable(dest)));
+      continue;
+    }
   }
   return RCode::ServFail;
 }
 
-int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSRecord>& ret) {
+int stubDoResolve(Logr::log_t slog, const DNSName& qname, uint16_t qtype, vector<DNSRecord>& ret, const EDNSSubnetOpts* d_eso)
+{
   vector<DNSZoneRecord> ret2;
-  int res = stubDoResolve(qname, qtype, ret2);
-  for (const auto &r : ret2) {
-    ret.push_back(r.dr);
+  int res = stubDoResolve(slog, qname, qtype, ret2, d_eso);
+  for (const auto& record : ret2) {
+    ret.push_back(record.dr);
   }
   return res;
 }

@@ -46,7 +46,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-
+bool g_slogStructured{false};
 
 StatBag S;
 
@@ -111,16 +111,20 @@ static void startNewTransaction()
     cout<<"BEGIN TRANSACTION;"<<endl;
 }
 
-static void emitDomain(const DNSName& domain, const vector<ComboAddress> *masters = nullptr) {
+static void emitDomain(const ZoneName& domain, const vector<ComboAddress>* primaries = nullptr)
+{
   string iDomain = domain.toStringRootDot();
-  if(!::arg().mustDo("slave")) {
+  if (::arg().mustDo("delete-matching-domains")) {
+    cout << "DELETE FROM domains WHERE name=" << toLower(sqlstr(iDomain)) << ";" << endl;
+  }
+  if (!::arg().mustDo("secondary")) {
     cout<<"insert into domains (name,type) values ("<<toLower(sqlstr(iDomain))<<",'NATIVE');"<<endl;
   }
   else
   {
     string mstrs;
-    if (masters != nullptr && ! masters->empty()) {
-      for(const auto& mstr :  *masters) {
+    if (primaries != nullptr && !primaries->empty()) {
+      for (const auto& mstr : *primaries) {
         mstrs.append(mstr.toStringWithPortExcept(53));
         mstrs.append(1, ' ');
       }
@@ -133,7 +137,7 @@ static void emitDomain(const DNSName& domain, const vector<ComboAddress> *master
 }
 
 bool g_doJSONComments;
-static void emitRecord(const DNSName& zoneName, const DNSName &DNSqname, const string &qtype, const string &ocontent, int ttl, const string& comment="")
+static void emitRecord(const ZoneName& zoneName, const DNSName &DNSqname, const string &qtype, const string &ocontent, int ttl, const string& comment="")
 {
   string qname = DNSqname.toStringRootDot();
   string zname = zoneName.toStringRootDot();
@@ -203,11 +207,12 @@ try
     ::arg().setSwitch("gmysql","Output in format suitable for default gmysqlbackend")="no";
     ::arg().setSwitch("gsqlite","Output in format suitable for default gsqlitebackend")="no";
     ::arg().setSwitch("verbose","Verbose comments on operation")="no";
-    ::arg().setSwitch("slave","Keep BIND slaves as slaves. Only works with named-conf.")="no";
+    ::arg().setSwitch("secondary", "Keep BIND secondaries as secondaries. Only works with named-conf.") = "no";
     ::arg().setSwitch("json-comments","Parse json={} field for disabled & comments")="no";
     ::arg().setSwitch("transactions","If target SQL supports it, use transactions")="no";
     ::arg().setSwitch("on-error-resume-next","Continue after errors")="no";
     ::arg().setSwitch("filter-duplicate-soa","Filter second SOA in zone")="yes";
+    ::arg().setSwitch("delete-matching-domains", "Delete existing matching domains before emitting new domain")="no";
     ::arg().set("zone","Zonefile to parse")="";
     ::arg().set("zone-name","Specify an $ORIGIN in case it is not present")="";
     ::arg().set("named-conf","Bind 8/9 named.conf to parse")="";
@@ -292,11 +297,11 @@ try
           try {
             startNewTransaction();
 
-            emitDomain(domain.name, &(domain.masters));
+            emitDomain(domain.name, &(domain.primaries));
 
             ZoneParserTNG zpt(domain.filename, domain.name, BP.getDirectory());
-            zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
-            zpt.setMaxIncludes(::arg().asNum("max-include-depth"));
+            zpt.setMaxGenerateSteps(::arg().asNum<size_t>("max-generate-steps"));
+            zpt.setMaxIncludes(::arg().asNum<size_t>("max-include-depth"));
             DNSResourceRecord rr;
             bool seenSOA=false;
             string comment;
@@ -330,12 +335,12 @@ try
       cerr<<"\r100% done\033\133\113"<<endl;
     }
     else {
-      DNSName zonename;
+      ZoneName zonename;
       if(!::arg()["zone-name"].empty())
-        zonename = DNSName(::arg()["zone-name"]);
+        zonename = ZoneName(::arg()["zone-name"]);
 
       ZoneParserTNG zpt(zonefile, zonename);
-      zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));
+      zpt.setMaxGenerateSteps(::arg().asNum<size_t>("max-generate-steps"));
       DNSResourceRecord rr;
       startNewTransaction();
       string comment;

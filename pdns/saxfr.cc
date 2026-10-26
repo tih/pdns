@@ -1,6 +1,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include "arguments.hh"
 #include "base64.hh"
 #include "dnsparser.hh"
 #include "sstuff.hh"
@@ -14,8 +15,17 @@
 #include "dns_random.hh"
 #include "gss_context.hh"
 
+bool g_slogStructured{false};
+
+ArgvMap &arg()
+{
+  static ArgvMap theArg;
+  return theArg;
+}
+
 StatBag S;
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main(int argc, char** argv)
 try
 {
@@ -104,7 +114,7 @@ try
       input="";
       DNSPacketWriter pwtkey(packet, gssctx.getLabel(), QType::TKEY, QClass::ANY);
       TKEYRecordContent tkrc;
-      tkrc.d_algo = DNSName("gss-tsig.");
+      tkrc.d_algo = g_gsstsigdnsname;
       // coverity[store_truncates_time_t]
       tkrc.d_inception = time((time_t*)NULL);
       tkrc.d_expiration = tkrc.d_inception+15;
@@ -129,7 +139,7 @@ try
         throw PDNSException("tcp read failed");
 
       len=ntohs(len);
-      std::unique_ptr<char[]> creply(new char[len]);
+      auto creply = std::make_unique<char[]>(len);
       int n=0;
       int numread;
       while(n<len) {
@@ -144,9 +154,11 @@ try
          throw PDNSException(string("Remote server refused: ") + std::to_string(mdp.d_header.rcode));
        }
        for(MOADNSParser::answers_t::const_iterator i=mdp.d_answers.begin(); i!=mdp.d_answers.end(); ++i) {
-         if(i->first.d_type != QType::TKEY) continue;
+         if (i->d_type != QType::TKEY) {
+           continue;
+         }
          // recover TKEY record
-         tkrc = TKEYRecordContent(i->first.getContent()->getZoneRepresentation());
+         tkrc = TKEYRecordContent(i->getContent()->getZoneRepresentation());
          input = tkrc.d_key;
        }
     }
@@ -171,7 +183,7 @@ try
     trc.d_fudge = 300;
     trc.d_origID=ntohs(pw.getHeader()->id);
     trc.d_eRcode=0;
-    addTSIG(pw, trc, tsig_key, tsig_secret, "", false);
+    addTSIG(nullptr /* no structured logging */, pw, trc, tsig_key, tsig_secret, "", false);
   }
 
   len = htons(packet.size());
@@ -209,39 +221,39 @@ try
       throw PDNSException(string("Remote server refused: ") + std::to_string(mdp.d_header.rcode));
     }
     for(MOADNSParser::answers_t::const_iterator i=mdp.d_answers.begin(); i!=mdp.d_answers.end(); ++i) {
-      if (i->first.d_type == QType::TSIG) {
+      if (i->d_type == QType::TSIG) {
         string message;
         if (!tsig) {
           std::cerr<<"Unexpected TSIG signature in data"<<endl;
         }
-        trc = TSIGRecordContent(i->first.getContent()->getZoneRepresentation());
+        trc = TSIGRecordContent(i->getContent()->getZoneRepresentation());
         continue;
       }
-      if(i->first.d_type == QType::SOA)
+      if(i->d_type == QType::SOA)
       {
         ++soacount;
       }
-      else if (i->first.d_type == QType::NSEC3PARAM) {
-        ns3pr = NSEC3PARAMRecordContent(i->first.getContent()->getZoneRepresentation());
+      else if (i->d_type == QType::NSEC3PARAM) {
+        ns3pr = NSEC3PARAMRecordContent(i->getContent()->getZoneRepresentation());
         isNSEC3 = true;
       }
 
       ostringstream o;
-      o<<"\t"<<i->first.d_ttl<<"\tIN\t"<<DNSRecordContent::NumberToType(i->first.d_type);
+      o<<"\t"<<i->d_ttl<<"\tIN\t"<<DNSRecordContent::NumberToType(i->d_type);
       if(showdetails)
       {
-        o<<"\t"<<i->first.getContent()->getZoneRepresentation();
+        o<<"\t"<<i->getContent()->getZoneRepresentation();
       }
-      else if(i->first.d_type == QType::RRSIG)
+      else if(i->d_type == QType::RRSIG)
       {
-        string zoneRep = i->first.getContent()->getZoneRepresentation();
+        string zoneRep = i->getContent()->getZoneRepresentation();
         vector<string> parts;
         stringtok(parts, zoneRep);
         o<<"\t"<<parts[0]<<" "<<parts[1]<<" "<<parts[2]<<" "<<parts[3]<<" [expiry] [inception] [keytag] "<<parts[7]<<" ...";
       }
-      else if(i->first.d_type == QType::NSEC3)
+      else if(i->d_type == QType::NSEC3)
       {
-        string zoneRep = i->first.getContent()->getZoneRepresentation();
+        string zoneRep = i->getContent()->getZoneRepresentation();
         vector<string> parts;
         stringtok(parts, zoneRep);
         o<<"\t"<<parts[0]<<" ";
@@ -253,21 +265,21 @@ try
         for(vector<string>::iterator iter = parts.begin()+5; iter != parts.end(); ++iter)
           o<<" "<<*iter;
       }
-      else if(i->first.d_type == QType::DNSKEY)
+      else if(i->d_type == QType::DNSKEY)
       {
-        string zoneRep = i->first.getContent()->getZoneRepresentation();
+        string zoneRep = i->getContent()->getZoneRepresentation();
         vector<string> parts;
         stringtok(parts, zoneRep);
         o<<"\t"<<parts[0]<<" "<<parts[1]<<" "<<parts[2]<<" ...";
       }
       else
       {
-        o<<"\t"<<i->first.getContent()->getZoneRepresentation();
+        o<<"\t"<<i->getContent()->getZoneRepresentation();
       }
 
-      records.emplace_back(i->first.d_name, o.str());
+      records.emplace_back(i->d_name, o.str());
 
-      DNSName shorter(i->first.d_name);
+      DNSName shorter(i->d_name);
       do {
         labels.insert(shorter);
         if (shorter == DNSName(argv[3]))

@@ -4,8 +4,10 @@ Reference Guides
 These chapters contain extensive information on all functions and object available in dnsdist.
 
 .. toctree::
-  :maxdepth: 3
+  :maxdepth: 1
 
+  selectors
+  actions
   config
   constants
   comboaddress
@@ -18,12 +20,24 @@ These chapters contain extensive information on all functions and object availab
   dnscrypt
   dnsparser
   protobuf
+  ottrace
   dnstap
+  otlp
   carbon
   snmp
   tuning
   kvs
   logging
   web
+  rules-management
   svc
   custommetrics
+  xsk
+  yaml-settings
+  yaml-selectors
+  yaml-actions
+  yaml-response-actions
+  yaml-support-structures
+  features
+  ../glossary
+  ../manpages/index

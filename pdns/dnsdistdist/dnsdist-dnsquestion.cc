@@ -1,0 +1,102 @@
+/*
+ * This file is part of PowerDNS or dnsdist.
+ * Copyright -- PowerDNS.COM B.V. and its contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * In addition, for the avoidance of any doubt, permission is granted to
+ * link this program with OpenSSL and to (re)distribute the binaries
+ * produced as the result of such linking.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+#include "dnsdist.hh"
+#include "dnsdist-configuration.hh"
+#include "dnsdist-dnsparser.hh"
+
+std::string DNSQuestion::getTrailingData() const
+{
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* message = reinterpret_cast<const char*>(this->getData().data());
+  const uint16_t messageLen = getDNSPacketLength(message, this->getData().size());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  return {message + messageLen, this->getData().size() - messageLen};
+}
+
+bool DNSQuestion::setTrailingData(const std::string& tail)
+{
+  auto& mutableData = getMutableData();
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const char* message = reinterpret_cast<const char*>(mutableData.data());
+  const uint16_t messageLen = getDNSPacketLength(message, mutableData.size());
+  mutableData.resize(messageLen);
+  if (!tail.empty()) {
+    if (!hasRoomFor(tail.size())) {
+      return false;
+    }
+    mutableData.insert(mutableData.end(), tail.begin(), tail.end());
+  }
+  return true;
+}
+
+bool DNSQuestion::editHeader(const std::function<bool(dnsheader&)>& editFunction)
+{
+  if (data.size() < sizeof(dnsheader)) {
+    throw std::runtime_error("Trying to access the dnsheader of a too small (" + std::to_string(data.size()) + ") DNSQuestion buffer");
+  }
+  return dnsdist::PacketMangling::editDNSHeaderFromPacket(data, editFunction);
+}
+
+DNSQuestion::DNSQuestion(InternalQueryState& ids_, PacketBuffer& data_) :
+  data(data_), ids(ids_), ecsPrefixLength(ids.origRemote.sin4.sin_family == AF_INET ? dnsdist::configuration::getCurrentRuntimeConfiguration().d_ECSSourcePrefixV4 : dnsdist::configuration::getCurrentRuntimeConfiguration().d_ECSSourcePrefixV6), ecsOverride(dnsdist::configuration::getCurrentRuntimeConfiguration().d_ecsOverride)
+{
+}
+
+std::shared_ptr<const Logr::Logger> DNSQuestion::getThisLogger(std::shared_ptr<const Logr::Logger> parent) const
+{
+  if (d_logger) {
+    return d_logger;
+  }
+  return ids.getLogger(std::move(parent));
+}
+
+std::shared_ptr<const Logr::Logger> DNSResponse::getThisLogger(std::shared_ptr<const Logr::Logger> parent) const
+{
+  if (d_logger) {
+    return d_logger;
+  }
+  auto logger = DNSQuestion::getThisLogger(std::move(parent));
+  if (getData().size() >= sizeof(dnsheader)) {
+    const auto header = getHeader();
+    logger = logger->withValues("dns.response.rcode", Logging::Loggable(header->rcode));
+  }
+  if (d_downstream) {
+    logger = logger->withValues("backend.protocol", Logging::Loggable(d_downstream->getProtocol()), "backend.name", Logging::Loggable(d_downstream->getName()), "backend.address", Logging::Loggable(d_downstream->d_config.remote));
+  }
+  const double udiff = ids.queryRealTime.udiff();
+  logger = logger->withValues("dns.response.latency_us", Logging::Loggable(udiff), "dns.response.size", Logging::Loggable(getData().size()));
+  return logger;
+}
+
+std::shared_ptr<const Logr::Logger> DNSQuestion::getLogger(std::shared_ptr<const Logr::Logger> parent) const
+{
+  return getThisLogger(std::move(parent));
+}
+
+std::shared_ptr<const Logr::Logger> DNSQuestion::getLogger(std::shared_ptr<const Logr::Logger> parent)
+{
+  if (d_logger) {
+    return d_logger;
+  }
+  d_logger = getThisLogger(std::move(parent));
+  return d_logger;
+}

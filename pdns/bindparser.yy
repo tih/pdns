@@ -17,7 +17,7 @@ extern int yydebug;
 
 #define YYSTYPE char *
 
-extern "C" 
+extern "C"
 {
 	int yyparse(void);
 	int yylex(void);
@@ -35,7 +35,7 @@ const char *bind_directory;
 extern int linenumber;
 static void yyerror(const char *str)
 {
-  extern char *current_filename;	
+  extern char *current_filename;
   throw PDNSException("Error in bind configuration '"+string(current_filename)+"' on line "+std::to_string(linenumber)+": "+str);
 }
 
@@ -44,7 +44,7 @@ static BindParser *parent;
 BindDomainInfo s_di;
 
 void BindParser::parse(const string &fname)
-{	
+{
 	yydebug=0;
 	yyin=fopen(fname.c_str(),"r");
 	yyrestart(yyin);
@@ -105,6 +105,37 @@ void BindParser::commit(BindDomainInfo DI)
   d_zonedomains.push_back(DI);
 }
 
+void BindParser::lexer_error(const char* msg, const char* filename, int error)
+{
+  std::string text;
+
+  if (filename == nullptr) {
+    extern char *current_filename;
+    text = std::string("Lexer error in bind configuration '") + string(current_filename) + "' around line " + std::to_string(linenumber) + ": " + std::string(msg);
+  }
+  else {
+    if (error < 0) {
+      text = std::string(msg) + ": '" + std::string(filename) + "'";
+    }
+    else {
+      text = std::string("File '") + std::string(filename) + "': " + std::string(msg);
+      if (error != 0) {
+        text.append(": ").append(strerror(error));
+      }
+    }
+  }
+  throw PDNSException(text);
+}
+
+extern "C" {
+
+void lexer_error(const char* msg, const char* filename, int error)
+{
+  BindParser::lexer_error(msg, filename, error);
+}
+
+}
+
 %}
 
 %token AWORD QUOTEDWORD OBRACE EBRACE SEMICOLON ZONETOK FILETOK OPTIONSTOK
@@ -113,7 +144,7 @@ void BindParser::commit(BindDomainInfo DI)
 %%
 
 root_commands:
-	|	 
+	|
 	root_commands root_command SEMICOLON
   	;
 
@@ -126,21 +157,21 @@ commands:
 	;
 
 command:
-	terms 
+	terms
 	;
 
 global_zone_command:
 	ZONETOK quotedname zone_block
 	{
-		s_di.name=DNSName($2);
+		s_di.name=ZoneName($2);
 		free($2);
 		parent->commit(s_di);
 		s_di.clear();
 	}
-	|	
+	|
 	ZONETOK quotedname AWORD zone_block
 	{
-	        s_di.name=DNSName($2);
+	        s_di.name=ZoneName($2);
 		free($2);
 		parent->commit(s_di);
 		s_di.clear();
@@ -156,19 +187,26 @@ global_options_command:
 
 
 acl_command:
-	ACLTOK quotedname acl_block | 	ACLTOK filename acl_block
+	ACLTOK quotedname acl_block
+	{
+		free($2);
+	}
+	| 	ACLTOK filename acl_block
 	;
 
 acl_block: OBRACE acls EBRACE
 	;
-	
-acls: 
+
+acls:
 	|
 	acl SEMICOLON acls
 	;
 
 acl:
 	AWORD
+	{
+		free($1);
+	}
 	;
 
 options_commands:
@@ -189,10 +227,10 @@ options_directory_command: DIRECTORYTOK quotedname
 	}
 	;
 
-also_notify_command: ALSONOTIFYTOK OBRACE also_notify_list EBRACE 
+also_notify_command: ALSONOTIFYTOK OBRACE also_notify_list EBRACE
 	;
 
-also_notify_list: 
+also_notify_list:
 	|
 	also_notify SEMICOLON also_notify_list
 	;
@@ -208,10 +246,17 @@ terms: /* empty */
 	terms term
 	;
 
-term: AWORD | block | quotedname
+term: AWORD
+	{
+		free($1);
+	}
+	| block | quotedname
+	{
+		free($1);
+	}
 	;
-block: 
-	OBRACE commands EBRACE 
+block:
+	OBRACE commands EBRACE
 	;
 
 zone_block:
@@ -252,13 +297,13 @@ zone_also_notify: AWORD
         ;
 
 primaries: /* empty */
-	| 
+	|
 	primaries primary SEMICOLON
 	;
 
 primary: AWORD
 	{
-		s_di.masters.push_back(ComboAddress($1, 53));
+		s_di.primaries.push_back(ComboAddress($1, 53));
 		free($1);
 	}
 	;
@@ -266,7 +311,6 @@ primary: AWORD
 zone_file_command:
 	FILETOK quotedname
 	{
-	  //		printf("Found a filename: '%s'\n",$2);
 		s_di.filename=$2;
 		free($2);
 	}
@@ -289,4 +333,7 @@ quotedname:
 	;
 
 filename: AWORD
+	{
+		free($1);
+	}
 	;

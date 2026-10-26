@@ -7,6 +7,7 @@ Release: %{getenv:BUILDER_RPM_RELEASE}%{dist}
 Summary: A modern, advanced and high performance authoritative-only nameserver
 Group: System Environment/Daemons
 License: GPLv2
+Vendor: PowerDNS.COM BV
 URL: https://powerdns.com
 Source0: %{name}-%{getenv:BUILDER_VERSION}.tar.bz2
 
@@ -16,22 +17,18 @@ Requires(postun): systemd
 BuildRequires: systemd
 BuildRequires: systemd-units
 BuildRequires: systemd-devel
-
 BuildRequires: krb5-devel
 BuildRequires: p11-kit-devel
 BuildRequires: libcurl-devel
-%if 0%{?rhel} < 8 && 0%{?amzn} != 2023
-BuildRequires: boost169-devel
+# Remove && 0 when we move to C++20
+%if 0%{?rhel} == 8 && 0
+BuildRequires: boost1.78-devel
 %else
 BuildRequires: boost-devel
 %endif
 BuildRequires: bison
 BuildRequires: openssl-devel
-
-%if 0%{?amzn} != 2023
 BuildRequires: libsodium-devel
-%endif
-
 Requires(pre): shadow-utils
 
 %ifarch aarch64
@@ -62,11 +59,7 @@ This package contains the extra tools for %{name}
 Summary: MySQL backend for %{name}
 Group: System Environment/Daemons
 Requires: %{name}%{?_isa} = %{version}-%{release}
-%if 0%{?rhel} < 8 && 0%{?amzn} != 2023
-BuildRequires: mysql-devel
-%else
 BuildRequires: mariadb-connector-c-devel
-%endif
 %global backends %{backends} gmysql
 
 %description backend-mysql
@@ -144,9 +137,6 @@ Summary: Geo backend for %{name}
 Group: System Environment/Daemons
 Requires: %{name}%{?_isa} = %{version}-%{release}
 BuildRequires: yaml-cpp-devel
-%if 0%{?rhel} < 9 && 0%{?amzn} != 2023
-BuildRequires: geoip-devel
-%endif
 BuildRequires: libmaxminddb-devel
 %global backends %{backends} geoip
 
@@ -175,7 +165,6 @@ BuildRequires: tinycdb-devel
 %description backend-tinydns
 This package contains the TinyDNS backend for %{name}
 
-%if 0%{?amzn} != 2
 %package ixfrdist
 BuildRequires: yaml-cpp-devel
 Summary: A program to redistribute zones over AXFR and IXFR
@@ -183,18 +172,19 @@ Group: System Environment/Daemons
 
 %description ixfrdist
 This package contains the ixfrdist program.
-%endif
 
 %prep
 %autosetup -p1 -n %{name}-%{getenv:BUILDER_VERSION}
 
 %build
-export CPPFLAGS="-DLDAP_DEPRECATED"
-
-%if 0%{?rhel} < 8
-export CPPFLAGS=-I/usr/include/boost169
-export LDFLAGS=-L/usr/lib64/boost169
+# Remove && 0 when we move to C++20
+%if 0%{?rhel} == 8 && 0
+export BOOST_INCLUDEDIR=/usr/include/boost1.78
+export BOOST_LIBRARYDIR=/usr/lib64/boost1.78
+export CPPFLAGS=-I$BOOST_INCLUDEDIR
+export LDFLAGS=-L$BOOST_LIBRARYDIR
 %endif
+export CPPFLAGS="$CPPFLAGS -DLDAP_DEPRECATED"
 
 %configure \
   --enable-option-checking=fatal \
@@ -206,12 +196,8 @@ export LDFLAGS=-L/usr/lib64/boost169
   --with-lua=%{lua_implementation} \
   --with-dynmodules='%{backends}' \
   --enable-tools \
-%if 0%{?amzn} != 2023
   --with-libsodium \
-%endif
-%if 0%{?amzn} != 2
   --enable-ixfrdist \
-%endif
   --enable-unit-tests \
   --enable-lua-records \
   --enable-experimental-pkcs11 \
@@ -242,13 +228,7 @@ chmod 600 %{buildroot}%{_sysconfdir}/%{name}/pdns.conf
 %{__mv} %{buildroot}/%{_bindir}/zone2ldap %{buildroot}/%{_bindir}/pdns-zone2ldap
 %{__mv} %{buildroot}/%{_mandir}/man1/zone2ldap.1 %{buildroot}/%{_mandir}/man1/pdns-zone2ldap.1
 
-# The EL7 and 8 systemd actually supports %t, but its version number is older than that, so we do use seperate runtime dirs, but don't rely on RUNTIME_DIRECTORY
-%if 0%{?rhel} < 9
-sed -e 's!/pdns_server!& --socket-dir=%t/pdns!' -i %{buildroot}/%{_unitdir}/pdns.service
-%if 0%{?rhel} < 8
-sed -e 's!/pdns_server!& --socket-dir=%t/pdns-%i!' -e 's!RuntimeDirectory=pdns!&-%i!' -i %{buildroot}/%{_unitdir}/pdns@.service
-%endif
-%endif
+%{__install } -d %{buildroot}/%{_sharedstatedir}/%{name}
 
 %check
 PDNS_TEST_NO_IPV6=1 make %{?_smp_mflags} -C pdns check || (cat pdns/test-suite.log && false)
@@ -256,18 +236,20 @@ PDNS_TEST_NO_IPV6=1 make %{?_smp_mflags} -C pdns check || (cat pdns/test-suite.l
 %pre
 getent group pdns >/dev/null || groupadd -r pdns
 getent passwd pdns >/dev/null || \
-	useradd -r -g pdns -d / -s /sbin/nologin \
-	-c "PowerDNS user" pdns
+	useradd -r -g pdns -d /var/lib/pdns -s /sbin/nologin \
+	-c "PowerDNS Authoritative Server" pdns
+# Change home directory to /var/lib/pdns
+if [[ $(getent passwd pdns | cut -d: -f6) == "/" ]]; then
+    usermod -d /var/lib/pdns pdns
+fi
 exit 0
 
-%if 0%{?rhel} >= 7
 if [ "`stat -c '%U:%G' %{_sysconfdir}/%{name}`" = "root:root" ]; then
   chown -R root:pdns /etc/powerdns
   # Make sure that pdns can read it; the default used to be 0600
   chmod g+r /etc/powerdns/pdns.conf
 fi
 chown -R pdns:pdns /var/lib/powerdns || :
-%endif
 
 %post
 systemctl daemon-reload ||:
@@ -284,6 +266,7 @@ systemctl daemon-reload ||:
 %doc pdns/bind-dnssec.4.2.0_to_4.3.0_schema.sqlite3.sql pdns/bind-dnssec.schema.sqlite3.sql
 %config(noreplace) %{_sysconfdir}/%{name}/pdns.conf
 %dir %{_libdir}/%{name}/
+%dir %attr(-,pdns,pdns) %{_sharedstatedir}/%{name}
 %{_bindir}/pdns-zone2ldap
 %{_bindir}/pdns_control
 %{_bindir}/pdnsutil
@@ -399,7 +382,6 @@ systemctl daemon-reload ||:
 %files backend-tinydns
 %{_libdir}/%{name}/libtinydnsbackend.so
 
-%if 0%{?amzn} != 2
 %files ixfrdist
 %{_bindir}/ixfrdist
 %{_mandir}/man1/ixfrdist.1.gz
@@ -407,4 +389,3 @@ systemctl daemon-reload ||:
 %{_sysconfdir}/%{name}/ixfrdist.example.yml
 %{_unitdir}/ixfrdist.service
 %{_unitdir}/ixfrdist@.service
-%endif

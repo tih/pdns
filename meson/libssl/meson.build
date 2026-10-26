@@ -1,0 +1,31 @@
+opt_libssl = get_option('tls-libssl')
+opt_libssl_dir = get_option('tls-libssl-dir')
+
+
+if opt_libssl_dir != ''
+  dep_libssl = declare_dependency(
+    dependencies: [dep_libcrypto],
+    include_directories: [opt_libssl_dir / 'include'],
+    link_args: ['-L' + opt_libssl_dir / 'lib', '-lssl'],
+  )
+else
+  dep_libssl = dependency('libssl', required: opt_libssl)
+endif
+
+if dep_libssl.found()
+  funcs = [
+    'SSL_CTX_set_ciphersuites',
+    'SSL_CTX_set_num_tickets',
+    'SSL_CTX_set_keylog_callback',
+    'SSL_CTX_get0_privatekey',
+    'SSL_CTX_use_cert_and_key',
+  ]
+
+  foreach func: funcs
+    has = cxx.has_function(func, dependencies: dep_libssl)
+    conf.set('HAVE_' + func.to_upper(), has, description: 'Have OpenSSL libssl ' + func)
+  endforeach
+endif
+
+conf.set('HAVE_LIBSSL', dep_libssl.found(), description: 'OpenSSL libssl')
+summary('OpenSSL libssl', dep_libssl.found(), bool_yn: true, section: 'Crypto')

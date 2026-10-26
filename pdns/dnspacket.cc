@@ -23,10 +23,11 @@
 #include "config.h"
 #endif
 #include "utility.hh"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <sys/types.h>
-#include <iostream>  
+#include <iostream>
 #include <string>
 #include <boost/tokenizer.hpp>
 #include <boost/functional/hash.hpp>
@@ -55,10 +56,11 @@
 
 bool DNSPacket::s_doEDNSSubnetProcessing;
 bool DNSPacket::s_doEDNSCookieProcessing;
-string DNSPacket::s_EDNSCookieKey;
+LockGuarded<string> DNSPacket::s_EDNSCookieKey;
+LockGuarded<std::vector<std::string>> DNSPacket::s_OldEDNSCookieKeys;
 uint16_t DNSPacket::s_udpTruncationThreshold;
- 
-DNSPacket::DNSPacket(bool isQuery): d_isQuery(isQuery)
+
+DNSPacket::DNSPacket(Logr::log_t slog, bool isQuery): d_isQuery(isQuery), d_slog(slog)
 {
   memset(&d, 0, sizeof(d));
 }
@@ -112,9 +114,7 @@ ComboAddress DNSPacket::getRemote() const
 
 ComboAddress DNSPacket::getInnerRemote() const
 {
-  if (d_inner_remote)
-    return *d_inner_remote;
-  return d_remote;
+  return d_inner_remote ? *d_inner_remote : d_remote;
 }
 
 uint16_t DNSPacket::getRemotePort() const
@@ -132,7 +132,7 @@ void DNSPacket::setAnswer(bool b)
   if(b) {
     d_rawpacket.assign(12,(char)0);
     memset((void *)&d,0,sizeof(d));
-    
+
     d.qr=b;
   }
 }
@@ -184,25 +184,7 @@ void DNSPacket::addRecord(DNSZoneRecord&& rr)
     }
     d_dedup.insert(hash);
   }
-
   d_rrs.push_back(std::move(rr));
-}
-
-vector<DNSZoneRecord*> DNSPacket::getAPRecords()
-{
-  vector<DNSZoneRecord*> arrs;
-
-  for(auto & i : d_rrs)
-    {
-      if(i.dr.d_place!=DNSResourceRecord::ADDITIONAL &&
-         (i.dr.d_type==QType::MX ||
-          i.dr.d_type==QType::NS ||
-          i.dr.d_type==QType::SRV))
-        {
-          arrs.push_back(&i);
-        }
-    }
-  return arrs;
 }
 
 vector<DNSZoneRecord*> DNSPacket::getServiceRecords()
@@ -217,19 +199,6 @@ vector<DNSZoneRecord*> DNSPacket::getServiceRecords()
   }
   return arrs;
 }
-
-vector<DNSZoneRecord*> DNSPacket::getAnswerRecords()
-{
-  vector<DNSZoneRecord*> arrs;
-
-  for(auto & rr : d_rrs)
-    {
-      if(rr.dr.d_place!=DNSResourceRecord::ADDITIONAL)
-        arrs.push_back(&rr);
-    }
-  return arrs;
-}
-
 
 void DNSPacket::setCompress(bool compress)
 {
@@ -246,13 +215,11 @@ bool DNSPacket::couldBeCached() const
 
 unsigned int DNSPacket::getMinTTL()
 {
-  unsigned int minttl = UINT_MAX;
-  for(const DNSZoneRecord& rr :  d_rrs) {
-  if (rr.dr.d_ttl < minttl)
-      minttl = rr.dr.d_ttl;
+  auto iter = std::min_element(d_rrs.begin(), d_rrs.end());
+  if (iter != d_rrs.end()) {
+    return iter->dr.d_ttl;
   }
-
-  return minttl;
+  return UINT_MAX;
 }
 
 bool DNSPacket::isEmpty()
@@ -280,7 +247,7 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
     });
   static bool mustNotShuffle = ::arg().mustDo("no-shuffle");
 
-  if(!d_tcp && !mustNotShuffle) {
+  if(!d_xfr && !mustNotShuffle) {
     pdns::shuffle(d_rrs);
   }
   d_wrapped=true;
@@ -296,12 +263,12 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
   pw.getHeader()->id=d.id;
   pw.getHeader()->rd=d.rd;
   pw.getHeader()->tc=d.tc;
-  
+
   DNSPacketWriter::optvect_t opts;
 
   /* optsize is expected to hold an upper bound of data that will be
-     added after actual record data - i.e. OPT, TSIG, perhaps one day
-     XPF. Because of the way `pw` incrementally writes the packet, we
+     added after actual record data - i.e. OPT, TSIG.
+     Because of the way `pw` incrementally writes the packet, we
      cannot easily 'go back' and remove a few records. So, to prevent
      going over our maximum size, we keep our (potential) extra data
      in mind.
@@ -328,7 +295,7 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
   {
     // this is an upper bound
     optsize += EDNS_OPTION_CODE_SIZE + EDNS_OPTION_LENGTH_SIZE + 2 + 1 + 1; // code+len+family+src len+scope len
-    optsize += d_eso.source.isIPv4() ? 4 : 16;
+    optsize += d_eso.getSource().isIPv4() ? 4 : 16;
   }
 
   if (d_haveednscookie) {
@@ -337,8 +304,7 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
     }
   }
 
-  if (d_trc.d_algoName.countLabels())
-  {
+  if (d_trc.d_algoName.hasLabels()) {
     // TSIG is not OPT, but we count it in optsize anyway
     optsize += d_trc.d_algoName.wirelength() + 3 + 1 + 2; // algo + time + fudge + maclen
     optsize += EVP_MAX_MD_SIZE + 2 + 2 + 2 + 0; // mac + origid + ercode + otherdatalen + no other data
@@ -350,14 +316,13 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
     try {
       uint8_t maxScopeMask=0;
       for(pos=d_rrs.begin(); pos < d_rrs.end(); ++pos) {
-        // cerr<<"during wrapup, content=["<<pos->content<<"]"<<endl;
         maxScopeMask = max(maxScopeMask, pos->scopeMask);
-        
+
         pw.startRecord(pos->dr.d_name, pos->dr.d_type, pos->dr.d_ttl, pos->dr.d_class, pos->dr.d_place);
         pos->dr.getContent()->toPacket(pw);
         if(pw.size() + optsize > (d_tcp ? 65535 : getMaxReplyLen())) {
           if (throwsOnTruncation) {
-            throw PDNSException("attempt to write an oversized chunk");
+            throw PDNSException("attempt to write an oversized chunk, see https://docs.powerdns.com/authoritative/settings.html#workaround-11804");
           }
           pw.rollback();
           pw.truncate();
@@ -371,17 +336,25 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
       if(!d_rrs.empty()) pw.commit();
 
       noCommit:;
-      
+
       if(d_haveednssubnet) {
         EDNSSubnetOpts eso = d_eso;
-        eso.scope = Netmask(eso.source.getNetwork(), maxScopeMask);
-    
-        string opt = makeEDNSSubnetOptsString(eso);
+        if (!d_span.empty()) {
+          // if view handling set our span, we assume this is the best number
+          maxScopeMask = d_span.getBits();
+        }
+        else {
+          // use the scopeMask from the resolver, if it is greater - issue #5469
+          maxScopeMask = max(maxScopeMask, eso.getScopePrefixLength());
+        }
+        eso.setScopePrefixLength(maxScopeMask);
+
+        string opt = eso.makeOptString();
         opts.emplace_back(8, opt); // 'EDNS SUBNET'
       }
 
       if (d_haveednscookie && d_eco.isWellFormed()) {
-        d_eco.makeServerCookie(s_EDNSCookieKey, getInnerRemote());
+        d_eco.makeServerCookie(*s_EDNSCookieKey.read_only_lock(), getInnerRemote());
         opts.emplace_back(EDNSOptionCode::COOKIE, d_eco.makeOptString());
       }
 
@@ -392,14 +365,16 @@ void DNSPacket::wrapup(bool throwsOnTruncation)
       }
     }
     catch(std::exception& e) {
-      g_log<<Logger::Warning<<"Exception: "<<e.what()<<endl;
+      SLOG(g_log<<Logger::Warning<<"Exception: "<<e.what()<<endl,
+           d_slog->info(Logr::Warning, e.what()));
       throw;
     }
   }
-  
-  if(d_trc.d_algoName.countLabels())
-    addTSIG(pw, d_trc, d_tsigkeyname, d_tsigsecret, d_tsigprevious, d_tsigtimersonly);
-  
+
+  if(d_trc.d_algoName.hasLabels()) {
+    addTSIG(d_slog, pw, d_trc, d_tsigkeyname, d_tsigsecret, d_tsigprevious, d_tsigtimersonly);
+  }
+
   d_rawpacket.assign((char*)&packet[0], packet.size()); // XXX we could do this natively on a vector..
 
   // copy RR counts so they can be read later
@@ -425,7 +400,7 @@ void DNSPacket::setQuestion(int op, const DNSName &qd, int newqtype)
 /** convenience function for creating a reply packet from a question packet. */
 std::unique_ptr<DNSPacket> DNSPacket::replyPacket() const
 {
-  auto r=make_unique<DNSPacket>(false);
+  auto r=make_unique<DNSPacket>(d_slog, false);
   r->setSocket(d_socket);
   r->d_anyLocal=d_anyLocal;
   r->setRemote(&d_remote);
@@ -433,7 +408,7 @@ std::unique_ptr<DNSPacket> DNSPacket::replyPacket() const
   r->setAnswer(true);  // this implies the allocation of the header
   r->setA(true); // and we are authoritative
   r->setRA(false); // no recursion available
-  r->setRD(d.rd); // if you wanted to recurse, answer will say you wanted it 
+  r->setRD(d.rd); // if you wanted to recurse, answer will say you wanted it
   r->setID(d.id);
   r->setOpcode(d.opcode);
 
@@ -453,8 +428,9 @@ std::unique_ptr<DNSPacket> DNSPacket::replyPacket() const
   r->d_haveednscookie = d_haveednscookie;
   r->d_ednsversion = 0;
   r->d_ednsrcode = 0;
+  r->d_xfr = d_xfr;
 
-  if(d_tsigkeyname.countLabels()) {
+  if(d_tsigkeyname.hasLabels()) {
     r->d_tsigkeyname = d_tsigkeyname;
     r->d_tsigprevious = d_tsigprevious;
     r->d_trc = d_trc;
@@ -468,7 +444,7 @@ std::unique_ptr<DNSPacket> DNSPacket::replyPacket() const
 void DNSPacket::spoofQuestion(const DNSPacket& qd)
 {
   d_wrapped=true; // if we do this, don't later on wrapup
-  
+
   int labellen;
   string::size_type i=sizeof(d);
 
@@ -483,10 +459,11 @@ void DNSPacket::spoofQuestion(const DNSPacket& qd)
 
 int DNSPacket::noparse(const char *mesg, size_t length)
 {
-  d_rawpacket.assign(mesg,length); 
-  if(length < 12) { 
-    g_log << Logger::Debug << "Ignoring packet: too short ("<<length<<" < 12) from "
-      << getRemoteStringWithPort();
+  d_rawpacket.assign(mesg,length);
+  if(length < 12) {
+    SLOG(g_log << Logger::Debug << "Ignoring packet: too short ("<<length<<" < 12) from "
+           << getRemoteStringWithPort(),
+         d_slog->info(Logr::Debug, "Ignoring short packet (len < 12)", "length", Logging::Loggable(length), "from", Logging::Loggable(getRemoteStringWithPort())));
     return -1;
   }
   d_wantsnsid=false;
@@ -507,60 +484,98 @@ void DNSPacket::setTSIGDetails(const TSIGRecordContent& tr, const DNSName& keyna
 
 bool DNSPacket::getTSIGDetails(TSIGRecordContent* trc, DNSName* keyname, uint16_t* tsigPosOut) const
 {
-  MOADNSParser mdp(d_isQuery, d_rawpacket);
-  uint16_t tsigPos = mdp.getTSIGPos();
-  if(!tsigPos)
-    return false;
-
-  bool gotit=false;
-  for(const auto & answer : mdp.d_answers) {
-    if(answer.first.d_type == QType::TSIG && answer.first.d_class == QType::ANY) {
-      // cast can fail, f.e. if d_content is an UnknownRecordContent.
-      auto content = getRR<TSIGRecordContent>(answer.first);
-      if (!content) {
-        g_log<<Logger::Error<<"TSIG record has no or invalid content (invalid packet)"<<endl;
-        return false;
-      }
-      *trc = *content;
-      *keyname = answer.first.d_name;
-      gotit=true;
+  try {
+    MOADNSParser mdp(d_isQuery, d_rawpacket);
+    uint16_t tsigPos = mdp.getTSIGPos();
+    if (tsigPos == 0) {
+      return false;
     }
+
+    bool gotit=false;
+    for(const auto & answer : mdp.d_answers) {
+      if(answer.d_type == QType::TSIG && answer.d_class == QType::ANY) {
+        // cast can fail, f.e. if d_content is an UnknownRecordContent.
+        auto content = getRR<TSIGRecordContent>(answer);
+        if (!content) {
+          SLOG(g_log<<Logger::Error<<"TSIG record has no or invalid content (invalid packet)"<<endl,
+               d_slog->info(Logr::Error, "TSIG record has no or invalid content (invalid packet)"));
+          return false;
+        }
+        *trc = *content;
+        *keyname = answer.d_name;
+        gotit=true;
+      }
+    }
+    if(!gotit)
+      return false;
+
+    if (tsigPosOut != nullptr) {
+      *tsigPosOut = tsigPos;
+    }
+
+    return true;
   }
-  if(!gotit)
+  catch (const MOADNSException&) {
+    // If execution has reached this routine, we can reasonably assume that
+    // the packet is good enough to pass the sanity checks of
+    // MOADNSParser::init(). But just in case it doesn't, better handle this.
     return false;
-
-  if (tsigPosOut) {
-    *tsigPosOut = tsigPos;
   }
+}
 
-  return true;
+bool DNSPacket::validateTSIG(const TSIGTriplet& tsigTriplet, const TSIGRecordContent& tsigContent, const std::string& previousMAC, const std::string& theirMAC, bool timersOnly) const
+{
+  try {
+    MOADNSParser mdp(d_isQuery, d_rawpacket);
+    uint16_t tsigPos = mdp.getTSIGPos();
+    if (tsigPos == 0) {
+      return false;
+    }
+
+    return ::validateTSIG(d_slog, d_rawpacket, tsigPos, tsigTriplet, tsigContent, previousMAC, theirMAC, timersOnly);
+  }
+  catch (const MOADNSException&) {
+    // If execution has reached this routine, we can reasonably assume that
+    // the packet is good enough to pass the sanity checks of
+    // MOADNSParser::init(). But just in case it doesn't, better handle this.
+    return false;
+  }
 }
 
 bool DNSPacket::getTKEYRecord(TKEYRecordContent *tr, DNSName *keyname) const
 {
-  MOADNSParser mdp(d_isQuery, d_rawpacket);
-  bool gotit=false;
+  try {
+    MOADNSParser mdp(d_isQuery, d_rawpacket);
+    bool gotit=false;
 
-  for(const auto & answer : mdp.d_answers) {
-    if (gotit) {
-      g_log<<Logger::Error<<"More than one TKEY record found in query"<<endl;
-      return false;
-    }
-
-    if(answer.first.d_type == QType::TKEY) {
-      // cast can fail, f.e. if d_content is an UnknownRecordContent.
-      auto content = getRR<TKEYRecordContent>(answer.first);
-      if (!content) {
-        g_log<<Logger::Error<<"TKEY record has no or invalid content (invalid packet)"<<endl;
-        return false;
+    for(const auto & answer : mdp.d_answers) {
+      if(answer.d_type == QType::TKEY) {
+        if (gotit) {
+          SLOG(g_log<<Logger::Error<<"More than one TKEY record found in query"<<endl,
+               d_slog->info(Logr::Error, "More than one TKEY record found in query"));
+          return false;
+        }
+        // cast can fail, f.e. if d_content is an UnknownRecordContent.
+        auto content = getRR<TKEYRecordContent>(answer);
+        if (!content) {
+          SLOG(g_log<<Logger::Error<<"TKEY record has no or invalid content (invalid packet)"<<endl,
+               d_slog->info(Logr::Error, "TKEY record has no or invalid content (invalid packet)"));
+          return false;
+        }
+        *tr = *content;
+        *keyname = answer.d_name;
+        gotit=true;
       }
-      *tr = *content;
-      *keyname = answer.first.d_name;
-      gotit=true;
     }
-  }
 
-  return gotit;
+    return gotit;
+  }
+  catch (const MOADNSException&) {
+    // If execution has reached this routine, we can reasonably assume that
+    // the packet is good enough to pass the sanity checks of
+    // MOADNSParser::init(). But just in case it doesn't, better handle this.
+    return false;
+  }
 }
 
 /** This function takes data from the network, possibly received with recvfrom, and parses
@@ -570,11 +585,12 @@ bool DNSPacket::getTKEYRecord(TKEYRecordContent *tr, DNSName *keyname) const
 int DNSPacket::parse(const char *mesg, size_t length)
 try
 {
-  d_rawpacket.assign(mesg,length); 
+  d_rawpacket.assign(mesg,length);
   d_wrapped=true;
-  if(length < 12) { 
-    g_log << Logger::Debug << "Ignoring packet: too short from "
-      << getRemoteString() << endl;
+  if(length < 12) {
+    SLOG(g_log << Logger::Debug << "Ignoring packet: too short from "
+           << getRemoteString() << endl,
+         d_slog->info(Logr::Debug, "Ignoring short packet (len < 12)", /* "length", Logging::Loggable(length), */ "from", Logging::Loggable(getRemoteStringWithPort())));
     return -1;
   }
 
@@ -598,24 +614,24 @@ try
     */
     d_ednsRawPacketSizeLimit=edo.d_packetsize;
     d_maxreplylen=std::min(std::max(static_cast<uint16_t>(512), edo.d_packetsize), s_udpTruncationThreshold);
-//    cerr<<edo.d_extFlags<<endl;
-    if(edo.d_extFlags & EDNSOpts::DNSSECOK)
+    if((edo.d_extFlags & EDNSOpts::DNSSECOK) != 0) {
       d_dnssecOk=true;
+    }
 
     for(const auto & option : edo.d_options) {
       if(option.first == EDNSOptionCode::NSID) {
         d_wantsnsid=true;
       }
       else if(s_doEDNSSubnetProcessing && (option.first == EDNSOptionCode::ECS)) { // 'EDNS SUBNET'
-        if(getEDNSSubnetOptsFromString(option.second, &d_eso)) {
+        if (EDNSSubnetOpts::getFromString(option.second, &d_eso)) {
           //cerr<<"Parsed, source: "<<d_eso.source.toString()<<", scope: "<<d_eso.scope.toString()<<", family = "<<d_eso.scope.getNetwork().sin4.sin_family<<endl;
           d_haveednssubnet=true;
-        } 
+        }
       }
       else if (s_doEDNSCookieProcessing && option.first == EDNSOptionCode::COOKIE) {
         d_haveednscookie = true;
         d_eco.makeFromString(option.second);
-        d_ednscookievalid = d_eco.isValid(s_EDNSCookieKey, d_remote);
+        d_ednscookievalid = d_eco.isValid(*s_EDNSCookieKey.read_only_lock(), getInnerRemote(), *s_OldEDNSCookieKeys.read_only_lock());
       }
       else {
         // cerr<<"Have an option #"<<iter->first<<": "<<makeHexDump(iter->second)<<endl;
@@ -636,11 +652,12 @@ try
 
   if(!ntohs(d.qdcount)) {
     if(!d_tcp) {
-      g_log << Logger::Debug << "No question section in packet from " << getRemoteString() <<", RCode="<<RCode::to_s(d.rcode)<<endl;
+      SLOG(g_log << Logger::Debug << "No question section in packet from " << getRemoteString() <<", RCode="<<RCode::to_s(d.rcode)<<endl,
+           d_slog->info(Logr::Debug, "No question section in packet", "from", Logging::Loggable(getRemoteString()), "rcode", Logging::Loggable(RCode::to_s(d.rcode))));
       return -1;
     }
   }
-  
+
   qtype=mdp.d_qtype;
   qclass=mdp.d_qclass;
 
@@ -649,6 +666,8 @@ try
   return 0;
 }
 catch(std::exception& e) {
+  SLOG(g_log << Logger::Debug << "Parse error in packet from " << getRemoteString() << ": " << e.what() << endl,
+       d_slog->error(Logr::Debug, e.what(), "Parse error in packet", "from", Logging::Loggable(getRemoteString())));
   return -1;
 }
 
@@ -663,15 +682,10 @@ void DNSPacket::setMaxReplyLen(int bytes)
 }
 
 //! Use this to set where this packet was received from or should be sent to
-void DNSPacket::setRemote(const ComboAddress *outer, std::optional<ComboAddress> inner)
+void DNSPacket::setRemote(const ComboAddress *outer)
 {
   d_remote=*outer;
-  if (inner) {
-    d_inner_remote=*inner;
-  }
-  else {
-    d_inner_remote.reset();
-  }
+  d_inner_remote.reset();
 }
 
 bool DNSPacket::hasEDNSSubnet() const
@@ -705,58 +719,24 @@ bool DNSPacket::hasValidEDNSCookie() const
   return d_ednscookievalid;
 }
 
-Netmask DNSPacket::getRealRemote() const
-{
-  if(d_haveednssubnet)
-    return d_eso.source;
-  return Netmask(getInnerRemote());
+void DNSPacket::setRealRemote(const Netmask& netmask) {
+  d_eso.setSource(netmask);
+  d_haveednssubnet = true;
 }
 
-void DNSPacket::setSocket(Utility::sock_t sock)
+Netmask DNSPacket::getRealRemote() const
 {
-  d_socket=sock;
+  return d_haveednssubnet ? d_eso.getSource() : Netmask{getInnerRemote()};
+}
+
+void DNSPacket::setSocket(int sock)
+{
+  d_socket = sock;
 }
 
 void DNSPacket::commitD()
 {
   d_rawpacket.replace(0,12,(char *)&d,12); // copy in d
-}
-
-bool DNSPacket::checkForCorrectTSIG(UeberBackend* B, DNSName* keyname, string* secret, TSIGRecordContent* trc) const
-{
-  uint16_t tsigPos;
-
-  if (!this->getTSIGDetails(trc, keyname, &tsigPos)) {
-    return false;
-  }
-
-  TSIGTriplet tt;
-  tt.name = *keyname;
-  tt.algo = trc->d_algoName;
-  if (tt.algo == DNSName("hmac-md5.sig-alg.reg.int"))
-    tt.algo = DNSName("hmac-md5");
-
-  if (tt.algo != DNSName("gss-tsig")) {
-    string secret64;
-    if(!B->getTSIGKey(*keyname, tt.algo, secret64)) {
-      g_log << Logger::Error << "Packet for domain '" << this->qdomain << "' denied: can't find TSIG key with name '" << *keyname << "' and algorithm '" << tt.algo << "'" << endl;
-      return false;
-    }
-    B64Decode(secret64, *secret);
-    tt.secret = *secret;
-  }
-
-  bool result;
-
-  try {
-    result = validateTSIG(d_rawpacket, tsigPos, tt, *trc, "", trc->d_mac, false);
-  }
-  catch(const std::runtime_error& err) {
-    g_log<<Logger::Error<<"Packet for '"<<this->qdomain<<"' denied: "<<err.what()<<endl;
-    return false;
-  }
-
-  return result;
 }
 
 const DNSName& DNSPacket::getTSIGKeyname() const {
@@ -774,4 +754,3 @@ void DNSPacket::cleanupGSS(int rcode)
   }
 }
 #endif
-

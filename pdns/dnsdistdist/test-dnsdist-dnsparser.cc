@@ -19,7 +19,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #include <boost/test/unit_test.hpp>
@@ -114,14 +117,14 @@ BOOST_AUTO_TEST_CASE(test_Response)
     BOOST_CHECK_EQUAL(mdp.d_header.arcount, 2U);
 
     BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 3U);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_type, static_cast<uint16_t>(QType::A));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_name, newTarget);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_type, static_cast<uint16_t>(QType::AAAA));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_name, newTarget);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_type, static_cast<uint16_t>(QType::OPT));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_name, g_rootdnsname);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_type, static_cast<uint16_t>(QType::A));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_name, newTarget);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_type, static_cast<uint16_t>(QType::AAAA));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_name, newTarget);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_type, static_cast<uint16_t>(QType::OPT));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_name, g_rootdnsname);
   }
 
   {
@@ -153,14 +156,14 @@ BOOST_AUTO_TEST_CASE(test_Response)
     BOOST_CHECK_EQUAL(mdp.d_header.arcount, 2U);
 
     BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 3U);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_type, static_cast<uint16_t>(QType::A));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_name, newTarget);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_type, static_cast<uint16_t>(QType::AAAA));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_name, notTheTarget);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_type, static_cast<uint16_t>(QType::OPT));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_name, g_rootdnsname);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_type, static_cast<uint16_t>(QType::A));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_name, newTarget);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_type, static_cast<uint16_t>(QType::AAAA));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_name, notTheTarget);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_type, static_cast<uint16_t>(QType::OPT));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_name, g_rootdnsname);
   }
 
   {
@@ -191,18 +194,18 @@ BOOST_AUTO_TEST_CASE(test_Response)
     BOOST_CHECK_EQUAL(mdp.d_header.arcount, 1U);
 
     BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 3U);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_type, static_cast<uint16_t>(QType::CNAME));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_name, newTarget);
-    auto content = getRR<UnknownRecordContent>(mdp.d_answers.at(0).first);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_type, static_cast<uint16_t>(QType::CNAME));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_name, newTarget);
+    auto content = getRR<UnknownRecordContent>(mdp.d_answers.at(0));
     BOOST_REQUIRE(content != nullptr);
     BOOST_CHECK_EQUAL(content->getRawContent().size(), notTheTarget.getStorage().size());
 
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_type, static_cast<uint16_t>(QType::A));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).first.d_name, notTheTarget);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_type, static_cast<uint16_t>(QType::OPT));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).first.d_name, g_rootdnsname);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_type, static_cast<uint16_t>(QType::A));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(1).d_name, notTheTarget);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_type, static_cast<uint16_t>(QType::OPT));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(2).d_name, g_rootdnsname);
   }
 
   {
@@ -256,11 +259,11 @@ BOOST_AUTO_TEST_CASE(test_Response)
 
     BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 7U);
     for (const auto& answer : mdp.d_answers) {
-      if (answer.first.d_type == QType::OPT) {
+      if (answer.d_type == QType::OPT) {
         continue;
       }
-      BOOST_CHECK_EQUAL(answer.first.d_class, QClass::IN);
-      BOOST_CHECK_EQUAL(answer.first.d_name, newTarget);
+      BOOST_CHECK_EQUAL(answer.d_class, QClass::IN);
+      BOOST_CHECK_EQUAL(answer.d_name, newTarget);
     }
   }
 
@@ -319,11 +322,11 @@ BOOST_AUTO_TEST_CASE(test_Response)
 
       BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 8U);
       for (const auto& answer : mdp.d_answers) {
-        if (answer.first.d_type == QType::OPT) {
+        if (answer.d_type == QType::OPT) {
           continue;
         }
-        BOOST_CHECK_EQUAL(answer.first.d_class, QClass::IN);
-        BOOST_CHECK_EQUAL(answer.first.d_name, target);
+        BOOST_CHECK_EQUAL(answer.d_class, QClass::IN);
+        BOOST_CHECK_EQUAL(answer.d_name, target);
       }
     }
 
@@ -341,11 +344,11 @@ BOOST_AUTO_TEST_CASE(test_Response)
 
       BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 8U);
       for (const auto& answer : mdp.d_answers) {
-        if (answer.first.d_type == QType::OPT) {
+        if (answer.d_type == QType::OPT) {
           continue;
         }
-        BOOST_CHECK_EQUAL(answer.first.d_class, QClass::IN);
-        BOOST_CHECK_EQUAL(answer.first.d_name, newTarget);
+        BOOST_CHECK_EQUAL(answer.d_class, QClass::IN);
+        BOOST_CHECK_EQUAL(answer.d_name, newTarget);
       }
     }
   }
@@ -374,15 +377,16 @@ BOOST_AUTO_TEST_CASE(test_Response)
     BOOST_CHECK_EQUAL(mdp.d_header.arcount, 1U);
 
     BOOST_REQUIRE_EQUAL(mdp.d_answers.size(), 2U);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_type, static_cast<uint16_t>(QType::ALIAS));
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_class, QClass::IN);
-    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).first.d_name, target);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_type, static_cast<uint16_t>(QType::ALIAS));
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_class, QClass::IN);
+    BOOST_CHECK_EQUAL(mdp.d_answers.at(0).d_name, target);
   }
 }
 
 BOOST_AUTO_TEST_CASE(test_Overlay)
 {
   const DNSName target("powerdns.com.");
+  const DNSName notTheTarget("not-powerdns.com.");
 
   {
     PacketBuffer response;
@@ -451,11 +455,80 @@ BOOST_AUTO_TEST_CASE(test_Overlay)
 
       BOOST_CHECK_EQUAL(record.d_name, target);
       BOOST_CHECK_EQUAL(record.d_class, QClass::IN);
-      BOOST_CHECK_EQUAL(record.d_ttl, 7200);
+      BOOST_CHECK_EQUAL(record.d_ttl, 7200U);
       BOOST_CHECK_EQUAL(record.d_place, 1U);
       BOOST_CHECK_GE(record.d_contentOffset, lastOffset);
       lastOffset = record.d_contentOffset + record.d_contentLength;
     }
+  }
+
+  {
+    /* response with A and AAAA records, using parsers */
+    PacketBuffer response;
+    GenericDNSPacketWriter<PacketBuffer> pwR(response, target, QType::A, QClass::IN, 0);
+    pwR.getHeader()->qr = 1;
+    pwR.getHeader()->rd = 1;
+    pwR.getHeader()->ra = 1;
+    pwR.getHeader()->id = htons(42);
+    pwR.startRecord(target, QType::A, 7200, QClass::IN, DNSResourceRecord::ANSWER);
+    ComboAddress addrV4("192.0.2.1");
+    pwR.xfrCAWithoutPort(4, addrV4);
+    pwR.commit();
+    pwR.startRecord(target, QType::AAAA, 7200, QClass::IN, DNSResourceRecord::ADDITIONAL);
+    ComboAddress addrV6("2001:db8::1");
+    pwR.xfrCAWithoutPort(6, addrV6);
+    pwR.commit();
+    pwR.addOpt(4096, 0, 0);
+    pwR.commit();
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): this is the API we have
+    auto packet = std::string_view(reinterpret_cast<const char*>(response.data()), response.size());
+    dnsdist::DNSPacketOverlay overlay(packet);
+    BOOST_CHECK_EQUAL(overlay.d_records[0].d_type, QType::A);
+    BOOST_CHECK(*dnsdist::RecordParsers::parseARecord(packet, overlay.d_records[0]) == addrV4);
+    BOOST_CHECK(*dnsdist::RecordParsers::parseAddressRecord(packet, overlay.d_records[0]) == addrV4);
+
+    BOOST_CHECK_EQUAL(overlay.d_records[1].d_type, QType::AAAA);
+    BOOST_CHECK(*dnsdist::RecordParsers::parseAAAARecord(packet, overlay.d_records[1]) == addrV6);
+    BOOST_CHECK(*dnsdist::RecordParsers::parseAddressRecord(packet, overlay.d_records[1]) == addrV6);
+  }
+
+  {
+    /* response with CNAME record, using parser */
+    PacketBuffer response;
+    GenericDNSPacketWriter<PacketBuffer> pwR(response, target, QType::A, QClass::IN, 0);
+    pwR.getHeader()->qr = 1;
+    pwR.getHeader()->rd = 1;
+    pwR.getHeader()->ra = 1;
+    pwR.getHeader()->id = htons(42);
+    pwR.startRecord(target, QType::CNAME, 7200, QClass::IN, DNSResourceRecord::ANSWER);
+    pwR.xfrName(notTheTarget);
+    pwR.commit();
+    pwR.addOpt(4096, 0, 0);
+    pwR.commit();
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): this is the API we have
+    auto packet = std::string_view(reinterpret_cast<const char*>(response.data()), response.size());
+    dnsdist::DNSPacketOverlay overlay(packet);
+    BOOST_CHECK_EQUAL(overlay.d_records[0].d_type, QType::CNAME);
+    BOOST_CHECK_EQUAL(*dnsdist::RecordParsers::parseCNAMERecord(packet, overlay.d_records[0]), notTheTarget);
+  }
+
+  {
+    /* response with overflowing CNAME record */
+    PacketBuffer response;
+    GenericDNSPacketWriter<PacketBuffer> pwR(response, target, QType::A, QClass::IN, 0);
+    pwR.getHeader()->qr = 1;
+    pwR.getHeader()->rd = 1;
+    pwR.getHeader()->ra = 1;
+    pwR.getHeader()->id = htons(42);
+    pwR.startRecord(target, QType::CNAME, 7200, QClass::IN, DNSResourceRecord::ANSWER);
+    pwR.xfrName(notTheTarget);
+    pwR.commit();
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): this is the API we have
+    auto packet = std::string_view(reinterpret_cast<const char*>(response.data()), response.size() - 1U);
+    BOOST_CHECK_THROW(dnsdist::DNSPacketOverlay overlay(packet), std::runtime_error);
   }
 }
 

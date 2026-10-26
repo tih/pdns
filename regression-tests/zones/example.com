@@ -81,6 +81,10 @@ italy			IN	NS	italy-ns2
 italy-ns1		IN	A	192.168.5.1
 italy-ns2		IN	A	192.168.5.2
 ;
+; CNAME on wildcard mixed with another type
+*.mixed-wc			IN	A	192.168.1.1
+*.mixed-wc			IN	CNAME	outpost
+;
 mail			IN	MX	25	smtp1
 smtp1			IN	CNAME	outpost
 ;
@@ -20218,8 +20222,13 @@ foo1.svcb IN A 192.0.2.2 ; Should show up in additional
 
 bar.svcb IN SVCB 1 . alpn=h2
 bar.svcb IN SVCB 3 . alpn=h3 port=1500
+bar.svcb IN SVCB 4 . alpn=h3 port="1501"
+bar.svcb IN SVCB 5 . port="8004" no-default-alpn dohpath=/dns-query{?dns} ohttp tls-supported-groups=29,23
+bar.svcb IN SVCB 6 . key00997="quoted" key0998=foo key999=bar
 bar.svcb IN AAAA 2001:db8::3:1
 bar.svcb IN AAAA 2001:db8::3:4
 bar.svcb IN A 192.0.2.1
 
 baz.svcb IN SVCB 0 foo1.svcb.example.net. ; AliasMode - should not trigger additional processing, the target is in another zone
+
+test.wallet	 IN WALLET "currency-identifier" "wallet-identifier"

@@ -1,11 +1,11 @@
+{% if os_version == '10' %}
+FROM quay.io/rockylinux/rockylinux:{{ os_version }}
+
+RUN yum install -y epel-release bind-utils
+{% else %}
 FROM {{ os_image }}:{{ os_version }}
 
-{% if os_version == '8' or os_version == '9' %}
-RUN yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ os_version }}.noarch.rpm bind-utils
-{% endif %}
-
-{% if os_version == '7' %}
-RUN yum install -y yum-plugin-priorities
+RUN yum install -y oracle-epel-release-el{{ os_version }} bind-utils
 {% endif %}
 
 {% if release == 'dnsdist-15' and os_version == '8' %}

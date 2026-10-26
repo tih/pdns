@@ -25,7 +25,7 @@ Replay all recursion-desired DNS questions to a specified IP address.
 Track all outgoing questions, remap id to one of ours.
 Also track all recorded answers, and map them to that same id, the 'expectation'.
 
-When we see a question, parse it, give it a QuestionIdentifier, and and an id from the free-id list.
+When we see a question, parse it, give it a QuestionIdentifier, and an id from the free-id list.
 
 When we see an answer in the tcpdump, parse it, make QI, and add it to the original QI
    and check
@@ -83,7 +83,8 @@ What to do with timeouts. We keep around at most 65536 outstanding answers.
 
 #include "namespaces.hh"
 using namespace ::boost::multi_index;
-#include "namespaces.hh"
+
+bool g_slogStructured{false};
 
 StatBag S;
 bool g_quiet=true;
@@ -241,9 +242,11 @@ static void WeOrigSlowQueriesDelta(int& weOutstanding, int& origOutstanding, int
 
 static void compactAnswerSet(MOADNSParser::answers_t orig, set<DNSRecord>& compacted)
 {
-  for(MOADNSParser::answers_t::const_iterator i=orig.begin(); i != orig.end(); ++i)
-    if(i->first.d_place==DNSResourceRecord::ANSWER)
-      compacted.insert(i->first);
+  for (const auto& rec : orig) {
+    if (rec.d_place == DNSResourceRecord::ANSWER) {
+      compacted.insert(rec);
+    }
+  }
 }
 
 static bool isRcodeOk(int rcode)
@@ -260,11 +263,13 @@ static bool isRootReferral(const MOADNSParser::answers_t& answers)
 
   bool ok=true;
   for(MOADNSParser::answers_t::const_iterator iter = answers.begin(); iter != answers.end(); ++iter) {
-    //    cerr<<(int)iter->first.d_place<<", "<<iter->first.d_name<<" "<<iter->first.d_type<<", # "<<answers.size()<<endl;
-    if(iter->first.d_place!=2)
-      ok=false;
-    if(!iter->first.d_name.isRoot() || iter->first.d_type!=QType::NS)
-      ok=false;
+    //    cerr<<(int)iter->d_place<<", "<<iter->d_name<<" "<<iter->d_type<<", # "<<answers.size()<<endl;
+    if (iter->d_place != 2) {
+      ok = false;
+    }
+    if (!iter->d_name.isRoot() || iter->d_type != QType::NS) {
+      ok = false;
+    }
   }
   return ok;
 }
@@ -387,17 +392,18 @@ std::unique_ptr<Socket> s_socket = nullptr;
 static void receiveFromReference()
 try
 {
-  string packet;
+  PacketBuffer packet;
   ComboAddress remote;
-  int res=waitForData(s_socket->getHandle(), g_timeoutMsec/1000, 1000*(g_timeoutMsec%1000));
+  int res=waitForData(s_socket->getHandle(), g_timeoutMsec/1000, g_timeoutMsec%1000);
 
   if(res < 0 || res==0)
     return;
 
-  while(s_socket->recvFromAsync(packet)) {
+  while (s_socket->recvFromAsync(packet, remote)) {
     try {
       s_weanswers++;
-      MOADNSParser mdp(false, packet.c_str(), packet.length());
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      MOADNSParser mdp(false, reinterpret_cast<const char*>(packet.data()), packet.size());
       if(!mdp.d_header.qr) {
         cout<<"Received a question from our reference nameserver!"<<endl;
         continue;
@@ -426,11 +432,7 @@ try
     {
       s_wednserrors++;
     }
-    catch(std::out_of_range &e)
-    {
-      s_wednserrors++;
-    }
-    catch(std::exception& e)
+    catch(std::exception&)
     {
       s_wednserrors++;
     }
@@ -553,14 +555,15 @@ static void addECSOption(char* packet, const size_t packetSize, uint16_t* len, c
   struct dnsheader* dh = (struct dnsheader*) packet;
 
   EDNSSubnetOpts eso;
-  if(stamp < 0)
-    eso.source = Netmask(remote);
+  if(stamp < 0) {
+    eso.setSource(Netmask(remote));
+  }
   else {
     ComboAddress stamped(remote);
     *((char*)&stamped.sin4.sin_addr.s_addr)=stamp;
-    eso.source = Netmask(stamped);
+    eso.setSource(Netmask(stamped));
   }
-  string optRData=makeEDNSSubnetOptsString(eso);
+  string optRData = eso.makeOptString();
   string record;
   generateEDNSOption(EDNSOptionCode::ECS, optRData, record);
   generateOptRR(record, EDNSRR);

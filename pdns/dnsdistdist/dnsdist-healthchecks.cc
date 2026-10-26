@@ -24,12 +24,11 @@
 #include "tcpiohandler-mplexer.hh"
 #include "dnswriter.hh"
 #include "dolog.hh"
+#include "dnsdist-lua.hh"
 #include "dnsdist-random.hh"
 #include "dnsdist-tcp.hh"
 #include "dnsdist-nghttp2.hh"
 #include "dnsdist-session-cache.hh"
-
-bool g_verboseHealthChecks{false};
 
 struct HealthCheckData
 {
@@ -52,10 +51,8 @@ struct HealthCheckData
   PacketBuffer d_buffer;
   Socket d_udpSocket;
   DNSName d_checkName;
-  struct timeval d_ttd
-  {
-    0, 0
-  };
+  StopWatch d_elapsed{false};
+  timeval d_ttd{0, 0};
   size_t d_bufferPos{0};
   uint16_t d_checkType;
   uint16_t d_checkClass;
@@ -64,14 +61,68 @@ struct HealthCheckData
   bool d_initial{false};
 };
 
+static void updateLatencyMetrics(DownstreamState& downstream, double elapsedUs /* microseconds */)
+{
+  if (elapsedUs >= 0) {
+    downstream.d_healthCheckLatency.store(elapsedUs);
+
+    auto& histo = downstream.d_healthCheckLatencyHisto;
+    dnsdist::metrics::updateLatencyHistogram(histo, static_cast<uint64_t>(elapsedUs));
+  }
+}
+
+static std::string getHealthCheckProtocol(const std::shared_ptr<const HealthCheckData>& data)
+{
+  const auto& downstream = data->d_ds;
+  if (!downstream->doHealthcheckOverTCP()) {
+    return "udp";
+  }
+  if (downstream->isDoH()) {
+    return "DoH";
+  }
+  if (data->d_tcpHandler && data->d_tcpHandler->isTLS()) {
+    return "DoT";
+  }
+  return "tcp";
+}
+
+static std::shared_ptr<Logr::Logger> getLoggerFromData(const std::shared_ptr<const HealthCheckData>& data)
+{
+  const auto& downstream = data->d_ds;
+  return dnsdist::logging::getTopLogger("backend-health-check")->withValues("health_check.proto", Logging::Loggable(getHealthCheckProtocol(data)), "backend.name", Logging::Loggable(downstream->getName()), "backend.address", Logging::Loggable(downstream->d_config.remote), "dns.query.id", Logging::Loggable(data->d_queryID), "dns.query.name", Logging::Loggable(data->d_checkName), "dns.query.type", Logging::Loggable(data->d_checkType), "dns.query.class", Logging::Loggable(data->d_checkClass));
+}
+
+static bool validateHealthCheckResponseWithCallback(const std::shared_ptr<const HealthCheckData>& data)
+{
+  InternalQueryState ids;
+  ids.qname = data->d_checkName;
+  ids.qtype = data->d_checkType;
+  ids.qclass = data->d_checkClass;
+  ids.origRemote = data->d_ds->d_config.remote;
+  const auto& downstream = data->d_ds;
+  PacketBuffer buffer{data->d_buffer};
+  DNSResponse response(ids, buffer, downstream);
+  {
+    auto lock = g_lua.lock();
+    return downstream->d_config.d_healthCheckResponseValidationCallback(&response);
+  }
+}
+
 static bool handleResponse(std::shared_ptr<HealthCheckData>& data)
 {
   const auto& downstream = data->d_ds;
+  std::shared_ptr<Logr::Logger> logger;
+  const auto verboseHealthChecks = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verboseHealthChecks;
+  if (verboseHealthChecks) {
+    logger = getLoggerFromData(data);
+  }
+
   try {
     if (data->d_buffer.size() < sizeof(dnsheader)) {
       ++data->d_ds->d_healthCheckMetrics.d_parseErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Invalid health check response of size %d from backend %s, expecting at least %d", data->d_buffer.size(), downstream->getNameWithAddr(), sizeof(dnsheader));
+      if (verboseHealthChecks) {
+        SLOG(infolog("Invalid health check response of size %d from backend %s, expecting at least %d", data->d_buffer.size(), downstream->getNameWithAddr(), sizeof(dnsheader)),
+             logger->info(Logr::Info, "Invalid health check response", "dns.response.size", Logging::Loggable(data->d_buffer.size())));
       }
       return false;
     }
@@ -79,32 +130,36 @@ static bool handleResponse(std::shared_ptr<HealthCheckData>& data)
     dnsheader_aligned responseHeader(data->d_buffer.data());
     if (responseHeader.get()->id != data->d_queryID) {
       ++data->d_ds->d_healthCheckMetrics.d_mismatchErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Invalid health check response id %d from backend %s, expecting %d", responseHeader.get()->id, downstream->getNameWithAddr(), data->d_queryID);
+      if (verboseHealthChecks) {
+        SLOG(infolog("Invalid health check response id %d from backend %s, expecting %d", responseHeader.get()->id, downstream->getNameWithAddr(), data->d_queryID),
+             logger->info(Logr::Info, "Invalid health check response id", "dns.response.id", Logging::Loggable(responseHeader.get()->id)));
       }
       return false;
     }
 
     if (!responseHeader.get()->qr) {
       ++data->d_ds->d_healthCheckMetrics.d_invalidResponseErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Invalid health check response from backend %s, expecting QR to be set", downstream->getNameWithAddr());
+      if (verboseHealthChecks) {
+        SLOG(infolog("Invalid health check response from backend %s, expecting QR to be set", downstream->getNameWithAddr()),
+             logger->info(Logr::Info, "Invalid health check response, expecting the QR bit to be set"));
       }
       return false;
     }
 
     if (responseHeader.get()->rcode == RCode::ServFail) {
       ++data->d_ds->d_healthCheckMetrics.d_invalidResponseErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Backend %s responded to health check with ServFail", downstream->getNameWithAddr());
+      if (verboseHealthChecks) {
+        SLOG(infolog("Backend %s responded to health check with ServFail", downstream->getNameWithAddr()),
+             logger->info(Logr::Info, "Backend responded to health check with ServFail", "dns.response.rcode", Logging::Loggable(RCode::to_s(responseHeader.get()->rcode))));
       }
       return false;
     }
 
     if (downstream->d_config.mustResolve && (responseHeader.get()->rcode == RCode::NXDomain || responseHeader.get()->rcode == RCode::Refused)) {
       ++data->d_ds->d_healthCheckMetrics.d_invalidResponseErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Backend %s responded to health check with %s while mustResolve is set", downstream->getNameWithAddr(), responseHeader.get()->rcode == RCode::NXDomain ? "NXDomain" : "Refused");
+      if (verboseHealthChecks) {
+        SLOG(infolog("Backend %s responded to health check with %s while mustResolve is set", downstream->getNameWithAddr(), responseHeader.get()->rcode == RCode::NXDomain ? "NXDomain" : "Refused"),
+             logger->info(Logr::Info, "Backend responded to health check with an invalid code while mustResolve is set", "dns.response.rcode", Logging::Loggable(RCode::to_s(responseHeader.get()->rcode))));
       }
       return false;
     }
@@ -116,25 +171,35 @@ static bool handleResponse(std::shared_ptr<HealthCheckData>& data)
 
     if (receivedName != data->d_checkName || receivedType != data->d_checkType || receivedClass != data->d_checkClass) {
       ++data->d_ds->d_healthCheckMetrics.d_mismatchErrors;
-      if (g_verboseHealthChecks) {
-        infolog("Backend %s responded to health check with an invalid qname (%s vs %s), qtype (%s vs %s) or qclass (%d vs %d)", downstream->getNameWithAddr(), receivedName.toLogString(), data->d_checkName.toLogString(), QType(receivedType).toString(), QType(data->d_checkType).toString(), receivedClass, data->d_checkClass);
+      if (verboseHealthChecks) {
+        SLOG(infolog("Backend %s responded to health check with an invalid qname (%s vs %s), qtype (%s vs %s) or qclass (%d vs %d)", downstream->getNameWithAddr(), receivedName.toLogString(), data->d_checkName.toLogString(), QType(receivedType).toString(), QType(data->d_checkType).toString(), receivedClass, data->d_checkClass),
+             logger->info(Logr::Info, "Backend responded to health check with an invalid qname, qtype or qclass", "dns.response.name", Logging::Loggable(receivedName), "dns.response.qtype", Logging::Loggable(receivedType), "dns.response.class", Logging::Loggable(receivedClass)));
       }
       return false;
+    }
+
+    if (data->d_ds->d_config.d_healthCheckResponseValidationCallback) {
+      return validateHealthCheckResponseWithCallback(data);
     }
   }
   catch (const std::exception& e) {
     ++data->d_ds->d_healthCheckMetrics.d_parseErrors;
-    if (g_verboseHealthChecks) {
-      infolog("Error checking the health of backend %s: %s", downstream->getNameWithAddr(), e.what());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Error checking the health of backend %s: %s", downstream->getNameWithAddr(), e.what()),
+           logger->error(Logr::Info, e.what(), "Error checking the health of backend"));
     }
     return false;
   }
   catch (...) {
-    if (g_verboseHealthChecks) {
-      infolog("Unknown exception while checking the health of backend %s", downstream->getNameWithAddr());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Unknown exception while checking the health of backend %s", downstream->getNameWithAddr()),
+           logger->info(Logr::Info, "Unknown exception while checking the health of backend"));
     }
     return false;
   }
+
+  const auto elapsed = data->d_elapsed.udiff();
+  updateLatencyMetrics(*data->d_ds, elapsed);
 
   return true;
 }
@@ -159,17 +224,22 @@ public:
 
   void handleResponse(const struct timeval& now, TCPResponse&& response) override
   {
+    (void)now;
     d_data->d_buffer = std::move(response.d_buffer);
     d_data->d_ds->submitHealthCheckResult(d_data->d_initial, ::handleResponse(d_data));
   }
 
   void handleXFRResponse(const struct timeval& now, TCPResponse&& response) override
   {
-    throw std::runtime_error("Unexpected XFR reponse to a health check query");
+    (void)now;
+    (void)response;
+    throw std::runtime_error("Unexpected XFR response to a health check query");
   }
 
   void notifyIOError(const struct timeval& now, [[maybe_unused]] TCPResponse&& response) override
   {
+    (void)now;
+    (void)response;
     ++d_data->d_ds->d_healthCheckMetrics.d_networkErrors;
     d_data->d_ds->submitHealthCheckResult(d_data->d_initial, false);
   }
@@ -181,6 +251,11 @@ private:
 static void healthCheckUDPCallback(int descriptor, FDMultiplexer::funcparam_t& param)
 {
   auto data = boost::any_cast<std::shared_ptr<HealthCheckData>>(param);
+  std::shared_ptr<Logr::Logger> logger;
+  const auto verboseHealthChecks = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verboseHealthChecks;
+  if (verboseHealthChecks) {
+    logger = getLoggerFromData(data);
+  }
 
   ssize_t got = 0;
   ComboAddress from;
@@ -202,8 +277,9 @@ static void healthCheckUDPCallback(int descriptor, FDMultiplexer::funcparam_t& p
         return;
       }
 
-      if (g_verboseHealthChecks) {
-        infolog("Error receiving health check response from %s: %s", data->d_ds->d_config.remote.toStringWithPort(), stringerror(savederrno));
+      if (verboseHealthChecks) {
+        SLOG(infolog("Error receiving health check response from %s: %s", data->d_ds->d_config.remote.toStringWithPort(), stringerror(savederrno)),
+             logger->error(Logr::Info, savederrno, "Error receiving health check response"));
       }
       ++data->d_ds->d_healthCheckMetrics.d_networkErrors;
       data->d_ds->submitHealthCheckResult(data->d_initial, false);
@@ -216,8 +292,9 @@ static void healthCheckUDPCallback(int descriptor, FDMultiplexer::funcparam_t& p
 
   /* we are using a connected socket but hey.. */
   if (from != data->d_ds->d_config.remote) {
-    if (g_verboseHealthChecks) {
-      infolog("Invalid health check response received from %s, expecting one from %s", from.toStringWithPort(), data->d_ds->d_config.remote.toStringWithPort());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Invalid health check response received from %s, expecting one from %s", from.toStringWithPort(), data->d_ds->d_config.remote.toStringWithPort()),
+           logger->info(Logr::Info, "Invalid health check response received from the wrong address", "network.peer.address", Logging::Loggable(from)));
     }
     ++data->d_ds->d_healthCheckMetrics.d_networkErrors;
     data->d_ds->submitHealthCheckResult(data->d_initial, false);
@@ -230,7 +307,13 @@ static void healthCheckUDPCallback(int descriptor, FDMultiplexer::funcparam_t& p
 
 static void healthCheckTCPCallback(int descriptor, FDMultiplexer::funcparam_t& param)
 {
+  (void)descriptor;
   auto data = boost::any_cast<std::shared_ptr<HealthCheckData>>(param);
+  std::shared_ptr<Logr::Logger> logger;
+  const auto verboseHealthChecks = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verboseHealthChecks;
+  if (verboseHealthChecks) {
+    logger = getLoggerFromData(data);
+  }
 
   IOStateGuard ioGuard(data->d_ioState);
   try {
@@ -274,7 +357,8 @@ static void healthCheckTCPCallback(int descriptor, FDMultiplexer::funcparam_t& p
           }
         }
         catch (const std::exception& e) {
-          vinfolog("Unable to get a TLS session from the DoT healthcheck: %s", e.what());
+          VERBOSESLOG(infolog("Unable to get a TLS session from the DoT healthcheck: %s", e.what()),
+                      logger->error(Logr::Info, e.what(), "Unable to get a TLS session from the DoT healthcheck"));
         }
       }
     }
@@ -288,20 +372,28 @@ static void healthCheckTCPCallback(int descriptor, FDMultiplexer::funcparam_t& p
   catch (const std::exception& e) {
     ++data->d_ds->d_healthCheckMetrics.d_networkErrors;
     data->d_ds->submitHealthCheckResult(data->d_initial, false);
-    if (g_verboseHealthChecks) {
-      infolog("Error checking the health of backend %s: %s", data->d_ds->getNameWithAddr(), e.what());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Error checking the health of backend %s: %s", data->d_ds->getNameWithAddr(), e.what()),
+           logger->error(Logr::Info, e.what(), "Error checking the health of backend"));
     }
   }
   catch (...) {
     data->d_ds->submitHealthCheckResult(data->d_initial, false);
-    if (g_verboseHealthChecks) {
-      infolog("Unknown exception while checking the health of backend %s", data->d_ds->getNameWithAddr());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Unknown exception while checking the health of backend %s", data->d_ds->getNameWithAddr()),
+           logger->info(Logr::Info, "Unknown exception while checking the health of backend"));
     }
   }
 }
 
 bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared_ptr<DownstreamState>& downstream, bool initialCheck)
 {
+  const auto verboseHealthChecks = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verboseHealthChecks;
+  std::shared_ptr<Logr::Logger> logger;
+  if (verboseHealthChecks) {
+    logger = dnsdist::logging::getTopLogger("backend-health-check")->withValues("backend.name", Logging::Loggable(downstream->getName()), "backend.address", Logging::Loggable(downstream->d_config.remote));
+  }
+
   try {
     uint16_t queryID = dnsdist::getRandomDNSID();
     DNSName checkName = downstream->d_config.checkName;
@@ -318,9 +410,9 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
       checkHeader.cd = true;
     }
 
-    if (downstream->d_config.checkFunction) {
+    if (downstream->d_config.d_healthCheckGenerationFunction) {
       auto lock = g_lua.lock();
-      auto ret = downstream->d_config.checkFunction(checkName, checkType, checkClass, &checkHeader);
+      auto ret = downstream->d_config.d_healthCheckGenerationFunction(checkName, checkType, checkClass, &checkHeader);
       checkName = std::get<0>(ret);
       checkType = std::get<1>(ret);
       checkClass = std::get<2>(ret);
@@ -350,8 +442,10 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
 #ifdef SO_BINDTODEVICE
     if (!downstream->d_config.sourceItfName.empty()) {
       int res = setsockopt(sock.getHandle(), SOL_SOCKET, SO_BINDTODEVICE, downstream->d_config.sourceItfName.c_str(), downstream->d_config.sourceItfName.length());
-      if (res != 0 && g_verboseHealthChecks) {
-        infolog("Error setting SO_BINDTODEVICE on the health check socket for backend '%s': %s", downstream->getNameWithAddr(), stringerror());
+      if (res != 0 && verboseHealthChecks) {
+        int savederror = errno;
+        SLOG(infolog("Error setting SO_BINDTODEVICE on the health check socket for backend '%s': %s", downstream->getNameWithAddr(), stringerror(savederror)),
+             logger->error(Logr::Info, savederror, "Error setting SO_BINDTODEVICE on the health check socket for backend"));
       }
     }
 #endif
@@ -375,6 +469,7 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
     data->d_ttd.tv_sec += static_cast<decltype(data->d_ttd.tv_sec)>(downstream->d_config.checkTimeout / 1000); /* ms to seconds */
     data->d_ttd.tv_usec += static_cast<decltype(data->d_ttd.tv_usec)>((downstream->d_config.checkTimeout % 1000) * 1000); /* remaining ms to us */
     normalizeTV(data->d_ttd);
+    data->d_elapsed.start();
 
     if (!downstream->doHealthcheckOverTCP()) {
       sock.connect(downstream->d_config.remote);
@@ -382,14 +477,16 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
       ssize_t sent = udpClientSendRequestToBackend(downstream, data->d_udpSocket.getHandle(), packet, true);
       if (sent < 0) {
         int ret = errno;
-        if (g_verboseHealthChecks) {
-          infolog("Error while sending a health check query (ID %d) to backend %s: %d", queryID, downstream->getNameWithAddr(), ret);
+        if (verboseHealthChecks) {
+          SLOG(infolog("Error while sending a health check query (ID %d) to backend %s: %d", queryID, downstream->getNameWithAddr(), ret),
+               logger->error(Logr::Info, ret, "Error while sending a health check query to backend", "dns.query.id", Logging::Loggable(queryID)));
         }
         return false;
       }
 
       mplexer->addReadFD(data->d_udpSocket.getHandle(), &healthCheckUDPCallback, data, &data->d_ttd);
     }
+#if defined(HAVE_DNS_OVER_HTTPS) && defined(HAVE_NGHTTP2)
     else if (downstream->isDoH()) {
       InternalQuery query(std::move(packet), InternalQueryState());
       query.d_proxyProtocolPayload = std::move(proxyProtocolPayload);
@@ -398,6 +495,7 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
         data->d_ds->submitHealthCheckResult(data->d_initial, false);
       }
     }
+#endif
     else {
       data->d_tcpHandler = std::make_unique<TCPIOHandler>(downstream->d_config.d_tlsSubjectName, downstream->d_config.d_tlsSubjectIsAddr, sock.releaseHandle(), timeval{downstream->d_config.checkTimeout, 0}, downstream->d_tlsCtx);
       data->d_ioState = std::make_unique<IOStateHandler>(*mplexer, data->d_tcpHandler->getDescriptor());
@@ -410,7 +508,8 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
           }
         }
         catch (const std::exception& e) {
-          vinfolog("Unable to restore a TLS session for the DoT healthcheck for backend %s: %s", downstream->getNameWithAddr(), e.what());
+          VERBOSESLOG(infolog("Unable to restore a TLS session for the DoT healthcheck for backend %s: %s", downstream->getNameWithAddr(), e.what()),
+                      logger->error(Logr::Info, e.what(), "Unable to restore a TLS session for the DoT healthcheck"));
         }
       }
       data->d_tcpHandler->tryConnect(downstream->d_config.tcpFastOpen, downstream->d_config.remote);
@@ -433,14 +532,16 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
     return true;
   }
   catch (const std::exception& e) {
-    if (g_verboseHealthChecks) {
-      infolog("Error checking the health of backend %s: %s", downstream->getNameWithAddr(), e.what());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Error checking the health of backend %s: %s", downstream->getNameWithAddr(), e.what()),
+           logger->error(Logr::Info, e.what(), "Error checking the health of backend"));
     }
     return false;
   }
   catch (...) {
-    if (g_verboseHealthChecks) {
-      infolog("Unknown exception while checking the health of backend %s", downstream->getNameWithAddr());
+    if (verboseHealthChecks) {
+      SLOG(infolog("Unknown exception while checking the health of backend %s", downstream->getNameWithAddr()),
+           logger->info(Logr::Info, "Unknown exception while checking the health of backend"));
     }
     return false;
   }
@@ -448,14 +549,19 @@ bool queueHealthCheck(std::unique_ptr<FDMultiplexer>& mplexer, const std::shared
 
 void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
 {
+  const auto verboseHealthChecks = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verboseHealthChecks;
+  std::shared_ptr<const Logr::Logger> logger;
+  if (verboseHealthChecks) {
+    logger = dnsdist::logging::getTopLogger("backend-health-check");
+  }
+
   while (mplexer.getWatchedFDCount(false) > 0 || mplexer.getWatchedFDCount(true) > 0) {
-    struct timeval now
-    {
-    };
+    struct timeval now{};
     int ret = mplexer.run(&now, 100);
     if (ret == -1) {
-      if (g_verboseHealthChecks) {
-        infolog("Error while waiting for the health check response from backends: %d", ret);
+      if (verboseHealthChecks) {
+        SLOG(infolog("Error while waiting for the health check response from backends: %d", ret),
+             logger->error(Logr::Info, ret, "Error while waiting for the health check response from backends"));
       }
       break;
     }
@@ -464,7 +570,9 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
       continue;
     }
 
+#if defined(HAVE_DNS_OVER_HTTPS) && defined(HAVE_NGHTTP2)
     handleH2Timeouts(mplexer, now);
+#endif
 
     auto timeouts = mplexer.getTimeouts(now);
     for (const auto& timeout : timeouts) {
@@ -473,6 +581,11 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
       }
 
       auto data = boost::any_cast<std::shared_ptr<HealthCheckData>>(timeout.second);
+      std::shared_ptr<Logr::Logger> queryLogger;
+      if (verboseHealthChecks) {
+        queryLogger = getLoggerFromData(data);
+      }
+
       try {
         /* UDP does not have an IO state, H2 is handled separately */
         if (data->d_ioState) {
@@ -481,8 +594,10 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
         else {
           mplexer.removeReadFD(timeout.first);
         }
-        if (g_verboseHealthChecks) {
-          infolog("Timeout while waiting for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr());
+
+        if (verboseHealthChecks) {
+          SLOG(infolog("Timeout while waiting for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr()),
+               queryLogger->info(Logr::Info, "Timeout while waiting for the health check response from backend"));
         }
 
         ++data->d_ds->d_healthCheckMetrics.d_timeOuts;
@@ -492,14 +607,16 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
         /* this is not supposed to happen as the file descriptor has to be
            there for us to reach that code, and the submission code should not throw,
            but let's provide a nice error message if it ever does. */
-        if (g_verboseHealthChecks) {
-          infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s: %s", data->d_queryID, data->d_ds->getNameWithAddr(), e.what());
+        if (verboseHealthChecks) {
+          SLOG(infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s: %s", data->d_queryID, data->d_ds->getNameWithAddr(), e.what()),
+               queryLogger->error(Logr::Info, e.what(), "Error while dealing with a timeout for the health check response from backend"));
         }
       }
       catch (...) {
         /* this is even less likely to happen */
-        if (g_verboseHealthChecks) {
-          infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr());
+        if (verboseHealthChecks) {
+          SLOG(infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr()),
+               queryLogger->info(Logr::Info, "Error while dealing with a timeout for the health check response from backend"));
         }
       }
     }
@@ -510,11 +627,16 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
         continue;
       }
       auto data = boost::any_cast<std::shared_ptr<HealthCheckData>>(timeout.second);
+      std::shared_ptr<Logr::Logger> queryLogger;
+      if (verboseHealthChecks) {
+        queryLogger = getLoggerFromData(data);
+      }
       try {
         /* UDP does not block while writing, H2 is handled separately */
         data->d_ioState.reset();
-        if (g_verboseHealthChecks) {
-          infolog("Timeout while waiting for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr());
+        if (verboseHealthChecks) {
+          SLOG(infolog("Timeout while waiting for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr()),
+               queryLogger->info(Logr::Info, "Timeout while waiting for the health check response from backend"));
         }
 
         ++data->d_ds->d_healthCheckMetrics.d_timeOuts;
@@ -523,14 +645,16 @@ void handleQueuedHealthChecks(FDMultiplexer& mplexer, bool initial)
       catch (const std::exception& e) {
         /* this is not supposed to happen as the submission code should not throw,
            but let's provide a nice error message if it ever does. */
-        if (g_verboseHealthChecks) {
-          infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s: %s", data->d_queryID, data->d_ds->getNameWithAddr(), e.what());
+        if (verboseHealthChecks) {
+          SLOG(infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s: %s", data->d_queryID, data->d_ds->getNameWithAddr(), e.what()),
+               queryLogger->error(Logr::Info, e.what(), "Error while dealing with a timeout for the health check response for backend"));
         }
       }
       catch (...) {
         /* this is even less likely to happen */
-        if (g_verboseHealthChecks) {
-          infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr());
+        if (verboseHealthChecks) {
+          SLOG(infolog("Error while dealing with a timeout for the health check response (ID %d) from backend %s", data->d_queryID, data->d_ds->getNameWithAddr()),
+               queryLogger->info(Logr::Info, "Error while dealing with a timeout for the health check response from backend"));
         }
       }
     }

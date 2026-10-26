@@ -22,11 +22,16 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#if __clang_major__ >= 15
+#pragma GCC diagnostic ignored "-Wdeprecated-copy-with-user-provided-copy"
+#endif
 #include <boost/accumulators/statistics/median.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
 #include <boost/accumulators/accumulators.hpp>
-
 #include <boost/accumulators/statistics.hpp>
+#pragma GCC diagnostic pop
 
 #include <thread>
 
@@ -41,6 +46,7 @@
 #include <boost/array.hpp>
 #include <boost/program_options.hpp>
 
+bool g_slogStructured{false};
 
 StatBag S;
 namespace po = boost::program_options;
@@ -58,7 +64,7 @@ static unsigned int makeUsec(const struct timeval& tv)
   return 1000000*tv.tv_sec + tv.tv_usec;
 }
 
-/* On Linux, run echo 1 > /proc/sys/net/ipv4/tcp_tw_recycle 
+/* On Linux, run echo 1 > /proc/sys/net/ipv4/tcp_tw_recycle
    to prevent running out of free TCP ports */
 
 struct BenchQuery
@@ -84,10 +90,10 @@ try
 
   if(!g_onlyTCP) {
     Socket udpsock(g_dest.sin4.sin_family, SOCK_DGRAM);
-    
+
     udpsock.sendTo(string(packet.begin(), packet.end()), g_dest);
     ComboAddress origin;
-    res = waitForData(udpsock.getHandle(), 0, 1000 * g_timeoutMsec);
+    res = waitForData(udpsock.getHandle(), 0, static_cast<int>(g_timeoutMsec));
     if(res < 0)
       throw NetworkError("Error waiting for response");
     if(!res) {
@@ -109,11 +115,13 @@ try
 
   Socket sock(g_dest.sin4.sin_family, SOCK_STREAM);
   int tmp=1;
-  if(setsockopt(sock.getHandle(),SOL_SOCKET,SO_REUSEADDR,(char*)&tmp,sizeof tmp)<0) 
-    throw runtime_error("Unable to set socket reuse: "+stringerror());
-    
-  if(g_tcpNoDelay && setsockopt(sock.getHandle(), IPPROTO_TCP, TCP_NODELAY,(char*)&tmp,sizeof tmp)<0) 
-    throw runtime_error("Unable to set socket no delay: "+stringerror());
+  if (setsockopt(sock.getHandle(), SOL_SOCKET, SO_REUSEADDR, &tmp, sizeof tmp) < 0) {
+    throw runtime_error("Unable to set socket reuse: " + stringerror());
+  }
+
+  if (g_tcpNoDelay && setsockopt(sock.getHandle(), IPPROTO_TCP, TCP_NODELAY, &tmp, sizeof tmp) < 0) {
+    throw runtime_error("Unable to set socket no delay: " + stringerror());
+  }
 
   sock.connect(g_dest);
   uint16_t len = htons(packet.size());
@@ -122,17 +130,17 @@ try
 
   sock.writen(tcppacket);
 
-  res = waitForData(sock.getHandle(), 0, 1000 * g_timeoutMsec);
+  res = waitForData(sock.getHandle(), 0, static_cast<int>(g_timeoutMsec));
   if(res < 0)
     throw NetworkError("Error waiting for response");
   if(!res) {
     g_timeOuts++;
     return;
   }
-  
+
   if(sock.read((char *) &len, 2) != 2)
     throw PDNSException("tcp read failed");
-  
+
   len=ntohs(len);
   auto creply = std::make_unique<char[]>(len);
   int n=0;
@@ -143,9 +151,9 @@ try
       throw PDNSException("tcp read failed");
     n+=numread;
   }
-  
+
   reply=string(creply.get(), len);
-  
+
   gettimeofday(&now, 0);
   q->tcpUsec = makeUsec(now - tv);
   q->answerSecond = now.tv_sec;
@@ -178,7 +186,7 @@ static void worker()
 {
   setThreadName("dnstcpb/worker");
   for(;;) {
-    unsigned int pos = g_pos++; 
+    unsigned int pos = g_pos++;
     if(pos >= g_queries.size())
       break;
 
@@ -209,7 +217,7 @@ try
   hidden.add_options()
     ("remote-host", po::value<string>(), "remote-host")
     ("remote-port", po::value<int>()->default_value(53), "remote-port");
-  alloptions.add(desc).add(hidden); 
+  alloptions.add(desc).add(hidden);
 
   po::positional_options_description p;
   p.add("remote-host", 1);
@@ -243,7 +251,7 @@ try
   g_dest = ComboAddress(g_vm["remote-host"].as<string>().c_str(), g_vm["remote-port"].as<int>());
 
   unsigned int numworkers=g_vm["workers"].as<int>();
-  
+
   if(g_verbose) {
     cout<<"Sending queries to: "<<g_dest.toStringWithPort()<<endl;
     cout<<"Attempting UDP first: " << (g_onlyTCP ? "no" : "yes") <<endl;
@@ -255,24 +263,24 @@ try
   std::vector<std::thread> workers;
   workers.reserve(numworkers);
 
-  std::unique_ptr<FILE, int(*)(FILE*)> fp{nullptr, fclose};
+  pdns::UniqueFilePtr filePtr{nullptr};
   if (!g_vm.count("file")) {
-    fp = std::unique_ptr<FILE, int(*)(FILE*)>(fdopen(0, "r"), fclose);
+    filePtr = pdns::UniqueFilePtr(fdopen(0, "r"));
   }
   else {
-    fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(g_vm["file"].as<string>().c_str(), "r"), fclose);
-    if (!fp) {
+    filePtr = pdns::UniqueFilePtr(fopen(g_vm["file"].as<string>().c_str(), "r"));
+    if (!filePtr) {
       unixDie("Unable to open "+g_vm["file"].as<string>()+" for input");
     }
   }
   pair<string, string> q;
   string line;
-  while(stringfgets(fp.get(), line)) {
+  while(stringfgets(filePtr.get(), line)) {
     boost::trim_right(line);
     q=splitField(line, ' ');
     g_queries.push_back(BenchQuery(q.first, DNSRecordContent::TypeToNumber(q.second)));
   }
-  fp.reset();
+  filePtr.reset();
 
   for (unsigned int n = 0; n < numworkers; ++n) {
     workers.push_back(std::thread(worker));
@@ -280,7 +288,7 @@ try
   for (auto& w : workers) {
     w.join();
   }
-  
+
   using namespace boost::accumulators;
   typedef accumulator_set<
     double
@@ -290,7 +298,7 @@ try
   > acc_t;
 
   acc_t udpspeeds, tcpspeeds, qps;
-  
+
   typedef map<time_t, uint32_t> counts_t;
   counts_t counts;
 

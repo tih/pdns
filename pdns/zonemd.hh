@@ -50,7 +50,7 @@ public:
     ValidationFailure
   };
 
-  ZoneMD(DNSName zone) :
+  ZoneMD(ZoneName zone) :
     d_zone(std::move(zone))
   {}
   void readRecords(ZoneParserTNG& zpt);
@@ -66,9 +66,12 @@ public:
   }
 
   // Return the zone's apex RRSIGs
-  [[nodiscard]] const std::vector<shared_ptr<const RRSIGRecordContent>>& getRRSIGs() const
+  [[nodiscard]] const std::vector<shared_ptr<const RRSIGRecordContent>>& getRRSIGs(QType requestedType)
   {
-    return d_rrsigs;
+    if (d_rrsigs.count(requestedType) == 0) {
+      d_rrsigs[requestedType] = {};
+    }
+    return d_rrsigs[requestedType];
   }
 
   // Return the zone's apex ZONEMDs
@@ -113,12 +116,8 @@ private:
   {
     bool operator()(const RRSetKey_t& lhs, const RRSetKey_t& rhs) const
     {
-      // FIXME surely we can be smarter here
-      if (lhs.first.canonCompare(rhs.first)) {
-        return true;
-      }
-      if (rhs.first.canonCompare(lhs.first)) {
-        return false;
+      if (int rc = lhs.first.canonCompare_three_way(rhs.first); rc != 0) {
+        return rc < 0;
       }
       return lhs.second < rhs.second;
     }
@@ -140,12 +139,12 @@ private:
 
   std::shared_ptr<const SOARecordContent> d_soaRecordContent;
   std::set<shared_ptr<const DNSKEYRecordContent>> d_dnskeys;
-  std::vector<shared_ptr<const RRSIGRecordContent>> d_rrsigs;
+  std::map<QType, std::vector<shared_ptr<const RRSIGRecordContent>>> d_rrsigs;
   std::vector<shared_ptr<const NSEC3PARAMRecordContent>> d_nsec3params;
   ContentSigPair d_nsecs;
   map<DNSName, ContentSigPair> d_nsec3s;
   DNSName d_nsec3label;
-  const DNSName d_zone;
+  const ZoneName d_zone;
   const ContentSigPair empty;
 };
 

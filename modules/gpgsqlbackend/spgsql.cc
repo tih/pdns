@@ -35,8 +35,9 @@
 class SPgSQLStatement : public SSqlStatement
 {
 public:
-  SPgSQLStatement(const string& query, bool dolog, int nparams, SPgSQL* db, unsigned int nstatement)
+  SPgSQLStatement(Logr::log_t log, const string& query, bool dolog, int nparams, SPgSQL* db, unsigned int nstatement)
   {
+    d_slog = log;
     d_query = query;
     d_dolog = dolog;
     d_parent = db;
@@ -44,14 +45,14 @@ public:
     d_nstatement = nstatement;
   }
 
-  SSqlStatement* bind(const string& name, bool value) { return bind(name, string(value ? "t" : "f")); }
-  SSqlStatement* bind(const string& name, int value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& name, uint32_t value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& name, long value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& name, unsigned long value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& name, long long value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& name, unsigned long long value) { return bind(name, std::to_string(value)); }
-  SSqlStatement* bind(const string& /* name */, const std::string& value)
+  SSqlStatement* bind(const string& name, bool value) override { return bind(name, string(value ? "t" : "f")); }
+  SSqlStatement* bind(const string& name, int value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& name, uint32_t value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& name, long value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& name, unsigned long value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& name, long long value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& name, unsigned long long value) override { return bind(name, std::to_string(value)); }
+  SSqlStatement* bind(const string& /* name */, const std::string& value) override
   {
     prepareStatement();
     allocate();
@@ -66,34 +67,51 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bindNull(const string& /* name */)
+  SSqlStatement* bindNull(const string& /* name */) override
   {
     prepareStatement();
     d_paridx++;
     return this;
   } // these are set null in allocate()
-  SSqlStatement* execute()
+  SSqlStatement* execute() override
   {
     prepareStatement();
     if (d_dolog) {
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": Statement: " << d_query << endl;
-      if (d_paridx) {
-        // Log message is similar, but not exactly the same as the postgres server log.
-        std::stringstream log_message;
-        log_message << "Query " << ((long)(void*)this) << ": Parameters: ";
-        for (int i = 0; i < d_paridx; i++) {
-          if (i != 0) {
-            log_message << ", ";
+      if (g_slogStructured) {
+        if (d_paridx) {
+          // This is ugly, but will do until paramValues is converted to a
+          // std::array.
+          std::vector<char*> vecparam;
+          vecparam.reserve(d_paridx);
+          for (auto i = 0; i < d_paridx; ++i) {
+            vecparam[i] = paramValues[i];
           }
-          log_message << "$" << (i + 1) << " = ";
-          if (paramValues[i] == nullptr) {
-            log_message << "NULL";
-          }
-          else {
-            log_message << "'" << paramValues[i] << "'";
-          }
+          d_slog->info(Logr::Warning, "execute SQL query", "query", Logging::Loggable(d_query), "arguments", Logging::IterLoggable(vecparam.cbegin(), vecparam.cend()));
         }
-        g_log << Logger::Warning << log_message.str() << endl;
+        else {
+          d_slog->info(Logr::Warning, "execute SQL query", "query", Logging::Loggable(d_query));
+        }
+      }
+      else {
+        g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": Statement: " << d_query << endl;
+        if (d_paridx) {
+          std::stringstream log_message;
+          // Log message is similar, but not exactly the same as the postgres server log.
+          log_message << "Query " << ((long)(void*)this) << ": Parameters: ";
+          for (int i = 0; i < d_paridx; i++) {
+            if (i != 0) {
+              log_message << ", ";
+            }
+            log_message << "$" << (i + 1) << " = ";
+            if (paramValues[i] == nullptr) {
+              log_message << "NULL";
+            }
+            else {
+              log_message << "'" << paramValues[i] << "'";
+            }
+          }
+          g_log << Logger::Warning << log_message.str() << endl;
+        }
       }
       d_dtime.set();
     }
@@ -112,7 +130,8 @@ public:
     d_cur_set = 0;
     if (d_dolog) {
       auto diff = d_dtime.udiffNoReset();
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << diff << " us to execute" << endl;
+      SLOG(g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << diff << " us to execute" << endl,
+           d_slog->info(Logr::Warning, "query completed", "microseconds", Logging::Loggable(diff)));
     }
 
     nextResult();
@@ -129,7 +148,8 @@ public:
       return;
     }
     if (PQftype(d_res_set, 0) == 1790) { // REFCURSOR
-      g_log << Logger::Error << "Postgres query returned a REFCURSOR and we do not support those - see https://github.com/PowerDNS/pdns/pull/10259" << endl;
+      SLOG(g_log << Logger::Error << "Postgres query returned a REFCURSOR and we do not support those - see https://github.com/PowerDNS/pdns/pull/10259" << endl,
+           d_slog->info(Logr::Error, "query returned a REFCURSOR which is not supported by PowerDNS", "more information", Logging::Loggable("https://github.com/PowerDNS/pdns/pull/10259")));
       PQclear(d_res_set);
       d_res_set = nullptr;
     }
@@ -140,16 +160,17 @@ public:
     }
   }
 
-  bool hasNextRow()
+  bool hasNextRow() override
   {
     if (d_dolog && d_residx == d_resnum) {
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiff() << " us total to last row" << endl;
+      SLOG(g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiff() << " us total to last row" << endl,
+           d_slog->info(Logr::Warning, "all query results procesed", "microseconds", Logging::Loggable(d_dtime.udiff())));
     }
 
     return d_residx < d_resnum;
   }
 
-  SSqlStatement* nextRow(row_t& row)
+  SSqlStatement* nextRow(row_t& row) override
   {
     int i;
     row.clear();
@@ -177,7 +198,7 @@ public:
     return this;
   }
 
-  SSqlStatement* getResult(result_t& result)
+  SSqlStatement* getResult(result_t& result) override
   {
     result.clear();
     if (d_res == nullptr)
@@ -191,7 +212,7 @@ public:
     return this;
   }
 
-  SSqlStatement* reset()
+  SSqlStatement* reset() override
   {
     int i;
     if (d_res) {
@@ -217,9 +238,9 @@ public:
     return this;
   }
 
-  const std::string& getQuery() { return d_query; }
+  const std::string& getQuery() override { return d_query; }
 
-  ~SPgSQLStatement()
+  ~SPgSQLStatement() override
   {
     releaseStatement();
   }
@@ -282,6 +303,7 @@ private:
   PGresult* d_res_set{nullptr};
   PGresult* d_res{nullptr};
   bool d_dolog;
+  std::shared_ptr<Logr::Logger> d_slog;
   DTime d_dtime; // only used if d_dolog is set
   bool d_prepared{false};
   int d_nparams;
@@ -305,9 +327,10 @@ static string escapeForPQparam(const string& v)
   return string("'") + ret + string("'");
 }
 
-SPgSQL::SPgSQL(const string& database, const string& host, const string& port, const string& user,
+SPgSQL::SPgSQL(Logr::log_t log, const string& database, const string& host, const string& port, const string& user,
                const string& password, const string& extra_connection_parameters, const bool use_prepared)
 {
+  d_slog = log;
   d_db = nullptr;
   d_in_trx = false;
   d_connectstr = "";
@@ -381,7 +404,7 @@ void SPgSQL::execute(const string& query)
 std::unique_ptr<SSqlStatement> SPgSQL::prepare(const string& query, int nparams)
 {
   d_nstatements++;
-  return std::make_unique<SPgSQLStatement>(query, s_dolog, nparams, this, d_nstatements);
+  return std::make_unique<SPgSQLStatement>(d_slog, query, s_dolog, nparams, this, d_nstatements);
 }
 
 void SPgSQL::startTransaction()

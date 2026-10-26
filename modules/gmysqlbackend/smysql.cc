@@ -72,9 +72,10 @@ std::mutex SMySQL::s_myinitlock;
 class SMySQLStatement : public SSqlStatement
 {
 public:
-  SMySQLStatement(const string& query, bool dolog, int nparams, MYSQL* db) :
+  SMySQLStatement(Logr::log_t log, const string& query, bool dolog, int nparams, MYSQL* db) :
     d_prepared(false)
   {
+    d_slog = log;
     d_db = db;
     d_dolog = dolog;
     d_query = query;
@@ -88,7 +89,7 @@ public:
     }
   }
 
-  SSqlStatement* bind(const string& /* name */, bool value)
+  SSqlStatement* bind(const string& /* name */, bool value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -101,42 +102,52 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& name, int value)
+  SSqlStatement* bind(const string& name, int value) override
   {
     return bind(name, (long)value);
   }
-  SSqlStatement* bind(const string& name, uint32_t value)
+  SSqlStatement* bind(const string& name, uint32_t value) override
   {
     return bind(name, (unsigned long)value);
   }
-  SSqlStatement* bind(const string& /* name */, long value)
+  SSqlStatement* bind(const string& /* name */, long value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
       releaseStatement();
       throw SSqlException("Attempt to bind more parameters than query has: " + d_query);
     }
-    d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONG;
+    if constexpr (sizeof(long) == 4) {
+      d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONG; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    }
+    else {
+      d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONGLONG; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    }
     d_req_bind[d_paridx].buffer = new long[1];
     *((long*)d_req_bind[d_paridx].buffer) = value;
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& /* name */, unsigned long value)
+  SSqlStatement* bind(const string& /* name */, unsigned long value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
       releaseStatement();
       throw SSqlException("Attempt to bind more parameters than query has: " + d_query);
     }
-    d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONG;
+    if constexpr (sizeof(long) == 4) {
+      d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONG; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    }
+    else {
+      d_req_bind[d_paridx].buffer_type = MYSQL_TYPE_LONGLONG; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    }
     d_req_bind[d_paridx].buffer = new unsigned long[1];
     d_req_bind[d_paridx].is_unsigned = 1;
     *((unsigned long*)d_req_bind[d_paridx].buffer) = value;
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& /* name */, long long value)
+  SSqlStatement* bind(const string& /* name */, long long value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -149,7 +160,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& /* name */, unsigned long long value)
+  SSqlStatement* bind(const string& /* name */, unsigned long long value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -163,7 +174,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bind(const string& /* name */, const std::string& value)
+  SSqlStatement* bind(const string& /* name */, const std::string& value) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -180,7 +191,7 @@ public:
     d_paridx++;
     return this;
   }
-  SSqlStatement* bindNull(const string& /* name */)
+  SSqlStatement* bindNull(const string& /* name */) override
   {
     prepareStatement();
     if (d_paridx >= d_parnum) {
@@ -192,7 +203,7 @@ public:
     return this;
   }
 
-  SSqlStatement* execute()
+  SSqlStatement* execute() override
   {
     prepareStatement();
 
@@ -200,7 +211,8 @@ public:
       return this;
 
     if (d_dolog) {
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_query << endl;
+      SLOG(g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_query << endl,
+           d_slog->info(Logr::Warning, "execute SQL query", "query", Logging::Loggable(d_query)));
       d_dtime.set();
     }
 
@@ -261,21 +273,24 @@ public:
       }
     }
 
-    if (d_dolog)
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us to execute" << endl;
+    if (d_dolog) {
+      SLOG(g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us to execute" << endl,
+           d_slog->info(Logr::Warning, "query completed", "microseconds", Logging::Loggable(d_dtime.udiffNoReset())));
+    }
 
     return this;
   }
 
-  bool hasNextRow()
+  bool hasNextRow() override
   {
     if (d_dolog && d_residx == d_resnum) {
-      g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us total to last row" << endl;
+      SLOG(g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us total to last row" << endl,
+           d_slog->info(Logr::Warning, "all query results processed", "microseconds", Logging::Loggable(d_dtime.udiffNoReset())));
     }
     return d_residx < d_resnum;
   }
 
-  SSqlStatement* nextRow(row_t& row)
+  SSqlStatement* nextRow(row_t& row) override
   {
     int err;
     row.clear();
@@ -295,7 +310,8 @@ public:
 
     for (int i = 0; i < d_fnum; i++) {
       if (err == MYSQL_DATA_TRUNCATED && *d_res_bind[i].error) {
-        g_log << Logger::Warning << "Result field at row " << d_residx << " column " << i << " has been truncated, we allocated " << d_res_bind[i].buffer_length << " bytes but at least " << *d_res_bind[i].length << " was needed" << endl;
+        SLOG(g_log << Logger::Warning << "Result field at row " << d_residx << " column " << i << " has been truncated, we allocated " << d_res_bind[i].buffer_length << " bytes but at least " << *d_res_bind[i].length << " was needed" << endl,
+             d_slog->info(Logr::Warning, "truncated result field", "row", Logging::Loggable(d_residx), "column", Logging::Loggable(i), "bytes allocated", Logging::Loggable(d_res_bind[i].buffer_length), "bytes required", Logging::Loggable(*d_res_bind[i].length)));
       }
       if (*d_res_bind[i].is_null) {
         row.emplace_back("");
@@ -338,7 +354,7 @@ public:
     return this;
   }
 
-  SSqlStatement* getResult(result_t& result)
+  SSqlStatement* getResult(result_t& result) override
   {
     result.clear();
     result.reserve(d_resnum);
@@ -352,7 +368,7 @@ public:
     return this;
   }
 
-  SSqlStatement* reset()
+  SSqlStatement* reset() override
   {
     if (!d_stmt)
       return this;
@@ -372,7 +388,7 @@ public:
     if (d_req_bind) {
       for (int i = 0; i < d_parnum; i++) {
         if (d_req_bind[i].buffer)
-          delete[](char*) d_req_bind[i].buffer;
+          delete[] (char*)d_req_bind[i].buffer;
         if (d_req_bind[i].length)
           delete[] d_req_bind[i].length;
       }
@@ -383,9 +399,9 @@ public:
     return this;
   }
 
-  const std::string& getQuery() { return d_query; }
+  const std::string& getQuery() override { return d_query; }
 
-  ~SMySQLStatement()
+  ~SMySQLStatement() override
   {
     releaseStatement();
   }
@@ -431,7 +447,7 @@ private:
     if (d_req_bind) {
       for (int i = 0; i < d_parnum; i++) {
         if (d_req_bind[i].buffer)
-          delete[](char*) d_req_bind[i].buffer;
+          delete[] (char*)d_req_bind[i].buffer;
         if (d_req_bind[i].length)
           delete[] d_req_bind[i].length;
       }
@@ -441,7 +457,7 @@ private:
     if (d_res_bind) {
       for (int i = 0; i < d_fnum; i++) {
         if (d_res_bind[i].buffer)
-          delete[](char*) d_res_bind[i].buffer;
+          delete[] (char*)d_res_bind[i].buffer;
         if (d_res_bind[i].length)
           delete[] d_res_bind[i].length;
         if (d_res_bind[i].error)
@@ -464,6 +480,7 @@ private:
 
   bool d_prepared;
   bool d_dolog;
+  std::shared_ptr<Logr::Logger> d_slog;
   DTime d_dtime; // only used if d_dolog is set
   int d_parnum;
   int d_paridx;
@@ -477,7 +494,7 @@ void SMySQL::connect()
   int retry = 1;
 
   {
-    std::lock_guard<std::mutex> l(s_myinitlock);
+    auto lock = std::scoped_lock(s_myinitlock);
     if (d_threadCleanup) {
       threadcloser.enable();
     }
@@ -493,6 +510,7 @@ void SMySQL::connect()
     if (d_timeout) {
       mysql_options(&d_db, MYSQL_OPT_READ_TIMEOUT, &d_timeout);
       mysql_options(&d_db, MYSQL_OPT_WRITE_TIMEOUT, &d_timeout);
+      mysql_options(&d_db, MYSQL_OPT_CONNECT_TIMEOUT, &d_timeout);
     }
 #endif
 
@@ -507,7 +525,7 @@ void SMySQL::connect()
                             d_database.empty() ? nullptr : d_database.c_str(),
                             d_port,
                             d_msocket.empty() ? nullptr : d_msocket.c_str(),
-                            (d_clientSSL ? CLIENT_SSL : 0) | CLIENT_MULTI_RESULTS)) {
+                            CLIENT_MULTI_RESULTS)) {
 
       if (retry == 0)
         throw sPerrorException("Unable to connect to database");
@@ -523,10 +541,11 @@ void SMySQL::connect()
   } while (retry >= 0);
 }
 
-SMySQL::SMySQL(string database, string host, uint16_t port, string msocket, string user,
-               string password, string group, bool setIsolation, unsigned int timeout, bool threadCleanup, bool clientSSL) :
-  d_database(std::move(database)), d_host(std::move(host)), d_msocket(std::move(msocket)), d_user(std::move(user)), d_password(std::move(password)), d_group(std::move(group)), d_timeout(timeout), d_port(port), d_setIsolation(setIsolation), d_threadCleanup(threadCleanup), d_clientSSL(clientSSL)
+SMySQL::SMySQL(Logr::log_t log, string database, string host, uint16_t port, string msocket, string user,
+               string password, string group, bool setIsolation, unsigned int timeout, bool threadCleanup) :
+  d_database(std::move(database)), d_host(std::move(host)), d_msocket(std::move(msocket)), d_user(std::move(user)), d_password(std::move(password)), d_group(std::move(group)), d_timeout(timeout), d_port(port), d_setIsolation(setIsolation), d_threadCleanup(threadCleanup)
 {
+  d_slog = log;
   connect();
 }
 
@@ -547,13 +566,15 @@ SSqlException SMySQL::sPerrorException(const string& reason)
 
 std::unique_ptr<SSqlStatement> SMySQL::prepare(const string& query, int nparams)
 {
-  return std::make_unique<SMySQLStatement>(query, s_dolog, nparams, &d_db);
+  return std::make_unique<SMySQLStatement>(d_slog, query, s_dolog, nparams, &d_db);
 }
 
 void SMySQL::execute(const string& query)
 {
-  if (s_dolog)
-    g_log << Logger::Warning << "Query: " << query << endl;
+  if (s_dolog) {
+    SLOG(g_log << Logger::Warning << "Query: " << query << endl,
+         d_slog->info(Logr::Warning, "execute SQL query", "query", Logging::Loggable(query)));
+  }
 
   int err;
   if ((err = mysql_query(&d_db, query.c_str())))

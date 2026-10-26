@@ -19,10 +19,19 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#include <limits>
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 #include "remotebackend.hh"
+
+// The following requirement guarantees UnknownDomainID will get output as "-1"
+// in the Json data for compatibility.
+static_assert(std::is_signed<domainid_t>::value);
+
+// The following requirement is a consequency of JsonInt not able to store
+// anything larger than "int".
+static_assert(sizeof(domainid_t) <= sizeof(int));
 
 static const char* kBackendId = "[RemoteBackend]";
 
@@ -53,20 +62,12 @@ bool Connector::recv(Json& value)
       retval = false;
     }
     for (const auto& message : value["log"].array_items()) {
-      g_log << Logger::Info << "[remotebackend]: " << message.string_value() << std::endl;
+      SLOG(g_log << Logger::Info << "[remotebackend]: " << message.string_value() << std::endl,
+           d_slog->info(Logr::Info, "received", "message", Logging::Loggable(message.string_value())));
     }
     return retval;
   }
   throw PDNSException("Unknown error while receiving data");
-}
-
-void RemoteBackend::makeErrorAndThrow(Json& value)
-{
-  std::string msg = "Remote process indicated a failure";
-  for (const auto& message : value["log"].array_items()) {
-    msg += " '" + message.string_value() + "'";
-  }
-  throw PDNSException(msg);
 }
 
 /**
@@ -88,7 +89,7 @@ bool RemoteBackend::send(Json& value)
 {
   try {
     if (!connector->send(value)) {
-      // XXX does this work work even though we throw?
+      // XXX does this work even though we throw?
       this->connector.reset();
       build();
       throw DBException("Could not send a message to remote process");
@@ -161,25 +162,25 @@ int RemoteBackend::build()
       key = opt.substr(0, pos);
       val = opt.substr(pos + 1);
     }
-    options[key] = val;
+    options[key] = std::move(val);
   }
 
   // connectors know what they are doing
   if (type == "unix") {
-    this->connector = std::make_unique<UnixsocketConnector>(options);
+    this->connector = std::make_unique<UnixsocketConnector>(d_slog, options);
   }
   else if (type == "http") {
-    this->connector = std::make_unique<HTTPConnector>(options);
+    this->connector = std::make_unique<HTTPConnector>(d_slog, options);
   }
   else if (type == "zeromq") {
 #ifdef REMOTEBACKEND_ZEROMQ
-    this->connector = std::make_unique<ZeroMQConnector>(options);
+    this->connector = std::make_unique<ZeroMQConnector>(d_slog, options);
 #else
     throw PDNSException("Invalid connection string: zeromq connector support not enabled. Recompile with --enable-remotebackend-zeromq");
 #endif
   }
   else if (type == "pipe") {
-    this->connector = std::make_unique<PipeConnector>(options);
+    this->connector = std::make_unique<PipeConnector>(d_slog, options);
   }
   else {
     throw PDNSException("Invalid connection string: unknown connector");
@@ -192,7 +193,7 @@ int RemoteBackend::build()
  * The functions here are just remote json stubs that send and receive the method call
  * data is mainly left alone, some defaults are assumed.
  */
-void RemoteBackend::lookup(const QType& qtype, const DNSName& qdomain, int zoneId, DNSPacket* pkt_p)
+void RemoteBackend::lookup(const QType& qtype, const DNSName& qdomain, domainid_t zoneId, DNSPacket* pkt_p)
 {
   if (d_index != -1) {
     throw PDNSException("Attempt to lookup while one running");
@@ -224,7 +225,34 @@ void RemoteBackend::lookup(const QType& qtype, const DNSName& qdomain, int zoneI
   d_index = 0;
 }
 
-bool RemoteBackend::list(const DNSName& target, int domain_id, bool include_disabled)
+// Similar to lookup above, but passes an extra include_disabled parameter.
+void RemoteBackend::APILookup(const QType& qtype, const DNSName& qdomain, domainid_t zoneId, bool include_disabled)
+{
+  if (d_index != -1) {
+    throw PDNSException("Attempt to lookup while one running");
+  }
+
+  string localIP = "0.0.0.0";
+  string remoteIP = "0.0.0.0";
+  string realRemote = "0.0.0.0/0";
+
+  Json query = Json::object{
+    {"method", "APILookup"},
+    {"parameters", Json::object{{"qtype", qtype.toString()}, {"qname", qdomain.toString()}, {"remote", remoteIP}, {"local", localIP}, {"real-remote", realRemote}, {"zone-id", zoneId}, {"include-disabled", include_disabled}}}};
+
+  if (!this->send(query) || !this->recv(d_result)) {
+    return;
+  }
+
+  // OK. we have result parameters in result. do not process empty result.
+  if (!d_result["result"].is_array() || d_result["result"].array_items().empty()) {
+    return;
+  }
+
+  d_index = 0;
+}
+
+bool RemoteBackend::list(const ZoneName& target, domainid_t domain_id, bool include_disabled)
 {
   if (d_index != -1) {
     throw PDNSException("Attempt to lookup while one running");
@@ -256,7 +284,7 @@ bool RemoteBackend::get(DNSResourceRecord& rr)
   rr.qclass = QClass::IN;
   rr.content = stringFromJson(d_result["result"][d_index], "content");
   rr.ttl = d_result["result"][d_index]["ttl"].int_value();
-  rr.domain_id = intFromJson(d_result["result"][d_index], "domain_id", -1);
+  rr.domain_id = static_cast<domainid_t>(intFromJson(d_result["result"][d_index], "domain_id", UnknownDomainID));
   if (d_dnssec) {
     rr.auth = (intFromJson(d_result["result"][d_index], "auth", 1) != 0);
   }
@@ -274,7 +302,8 @@ bool RemoteBackend::get(DNSResourceRecord& rr)
   return true;
 }
 
-bool RemoteBackend::getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& qname, DNSName& unhashed, DNSName& before, DNSName& after)
+// NOLINTNEXTLINE(readability-identifier-length)
+bool RemoteBackend::getBeforeAndAfterNamesAbsolute(domainid_t id, const DNSName& qname, DNSName& unhashed, DNSName& before, DNSName& after)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -283,7 +312,7 @@ bool RemoteBackend::getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& q
 
   Json query = Json::object{
     {"method", "getBeforeAndAfterNamesAbsolute"},
-    {"parameters", Json::object{{"id", Json(static_cast<double>(id))}, {"qname", qname.toString()}}}};
+    {"parameters", Json::object{{"id", Json(id)}, {"qname", qname.toString()}}}};
   Json answer;
 
   if (!this->send(query) || !this->recv(answer)) {
@@ -303,7 +332,7 @@ bool RemoteBackend::getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& q
   return true;
 }
 
-bool RemoteBackend::getAllDomainMetadata(const DNSName& name, std::map<std::string, std::vector<std::string>>& meta)
+bool RemoteBackend::getAllDomainMetadata(const ZoneName& name, std::map<std::string, std::vector<std::string>>& meta)
 {
   Json query = Json::object{
     {"method", "getAllDomainMetadata"},
@@ -335,7 +364,7 @@ bool RemoteBackend::getAllDomainMetadata(const DNSName& name, std::map<std::stri
   return true;
 }
 
-bool RemoteBackend::getDomainMetadata(const DNSName& name, const std::string& kind, std::vector<std::string>& meta)
+bool RemoteBackend::getDomainMetadata(const ZoneName& name, const std::string& kind, std::vector<std::string>& meta)
 {
   Json query = Json::object{
     {"method", "getDomainMetadata"},
@@ -365,7 +394,7 @@ bool RemoteBackend::getDomainMetadata(const DNSName& name, const std::string& ki
   return true;
 }
 
-bool RemoteBackend::setDomainMetadata(const DNSName& name, const std::string& kind, const std::vector<std::string>& meta)
+bool RemoteBackend::setDomainMetadata(const ZoneName& name, const std::string& kind, const std::vector<std::string>& meta)
 {
   Json query = Json::object{
     {"method", "setDomainMetadata"},
@@ -379,7 +408,7 @@ bool RemoteBackend::setDomainMetadata(const DNSName& name, const std::string& ki
   return boolFromJson(answer, "result", false);
 }
 
-bool RemoteBackend::getDomainKeys(const DNSName& name, std::vector<DNSBackend::KeyData>& keys)
+bool RemoteBackend::getDomainKeys(const ZoneName& name, std::vector<DNSBackend::KeyData>& keys)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -404,13 +433,13 @@ bool RemoteBackend::getDomainKeys(const DNSName& name, std::vector<DNSBackend::K
     key.active = asBool(jsonKey["active"]);
     key.published = boolFromJson(jsonKey, "published", true);
     key.content = stringFromJson(jsonKey, "content");
-    keys.push_back(key);
+    keys.emplace_back(std::move(key));
   }
 
   return true;
 }
 
-bool RemoteBackend::removeDomainKey(const DNSName& name, unsigned int id)
+bool RemoteBackend::removeDomainKey(const ZoneName& name, unsigned int keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -419,13 +448,13 @@ bool RemoteBackend::removeDomainKey(const DNSName& name, unsigned int id)
 
   Json query = Json::object{
     {"method", "removeDomainKey"},
-    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(id)}}}};
+    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(keyId)}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::addDomainKey(const DNSName& name, const KeyData& key, int64_t& id)
+bool RemoteBackend::addDomainKey(const ZoneName& name, const KeyData& key, int64_t& keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -441,11 +470,11 @@ bool RemoteBackend::addDomainKey(const DNSName& name, const KeyData& key, int64_
     return false;
   }
 
-  id = answer["result"].int_value();
-  return id >= 0;
+  keyId = answer["result"].int_value();
+  return keyId >= 0;
 }
 
-bool RemoteBackend::activateDomainKey(const DNSName& name, unsigned int id)
+bool RemoteBackend::activateDomainKey(const ZoneName& name, unsigned int keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -454,13 +483,13 @@ bool RemoteBackend::activateDomainKey(const DNSName& name, unsigned int id)
 
   Json query = Json::object{
     {"method", "activateDomainKey"},
-    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(id)}}}};
+    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(keyId)}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::deactivateDomainKey(const DNSName& name, unsigned int id)
+bool RemoteBackend::deactivateDomainKey(const ZoneName& name, unsigned int keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -469,13 +498,13 @@ bool RemoteBackend::deactivateDomainKey(const DNSName& name, unsigned int id)
 
   Json query = Json::object{
     {"method", "deactivateDomainKey"},
-    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(id)}}}};
+    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(keyId)}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::publishDomainKey(const DNSName& name, unsigned int id)
+bool RemoteBackend::publishDomainKey(const ZoneName& name, unsigned int keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -484,13 +513,13 @@ bool RemoteBackend::publishDomainKey(const DNSName& name, unsigned int id)
 
   Json query = Json::object{
     {"method", "publishDomainKey"},
-    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(id)}}}};
+    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(keyId)}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::unpublishDomainKey(const DNSName& name, unsigned int id)
+bool RemoteBackend::unpublishDomainKey(const ZoneName& name, unsigned int keyId)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
@@ -499,15 +528,19 @@ bool RemoteBackend::unpublishDomainKey(const DNSName& name, unsigned int id)
 
   Json query = Json::object{
     {"method", "unpublishDomainKey"},
-    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(id)}}}};
+    {"parameters", Json::object{{"name", name.toString()}, {"id", static_cast<int>(keyId)}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::doesDNSSEC()
+unsigned int RemoteBackend::getCapabilities()
 {
-  return d_dnssec;
+  unsigned int caps = CAP_DIRECT | CAP_LIST | CAP_SEARCH;
+  if (d_dnssec) {
+    caps |= CAP_DNSSEC;
+  }
+  return caps;
 }
 
 bool RemoteBackend::getTSIGKey(const DNSName& name, DNSName& algorithm, std::string& content)
@@ -517,9 +550,14 @@ bool RemoteBackend::getTSIGKey(const DNSName& name, DNSName& algorithm, std::str
     return false;
   }
 
+  Json::object parameters;
+  parameters["name"] = name.toString();
+  if (!algorithm.empty()) { // don't send a single dot in this case!
+    parameters["algorithm"] = algorithm.toString();
+  }
   Json query = Json::object{
     {"method", "getTSIGKey"},
-    {"parameters", Json::object{{"name", name.toString()}}}};
+    {"parameters", parameters}};
 
   Json answer;
   if (!this->send(query) || !this->recv(answer)) {
@@ -547,15 +585,20 @@ bool RemoteBackend::setTSIGKey(const DNSName& name, const DNSName& algorithm, co
   return connector->send(query) && connector->recv(answer);
 }
 
-bool RemoteBackend::deleteTSIGKey(const DNSName& name)
+bool RemoteBackend::deleteTSIGKey(const DNSName& name, const DNSName& algorithm)
 {
   // no point doing dnssec if it's not supported
   if (!d_dnssec) {
     return false;
   }
+  Json::object parameters;
+  parameters["name"] = name.toString();
+  if (!algorithm.empty()) { // don't send a single dot in this case!
+    parameters["algorithm"] = algorithm.toString();
+  }
   Json query = Json::object{
     {"method", "deleteTSIGKey"},
-    {"parameters", Json::object{{"name", name.toString()}}}};
+    {"parameters", parameters}};
 
   Json answer;
   return connector->send(query) && connector->recv(answer);
@@ -589,10 +632,10 @@ bool RemoteBackend::getTSIGKeys(std::vector<struct TSIGKey>& keys)
 
 void RemoteBackend::parseDomainInfo(const Json& obj, DomainInfo& di)
 {
-  di.id = intFromJson(obj, "id", -1);
-  di.zone = DNSName(stringFromJson(obj, "zone"));
-  for (const auto& master : obj["masters"].array_items()) {
-    di.masters.emplace_back(master.string_value(), 53);
+  di.id = static_cast<domainid_t>(intFromJson(obj, "id", UnknownDomainID));
+  di.zone = ZoneName(stringFromJson(obj, "zone"));
+  for (const auto& primary : obj["masters"].array_items()) {
+    di.primaries.emplace_back(primary.string_value(), 53);
   }
 
   di.notified_serial = static_cast<unsigned int>(doubleFromJson(obj, "notified_serial", 0));
@@ -604,10 +647,10 @@ void RemoteBackend::parseDomainInfo(const Json& obj, DomainInfo& di)
     kind = stringFromJson(obj, "kind");
   }
   if (kind == "master") {
-    di.kind = DomainInfo::Master;
+    di.kind = DomainInfo::Primary;
   }
   else if (kind == "slave") {
-    di.kind = DomainInfo::Slave;
+    di.kind = DomainInfo::Secondary;
   }
   else {
     di.kind = DomainInfo::Native;
@@ -615,7 +658,7 @@ void RemoteBackend::parseDomainInfo(const Json& obj, DomainInfo& di)
   di.backend = this;
 }
 
-bool RemoteBackend::getDomainInfo(const DNSName& domain, DomainInfo& di, bool /* getSerial */)
+bool RemoteBackend::getDomainInfo(const ZoneName& domain, DomainInfo& info, bool /* getSerial */)
 {
   if (domain.empty()) {
     return false;
@@ -630,23 +673,25 @@ bool RemoteBackend::getDomainInfo(const DNSName& domain, DomainInfo& di, bool /*
     return false;
   }
 
-  this->parseDomainInfo(answer["result"], di);
+  this->parseDomainInfo(answer["result"], info);
   return true;
 }
 
-void RemoteBackend::setNotified(uint32_t id, uint32_t serial)
+// NOLINTNEXTLINE(readability-identifier-length)
+void RemoteBackend::setNotified(domainid_t id, uint32_t serial)
 {
   Json query = Json::object{
     {"method", "setNotified"},
-    {"parameters", Json::object{{"id", static_cast<double>(id)}, {"serial", static_cast<double>(serial)}}}};
+    {"parameters", Json::object{{"id", id}, {"serial", static_cast<double>(serial)}}}};
 
   Json answer;
   if (!this->send(query) || !this->recv(answer)) {
-    g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setNotified(" << id << "," << serial << ")" << endl;
+    SLOG(g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setNotified(" << id << "," << serial << ")" << endl,
+         d_slog->info(Logr::Error, "Failed to execute RPC for RemoteBackend::setNotified", "domain_id", Logging::Loggable(id), "serial", Logging::Loggable(serial)));
   }
 }
 
-bool RemoteBackend::superMasterBackend(const string& ip, const DNSName& domain, const vector<DNSResourceRecord>& nsset, string* nameserver, string* account, DNSBackend** ddb)
+bool RemoteBackend::autoPrimaryBackend(const string& ipAddress, const ZoneName& domain, const vector<DNSResourceRecord>& nsset, string* nameserver, string* account, DNSBackend** ddb)
 {
   Json::array rrset;
 
@@ -662,7 +707,7 @@ bool RemoteBackend::superMasterBackend(const string& ip, const DNSName& domain, 
 
   Json query = Json::object{
     {"method", "superMasterBackend"},
-    {"parameters", Json::object{{"ip", ip}, {"domain", domain.toString()}, {"nsset", rrset}}}};
+    {"parameters", Json::object{{"ip", ipAddress}, {"domain", domain.toString()}, {"nsset", rrset}}}};
 
   *ddb = nullptr;
 
@@ -683,22 +728,27 @@ bool RemoteBackend::superMasterBackend(const string& ip, const DNSName& domain, 
   return true;
 }
 
-bool RemoteBackend::createSlaveDomain(const string& ip, const DNSName& domain, const string& nameserver, const string& account)
+bool RemoteBackend::createSecondaryDomain(const string& ipAddress, const ZoneName& domain, const string& nameserver, const string& account, DomainInfo& info, bool /* startTransaction */)
 {
   Json query = Json::object{
     {"method", "createSlaveDomain"},
     {"parameters", Json::object{
-                     {"ip", ip},
+                     {"ip", ipAddress},
                      {"domain", domain.toString()},
                      {"nameserver", nameserver},
                      {"account", account},
                    }}};
 
   Json answer;
-  return this->send(query) && this->recv(answer);
+  if (!this->send(query) || !this->recv(answer)) {
+    return false;
+  }
+  // Although we know most of the information to be returned in [info], we
+  // do not know the domain id, so we need to query the remote.
+  return getDomainInfo(domain, info, false);
 }
 
-bool RemoteBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const QType& qtype, const vector<DNSResourceRecord>& rrset)
+bool RemoteBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qtype, const vector<DNSResourceRecord>& rrset)
 {
   Json::array json_rrset;
   for (const auto& rr : rrset) {
@@ -713,7 +763,7 @@ bool RemoteBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const
 
   Json query = Json::object{
     {"method", "replaceRRSet"},
-    {"parameters", Json::object{{"domain_id", static_cast<double>(domain_id)}, {"qname", qname.toString()}, {"qtype", qtype.toString()}, {"trxid", static_cast<double>(d_trxid)}, {"rrset", json_rrset}}}};
+    {"parameters", Json::object{{"domain_id", domain_id}, {"qname", qname.toString()}, {"qtype", qtype.toString()}, {"trxid", static_cast<double>(d_trxid)}, {"rrset", json_rrset}}}};
 
   Json answer;
   return this->send(query) && this->recv(answer);
@@ -732,7 +782,7 @@ bool RemoteBackend::feedRecord(const DNSResourceRecord& rr, const DNSName& order
   return this->send(query) && this->recv(answer); // XXX FIXME this API should not return 'true' I think -ahu
 }
 
-bool RemoteBackend::feedEnts(int domain_id, map<DNSName, bool>& nonterm)
+bool RemoteBackend::feedEnts(domainid_t domain_id, map<DNSName, bool>& nonterm)
 {
   Json::array nts;
 
@@ -751,7 +801,7 @@ bool RemoteBackend::feedEnts(int domain_id, map<DNSName, bool>& nonterm)
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::feedEnts3(int domain_id, const DNSName& domain, map<DNSName, bool>& nonterm, const NSEC3PARAMRecordContent& ns3prc, bool narrow)
+bool RemoteBackend::feedEnts3(domainid_t domain_id, const DNSName& domain, map<DNSName, bool>& nonterm, const NSEC3PARAMRecordContent& ns3prc, bool narrow)
 {
   Json::array nts;
 
@@ -770,7 +820,7 @@ bool RemoteBackend::feedEnts3(int domain_id, const DNSName& domain, map<DNSName,
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::startTransaction(const DNSName& domain, int domain_id)
+bool RemoteBackend::startTransactionInternal(const ZoneName& domain, domainid_t domain_id)
 {
   this->d_trxid = time((time_t*)nullptr);
 
@@ -784,6 +834,14 @@ bool RemoteBackend::startTransaction(const DNSName& domain, int domain_id)
     return false;
   }
   return true;
+}
+bool RemoteBackend::startDomainReplacementTransaction(const ZoneName& qname, domainid_t domainId)
+{
+  return startTransactionInternal(qname, domainId);
+}
+bool RemoteBackend::startDomainModificationTransaction(const ZoneName& qname)
+{
+  return startTransactionInternal(qname, UnknownDomainID);
 }
 
 bool RemoteBackend::commitTransaction()
@@ -830,11 +888,16 @@ string RemoteBackend::directBackendCmd(const string& querystr)
   return asString(answer["result"]);
 }
 
-bool RemoteBackend::searchRecords(const string& pattern, int maxResults, vector<DNSResourceRecord>& result)
+bool RemoteBackend::searchRecords(const string& pattern, size_t maxResults, vector<DNSResourceRecord>& result)
 {
+  const auto intMax = static_cast<decltype(maxResults)>(std::numeric_limits<int>::max());
+  if (maxResults > intMax) {
+    throw std::out_of_range("Remote backend: length of list of result (" + std::to_string(maxResults) + ") is larger than what the JSON library supports for serialization (" + std::to_string(intMax) + ")");
+  }
+
   Json query = Json::object{
     {"method", "searchRecords"},
-    {"parameters", Json::object{{"pattern", pattern}, {"maxResults", maxResults}}}};
+    {"parameters", Json::object{{"pattern", pattern}, {"maxResults", static_cast<int>(maxResults)}}}};
 
   Json answer;
   if (!this->send(query) || !this->recv(answer)) {
@@ -852,7 +915,7 @@ bool RemoteBackend::searchRecords(const string& pattern, int maxResults, vector<
     rr.qclass = QClass::IN;
     rr.content = stringFromJson(row, "content");
     rr.ttl = row["ttl"].int_value();
-    rr.domain_id = intFromJson(row, "domain_id", -1);
+    rr.domain_id = static_cast<domainid_t>(intFromJson(row, "domain_id", UnknownDomainID));
     if (d_dnssec) {
       rr.auth = (intFromJson(row, "auth", 1) != 0);
     }
@@ -866,7 +929,7 @@ bool RemoteBackend::searchRecords(const string& pattern, int maxResults, vector<
   return true;
 }
 
-bool RemoteBackend::searchComments(const string& /* pattern */, int /* maxResults */, vector<Comment>& /* result */)
+bool RemoteBackend::searchComments(const string& /* pattern */, size_t /* maxResults */, vector<Comment>& /* result */)
 {
   // FIXME: Implement Comment API
   return false;
@@ -894,7 +957,7 @@ void RemoteBackend::getAllDomains(vector<DomainInfo>* domains, bool /* getSerial
   }
 }
 
-void RemoteBackend::getUpdatedMasters(vector<DomainInfo>& domains, std::unordered_set<DNSName>& /* catalogs */, CatalogHashMap& /* catalogHashes */)
+void RemoteBackend::getUpdatedPrimaries(vector<DomainInfo>& domains, std::unordered_set<DNSName>& /* catalogs */, CatalogHashMap& /* catalogHashes */)
 {
   Json query = Json::object{
     {"method", "getUpdatedMasters"},
@@ -917,7 +980,7 @@ void RemoteBackend::getUpdatedMasters(vector<DomainInfo>& domains, std::unordere
   }
 }
 
-void RemoteBackend::getUnfreshSlaveInfos(vector<DomainInfo>* domains)
+void RemoteBackend::getUnfreshSecondaryInfos(vector<DomainInfo>* domains)
 {
   Json query = Json::object{
     {"method", "getUnfreshSlaveInfos"},
@@ -940,39 +1003,30 @@ void RemoteBackend::getUnfreshSlaveInfos(vector<DomainInfo>* domains)
   }
 }
 
-void RemoteBackend::setStale(uint32_t domain_id)
+void RemoteBackend::setStale(domainid_t domain_id)
 {
   Json query = Json::object{
     {"method", "setStale"},
-    {"parameters", Json::object{{"id", static_cast<double>(domain_id)}}}};
+    {"parameters", Json::object{{"id", domain_id}}}};
 
   Json answer;
   if (!this->send(query) || !this->recv(answer)) {
-    g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setStale(" << domain_id << ")" << endl;
+    SLOG(g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setStale(" << domain_id << ")" << endl,
+         d_slog->info(Logr::Error, "Failed to execute RPC for RemoteBackend::setStale", "domain_id", Logging::Loggable(domain_id)));
   }
 }
 
-void RemoteBackend::setFresh(uint32_t domain_id)
+void RemoteBackend::setFresh(domainid_t domain_id)
 {
   Json query = Json::object{
     {"method", "setFresh"},
-    {"parameters", Json::object{{"id", static_cast<double>(domain_id)}}}};
+    {"parameters", Json::object{{"id", domain_id}}}};
 
   Json answer;
   if (!this->send(query) || !this->recv(answer)) {
-    g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setFresh(" << domain_id << ")" << endl;
+    SLOG(g_log << Logger::Error << kBackendId << " Failed to execute RPC for RemoteBackend::setFresh(" << domain_id << ")" << endl,
+         d_slog->info(Logr::Error, "Failed to execute RPC for RemoteBackend::setFresh", "domain_id", Logging::Loggable(domain_id)));
   }
-}
-
-DNSBackend* RemoteBackend::maker()
-{
-  try {
-    return new RemoteBackend();
-  }
-  catch (...) {
-    g_log << Logger::Error << kBackendId << " Unable to instantiate a remotebackend!" << endl;
-    return nullptr;
-  };
 }
 
 class RemoteBackendFactory : public BackendFactory
@@ -1001,7 +1055,10 @@ public:
 
 RemoteLoader::RemoteLoader()
 {
-  BackendMakers().report(new RemoteBackendFactory);
+  BackendMakers().report(std::make_unique<RemoteBackendFactory>());
+  // If this module is not loaded dynamically at runtime, this code runs
+  // as part of a global constructor, before the structured logger has a
+  // chance to be set up, so fallback to simple logging.
   g_log << Logger::Info << kBackendId << " This is the remote backend version " VERSION
 #ifndef REPRODUCIBLE
         << " (" __DATE__ " " __TIME__ ")"

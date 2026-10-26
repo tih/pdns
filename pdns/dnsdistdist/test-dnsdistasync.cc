@@ -19,7 +19,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #include <boost/test/unit_test.hpp>
@@ -107,14 +110,44 @@ BOOST_AUTO_TEST_CASE(test_Basic)
   holder->stop();
 }
 
+BOOST_AUTO_TEST_CASE(test_Collison)
+{
+  auto holder = std::make_unique<dnsdist::AsynchronousHolder>();
+
+  {
+    uint16_t asyncID = 1;
+    uint16_t queryID = 42;
+    timeval ttd{};
+    gettimeofday(&ttd, nullptr);
+    // timeout in 100 ms
+    const timeval add{0, 100000};
+    ttd = ttd + add;
+
+    holder->push(asyncID, queryID, ttd, std::make_unique<DummyCrossProtocolQuery>());
+    BOOST_CHECK(!holder->empty());
+
+    holder->push(asyncID, queryID, ttd, std::make_unique<DummyCrossProtocolQuery>());
+
+    auto query = holder->get(asyncID, queryID);
+    BOOST_CHECK(holder->empty());
+
+    query = holder->get(asyncID, queryID);
+    BOOST_CHECK(query == nullptr);
+
+    // sleep for 200 ms, to be sure the main thread has
+    // been awakened
+    usleep(200000);
+  }
+
+  holder->stop();
+}
+
 BOOST_AUTO_TEST_CASE(test_TimeoutFailClose)
 {
   auto holder = std::make_unique<dnsdist::AsynchronousHolder>(false);
   uint16_t asyncID = 1;
   uint16_t queryID = 42;
-  struct timeval ttd
-  {
-  };
+  struct timeval ttd{};
 
   std::shared_ptr<DummyQuerySender> sender{nullptr};
   {
@@ -132,7 +165,10 @@ BOOST_AUTO_TEST_CASE(test_TimeoutFailClose)
   // the event should be triggered after 10 ms, but we have seen
   // many spurious failures on our CI, likely because the box is
   // overloaded, so sleep for up to 100 ms to be sure
-  for (size_t counter = 0; !holder->empty() && counter < 10; counter++) {
+  for (size_t counter = 0; counter < 10; counter++) {
+    if (holder->empty() && sender->errorRaised.load()) {
+      break;
+    }
     usleep(10000);
   }
 
@@ -165,7 +201,10 @@ BOOST_AUTO_TEST_CASE(test_AddingExpiredEvent)
   // but we have seen many spurious failures on our CI,
   // likely because the box is overloaded, so sleep for up to
   // 100 ms to be sure
-  for (size_t counter = 0; !holder->empty() && counter < 10; counter++) {
+  for (size_t counter = 0; counter < 10; counter++) {
+    if (holder->empty() && sender->errorRaised.load()) {
+      break;
+    }
     usleep(10000);
   }
 

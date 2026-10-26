@@ -21,6 +21,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <boost/utility.hpp>
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/ordered_index.hpp>
@@ -36,16 +37,25 @@ using namespace ::boost::multi_index;
 #include "lock.hh"
 #include "stat_t.hh"
 #include "logger.hh"
+#include "validate.hh"
+#include "recursor_cache.hh"
 
 class AggressiveNSECCache
 {
 public:
-  static const uint8_t s_default_maxNSEC3CommonPrefix = 10;
+  static constexpr uint8_t s_default_maxNSEC3CommonPrefix = 10;
+  static uint64_t s_nsec3DenialProofMaxCost;
   static uint8_t s_maxNSEC3CommonPrefix;
+  static uint32_t s_maxEntrySize;
 
   AggressiveNSECCache(uint64_t entries) :
     d_maxEntries(entries)
   {
+  }
+
+  void setMaxEntries(uint64_t number)
+  {
+    d_maxEntries = number;
   }
 
   static bool nsec3Disabled()
@@ -53,8 +63,8 @@ public:
     return s_maxNSEC3CommonPrefix == 0;
   }
 
-  void insertNSEC(const DNSName& zone, const DNSName& owner, const DNSRecord& record, const std::vector<std::shared_ptr<const RRSIGRecordContent>>& signatures, bool nsec3);
-  bool getDenial(time_t, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, const ComboAddress& who, const boost::optional<std::string>& routingTag, bool doDNSSEC, const OptLog& log = std::nullopt);
+  void insertNSEC(const DNSName& zone, const DNSName& owner, const DNSRecord& record, const std::vector<std::shared_ptr<const RRSIGRecordContent>>& signatures, bool nsec3, const DNSName& qname = g_rootdnsname, QType qtype = QType::ENT);
+  bool getDenial(time_t, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, const ComboAddress& who, const MemRecursorCache::OptTag& routingTag, bool doDNSSEC, pdns::validation::ValidationContext& validationContext, const OptLog& log = std::nullopt);
 
   void removeZoneInfo(const DNSName& zone, bool subzones);
 
@@ -83,22 +93,16 @@ public:
     return d_nsec3WildcardHits;
   }
 
-  // exported for unit test purposes
   static bool isSmallCoveringNSEC3(const DNSName& owner, const std::string& nextHash);
 
   void prune(time_t now);
-  size_t dumpToFile(std::unique_ptr<FILE, int (*)(FILE*)>& fp, const struct timeval& now);
+  size_t dumpToFile(pdns::UniqueFilePtr& filePtr, const struct timeval& now);
 
 private:
   struct ZoneEntry
   {
     ZoneEntry(const DNSName& zone) :
       d_zone(zone)
-    {
-    }
-
-    ZoneEntry(const DNSName& zone, const std::string& salt, uint16_t iterations, bool nsec3) :
-      d_zone(zone), d_salt(salt), d_iterations(iterations), d_nsec3(nsec3)
     {
     }
 
@@ -119,10 +123,23 @@ private:
 
       DNSName d_owner;
       DNSName d_next;
+      DNSName d_qname; // of the query data that lead to this entry being created/updated
       time_t d_ttd;
+      QType d_qtype; // of the query data that lead to this entry being created/updated
+
+      [[nodiscard]] size_t sizeEstimate() const;
     };
 
-    typedef multi_index_container<
+    enum class ZoneDenialType : uint8_t
+    {
+      Unknown = 0,
+      NSEC = 1,
+      NSEC3 = 2
+    };
+
+    static const std::string& getZoneTypeAsString(ZoneDenialType type);
+
+    using cache_t = multi_index_container<
       CacheEntry,
       indexed_by<
         ordered_unique<tag<OrderedTag>,
@@ -130,21 +147,20 @@ private:
                        CanonDNSNameCompare>,
         sequenced<tag<SequencedTag>>,
         hashed_non_unique<tag<HashedTag>,
-                          member<CacheEntry, const DNSName, &CacheEntry::d_owner>>>>
-      cache_t;
+                          member<CacheEntry, const DNSName, &CacheEntry::d_owner>>>>;
 
     cache_t d_entries;
     const DNSName d_zone;
     std::string d_salt;
     uint16_t d_iterations{0};
-    bool d_nsec3{false};
+    ZoneDenialType d_denialType{ZoneDenialType::Unknown};
   };
 
   std::shared_ptr<LockGuarded<ZoneEntry>> getZone(const DNSName& zone);
   std::shared_ptr<LockGuarded<ZoneEntry>> getBestZone(const DNSName& zone);
   bool getNSECBefore(time_t now, std::shared_ptr<LockGuarded<ZoneEntry>>& zoneEntry, const DNSName& name, ZoneEntry::CacheEntry& entry);
   bool getNSEC3(time_t now, std::shared_ptr<LockGuarded<ZoneEntry>>& zoneEntry, const DNSName& name, ZoneEntry::CacheEntry& entry);
-  bool getNSEC3Denial(time_t now, std::shared_ptr<LockGuarded<ZoneEntry>>& zoneEntry, std::vector<DNSRecord>& soaSet, std::vector<std::shared_ptr<const RRSIGRecordContent>>& soaSignatures, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, bool doDNSSEC, const OptLog&);
+  bool getNSEC3Denial(time_t now, std::shared_ptr<LockGuarded<ZoneEntry>>& zoneEntry, std::vector<DNSRecord>& soaSet, const MemRecursorCache::SigRecs& soaSignatures, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, bool doDNSSEC, const OptLog&, pdns::validation::ValidationContext& validationContext);
   bool synthesizeFromNSEC3Wildcard(time_t now, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, bool doDNSSEC, ZoneEntry::CacheEntry& nextCloser, const DNSName& wildcardName, const OptLog&);
   bool synthesizeFromNSECWildcard(time_t now, const DNSName& name, const QType& type, std::vector<DNSRecord>& ret, int& res, bool doDNSSEC, ZoneEntry::CacheEntry& nsec, const DNSName& wildcardName, const OptLog&);
 
@@ -157,7 +173,7 @@ private:
   pdns::stat_t d_nsecWildcardHits{0};
   pdns::stat_t d_nsec3WildcardHits{0};
   pdns::stat_t d_entriesCount{0};
-  uint64_t d_maxEntries{0};
+  std::atomic<uint64_t> d_maxEntries{0};
 };
 
 extern std::unique_ptr<AggressiveNSECCache> g_aggressiveNSECCache;

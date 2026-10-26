@@ -35,6 +35,8 @@
 #include "statbag.hh"
 StatBag S;
 
+bool g_slogStructured{false};
+
 static void usage()
 {
   cerr<<"This program reads DNS queries and responses from a PCAP file and stores them into our protobuf format."<<endl;
@@ -63,9 +65,12 @@ try {
 
   PcapPacketReader pr(argv[1]);
 
-  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(argv[2], "w"), fclose);
-  if (!fp) {
-    cerr<<"Error opening output file "<<argv[2]<<": "<<stringerror()<<endl;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): it's argv..
+  auto filePtr = pdns::openFileForWriting(argv[2], 0600, true, false);
+  if (!filePtr) {
+    auto error = errno;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): it's argv..
+    cerr<<"Error opening output file "<<argv[2]<<": "<<stringerror(error)<<endl;
     exit(EXIT_FAILURE);
   }
 
@@ -150,8 +155,8 @@ try {
       }
 
       uint16_t mlen = htons(pbBuffer.length());
-      fwrite(&mlen, 1, sizeof(mlen), fp.get());
-      fwrite(pbBuffer.c_str(), 1, pbBuffer.length(), fp.get());
+      fwrite(&mlen, 1, sizeof(mlen), filePtr.get());
+      fwrite(pbBuffer.c_str(), 1, pbBuffer.length(), filePtr.get());
     }
   }
   catch (const std::exception& e) {

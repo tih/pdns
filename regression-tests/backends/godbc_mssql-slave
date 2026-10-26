@@ -5,8 +5,9 @@
 		echo "drop table $table" | $ISQL -b
 	done
 	$ISQL < ../modules/godbcbackend/schema.mssql.sql
+	backend=godbc2
 	cat > pdns-godbc2.conf << __EOF__
-module-dir=./modules
+module-dir=$PDNS_MODULE_PATH
 launch=godbc
 godbc-datasource=$GODBC_MSSQL2_DSN
 godbc-username=$GODBC_MSSQL2_USERNAME
@@ -18,7 +19,7 @@ __EOF__
 		echo "INSERT INTO domains (name, type, master) VALUES('$zone','SLAVE','127.0.0.1:$port');" | $ISQL -b
 		if [ "$zone" = "tsig.com" ]; then
 			../pdns/pdnssec --config-dir=. --config-name=godbc2 import-tsig-key test $ALGORITHM $KEY
-			../pdns/pdnssec --config-dir=. --config-name=godbc2 activate-tsig-key tsig.com test slave
+			../pdns/pdnssec --config-dir=. --config-name=godbc2 activate-tsig-key tsig.com test secondary
 		fi
 		if [ "$zone" = "stest.com" ]; then
 			if [[ $skipreasons != *nolua* ]]; then
@@ -31,8 +32,8 @@ __EOF__
 
 	$RUNWRAPPER $PDNS2 --daemon=no --local-port=$port --config-dir=. \
 		--config-name=godbc2 --socket-dir=./ --no-shuffle \
-		--slave --retrieval-threads=4 \
-		--slave-cycle-interval=300 --dname-processing &
+		--secondary --retrieval-threads=4 \
+		--xfr-cycle-interval=300 --dname-processing &
 
 	echo 'waiting for zones to be slaved'
 	set +e
@@ -52,7 +53,7 @@ __EOF__
 	done
 	if [ $todo -ne 0 ]
 	then
-		echo "AXFR FAILED" >> failed_tests
+		echo "AXFR FAILED" | tee -a failed_tests
 		exit
 	fi
 	set -e

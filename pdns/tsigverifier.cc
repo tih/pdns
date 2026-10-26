@@ -22,13 +22,13 @@ bool TSIGTCPVerifier::check(const string& data, const MOADNSParser& mdp)
   }
 
   for(const auto& answer :  mdp.d_answers) {
-    if (answer.first.d_type == QType::SOA) {
+    if (answer.d_type == QType::SOA) {
       // A SOA is either the first or the last record. We need to check TSIG if that's the case.
       checkTSIG = true;
     }
 
-    if(answer.first.d_type == QType::TSIG) {
-      auto trc = getRR<TSIGRecordContent>(answer.first);
+    if(answer.d_type == QType::TSIG) {
+      auto trc = getRR<TSIGRecordContent>(answer);
       if(trc) {
         theirMac = trc->d_mac;
         d_trc.d_time = trc->d_time;
@@ -51,10 +51,10 @@ bool TSIGTCPVerifier::check(const string& data, const MOADNSParser& mdp)
 
     try {
       if (!d_prevMac.empty()) {
-        validateTSIG(d_signData, d_tsigPos, d_tt, d_trc, d_prevMac, theirMac, true, d_signData.size()-data.size());
+        validateTSIG(d_slog, d_signData, d_tsigPos, d_tt, d_trc, d_prevMac, theirMac, true, d_signData.size()-data.size());
       }
       else {
-        validateTSIG(d_signData, d_tsigPos, d_tt, d_trc, d_trc.d_mac, theirMac, false);
+        validateTSIG(d_slog, d_signData, d_tsigPos, d_tt, d_trc, d_trc.d_mac, theirMac, false);
       }
     }
     catch(const std::runtime_error& err) {
@@ -62,13 +62,14 @@ bool TSIGTCPVerifier::check(const string& data, const MOADNSParser& mdp)
     }
 
     // Reset and store some values for the next chunks.
-    d_prevMac = theirMac;
+    d_prevMac = std::move(theirMac);
     d_nonSignedMessages = 0;
     d_signData.clear();
     d_tsigPos = 0;
   }
-  else
+  else {
     d_nonSignedMessages++;
+  }
 
   return true;
 }

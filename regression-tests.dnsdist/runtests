@@ -2,6 +2,8 @@
 set -e
 
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+# requires Quiche >= 0.23.2
+export ENABLE_SNI_TESTS_WITH_QUICHE=yes
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
@@ -11,17 +13,18 @@ python -V
 
 if [ `uname -s` == Darwin ]
 then
-  if [ ! -e /usr/local/opt/curl-openssl ]
+  BREW_CURL_PREFIX=$(brew --prefix curl)
+  if [ ! -e "${BREW_CURL_PREFIX}" ]
   then
-    echo Please run: brew install curl-openssl, and try again
+    echo Please run: brew install curl, and try again
     exit 1
   else
-    export PYCURL_CURL_CONFIG=/usr/local/opt/curl-openssl/bin/curl-config
-    export LDFLAGS=-L/usr/local/opt/openssl/lib
-    export CPPFLAGS=-I/usr/local/opt/openssl/include
+    export PYCURL_CURL_CONFIG="${BREW_CURL_PREFIX}/bin/curl-config"
+    export LDFLAGS="-L${BREW_CURL_PREFIX}/lib${LDFLAGS+ $LDFLAGS}"
+    export CPPFLAGS="-I${BREW_CURL_PREFIX}/include${CPPFLAGS+ $CPPFLAGS}"
+    export PKG_CONFIG_PATH="${BREW_CURL_PREFIX}/lib/pkgconfig"
   fi
 fi
-pip install -U pip wheel | cat
 pip install -r requirements.txt | cat
 
 protoc -I=../pdns/ --python_out=. ../pdns/dnsmessage.proto

@@ -29,13 +29,14 @@
 class SMySQL : public SSql
 {
 public:
-  SMySQL(string database, string host = "", uint16_t port = 0,
+  SMySQL(Logr::log_t log,
+         string database, string host = "", uint16_t port = 0,
          string msocket = "", string user = "",
          string password = "", string group = "",
          bool setIsolation = false, unsigned int timeout = 10,
-         bool threadCleanup = false, bool clientSSL = false);
+         bool threadCleanup = false);
 
-  ~SMySQL();
+  ~SMySQL() override;
 
   SSqlException sPerrorException(const string& reason) override;
   void setLog(bool state) override;
@@ -64,5 +65,4 @@ private:
   uint16_t d_port;
   bool d_setIsolation;
   bool d_threadCleanup;
-  bool d_clientSSL;
 };

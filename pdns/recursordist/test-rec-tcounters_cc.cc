@@ -1,4 +1,7 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #ifdef HAVE_CONFIG_H
@@ -73,6 +76,7 @@ BOOST_AUTO_TEST_CASE(update_fast)
       BOOST_CHECK_EQUAL(counts.uint64Count[0], counts.uint64Count[1]);
       auto avg = counts.at(rec::DoubleWAvgCounter::avgLatencyUsec).avg;
       BOOST_CHECK(avg == 0.0 || (avg >= 1.1 && avg <= 2.2));
+      std::this_thread::yield(); // needed, as otherwise the updates to done might not be spotted under valgrind
     }
   });
   thread1.join();
@@ -100,10 +104,8 @@ BOOST_AUTO_TEST_CASE(update_with_sleep)
       if (dns_random(10000) == 0) {
         tlocal.updateSnap();
       }
-      struct timespec interval
-      {
-        0, dns_random(20 * 1000 * 1000)
-      };
+      struct timespec interval{
+        0, dns_random(20 * 1000 * 1000)};
       nanosleep(&interval, nullptr);
     }
     done++;
@@ -116,10 +118,8 @@ BOOST_AUTO_TEST_CASE(update_with_sleep)
       if (dns_random(10000) == 0) {
         tlocal.updateSnap();
       }
-      struct timespec interval
-      {
-        0, dns_random(40 * 1000 * 1000)
-      };
+      struct timespec interval{
+        0, dns_random(40 * 1000 * 1000)};
       nanosleep(&interval, nullptr);
     }
     done++;
@@ -131,10 +131,8 @@ BOOST_AUTO_TEST_CASE(update_with_sleep)
       auto avg = counts.at(rec::DoubleWAvgCounter::avgLatencyUsec).avg;
       // std::cerr << avg << std::endl;
       BOOST_CHECK(avg == 0.0 || (avg >= 1.1 && avg <= 2.2));
-      struct timespec interval
-      {
-        0, dns_random(80 * 1000 * 1000)
-      };
+      struct timespec interval{
+        0, dns_random(80 * 1000 * 1000)};
       nanosleep(&interval, nullptr);
     }
   });

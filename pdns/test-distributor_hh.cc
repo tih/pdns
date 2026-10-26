@@ -1,9 +1,12 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <stdlib.h>
+#include <cstdlib>
 #include <unistd.h>
 #include <boost/test/unit_test.hpp>
 #include "distributor.hh"
@@ -22,21 +25,22 @@ struct Question
   QType qtype;
   std::unique_ptr<DNSPacket> replyPacket()
   {
-    return make_unique<DNSPacket>(false);
+    return make_unique<DNSPacket>(nullptr, false);
   }
   void cleanupGSS(int){}
 };
 
 struct Backend
 {
+  Backend(Logr::log_t /*slog*/) {}
   std::unique_ptr<DNSPacket> question(Question&)
   {
-    return make_unique<DNSPacket>(true);
+    return make_unique<DNSPacket>(nullptr, true);
   }
 };
 
 static std::atomic<int> g_receivedAnswers;
-static void report(std::unique_ptr<DNSPacket>& /* A */, int /* B */)
+static void report(std::unique_ptr<DNSPacket>& /* A */, Logr::log_t /* B */, int /* C */)
 {
   g_receivedAnswers++;
 }
@@ -48,7 +52,7 @@ BOOST_AUTO_TEST_CASE(test_distributor_basic) {
   S.declare("servfail-packets","Number of times a server-failed packet was sent out");
   S.declare("timedout-packets", "timedout-packets");
 
-  auto d=Distributor<DNSPacket, Question, Backend>::Create(2);
+  auto d=Distributor<DNSPacket, Question, Backend>::Create(2, nullptr);
 
   int n;
   for(n=0; n < 100; ++n)  {
@@ -62,17 +66,26 @@ BOOST_AUTO_TEST_CASE(test_distributor_basic) {
 
 struct BackendSlow
 {
-  std::unique_ptr<DNSPacket> question(Question&)
+  BackendSlow(Logr::log_t /*slog*/) {}
+  std::unique_ptr<DNSPacket> question([[maybe_unused]] Question& query)
   {
-    sleep(1);
-    return make_unique<DNSPacket>(true);
+    if (d_shouldSleep) {
+      /* only sleep once per distributor thread, otherwise
+         we are sometimes destroyed before picking up the queued
+         queries, triggering a memory leak reported by Leak Sanitizer */
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      d_shouldSleep = false;
+    }
+    return make_unique<DNSPacket>(nullptr, true);
   }
+private:
+  bool d_shouldSleep{true};
 };
 
-static std::atomic<int> g_receivedAnswers1;
-static void report1(std::unique_ptr<DNSPacket>& /* A */, int /* B */)
+static std::atomic<size_t> s_receivedAnswers;
+static void report1(std::unique_ptr<DNSPacket>& /* A */, Logr::log_t /* B */, int /* C */)
 {
-  g_receivedAnswers1++;
+  s_receivedAnswers++;
 }
 
 BOOST_AUTO_TEST_CASE(test_distributor_queue) {
@@ -82,22 +95,36 @@ BOOST_AUTO_TEST_CASE(test_distributor_queue) {
   S.declare("servfail-packets","Number of times a server-failed packet was sent out");
   S.declare("timedout-packets", "timedout-packets");
 
-  auto d=Distributor<DNSPacket, Question, BackendSlow>::Create(2);
+  s_receivedAnswers.store(0);
+  auto* distributor = Distributor<DNSPacket, Question, BackendSlow>::Create(2, nullptr);
 
+  size_t queued = 0;
   BOOST_CHECK_EXCEPTION( {
-    int n;
     // bound should be higher than max-queue-length
-    for(n=0; n < 2000; ++n)  {
-      Question q;
-      q.d_dt.set();
-      d->question(q, report1);
+    const size_t bound = 2000;
+    for (size_t idx = 0; idx < bound; ++idx)  {
+      Question query;
+      query.d_dt.set();
+      ++queued;
+      distributor->question(query, report1);
     }
     }, DistributorFatal, [](DistributorFatal) { return true; });
+
+  BOOST_CHECK_GT(queued, 1000U);
+
+  // now we want to make sure that all queued queries have been processed
+  // otherwise LeakSanitizer will report a leak, but we are only willing to
+  // wait up to 3 seconds (3000 milliseconds)
+  size_t remainingMs = 3000;
+  while (s_receivedAnswers.load() < queued && remainingMs > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    remainingMs -= 10;
+  }
 };
 
 struct BackendDies
 {
-  BackendDies()
+  BackendDies(Logr::log_t /*slog*/)
   {
     d_ourcount=s_count++;
   }
@@ -111,7 +138,7 @@ struct BackendDies
       // cerr<<"Going.. down!"<<endl;
       throw runtime_error("kill");
     }
-    return make_unique<DNSPacket>(true);
+    return make_unique<DNSPacket>(nullptr, true);
   }
   static std::atomic<int> s_count;
   int d_count{0};
@@ -122,7 +149,7 @@ std::atomic<int> BackendDies::s_count;
 
 std::atomic<int> g_receivedAnswers2;
 
-static void report2(std::unique_ptr<DNSPacket>& /* A */, int /* B */)
+static void report2(std::unique_ptr<DNSPacket>& /* A */, Logr::log_t /* B */, int /* C */)
 {
   g_receivedAnswers2++;
 }
@@ -135,7 +162,7 @@ BOOST_AUTO_TEST_CASE(test_distributor_dies) {
   S.declare("servfail-packets","Number of times a server-failed packet was sent out");
   S.declare("timedout-packets", "timedout-packets");
 
-  auto d=Distributor<DNSPacket, Question, BackendDies>::Create(10);
+  auto d=Distributor<DNSPacket, Question, BackendDies>::Create(10, nullptr);
 
   try {
     for(int n=0; n < 100; ++n)  {

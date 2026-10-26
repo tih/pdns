@@ -24,10 +24,9 @@
 #include "config.h"
 
 #ifndef DISABLE_CARBON
-
-#include <thread>
+#include <string>
+#include <optional>
 #include "iputils.hh"
-#include "lock.hh"
 
 namespace dnsdist
 {
@@ -38,22 +37,15 @@ public:
   {
     ComboAddress server;
     std::string namespace_name;
-    std::string ourname;
+    std::optional<std::string> ourname; // When unset, we use the Runtime Config server_id
     std::string instance_name;
     unsigned int interval;
+
+    [[nodiscard]] std::string getOurName() const;
   };
 
-  static bool addEndpoint(Endpoint&& endpoint);
-  static void run();
-
-private:
-  struct Config
-  {
-    std::vector<Endpoint> d_endpoints;
-    bool d_running{false};
-  };
-
-  static LockGuarded<Config> s_config;
+  static Endpoint newEndpoint(const std::string& address, const std::optional<std::string>& ourName, uint64_t interval, const std::string& namespace_name, const std::string& instance_name);
+  static void run(const std::vector<Endpoint>& endpoints);
 };
 
 }

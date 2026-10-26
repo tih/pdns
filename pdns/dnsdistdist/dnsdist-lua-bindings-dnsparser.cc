@@ -31,7 +31,7 @@ void setupLuaBindingsDNSParser(LuaContext& luaCtx)
     return dpo;
   });
 
-  luaCtx.registerMember<DNSName(dnsdist::DNSPacketOverlay::*)>(std::string("qname"), [](const dnsdist::DNSPacketOverlay& overlay) { return overlay.d_qname; });
+  luaCtx.registerMember<DNSName(dnsdist::DNSPacketOverlay::*)>(std::string("qname"), [](const dnsdist::DNSPacketOverlay& overlay) -> const DNSName& { return overlay.d_qname; });
   luaCtx.registerMember<uint16_t(dnsdist::DNSPacketOverlay::*)>(std::string("qtype"), [](const dnsdist::DNSPacketOverlay& overlay) { return overlay.d_qtype; });
   luaCtx.registerMember<uint16_t(dnsdist::DNSPacketOverlay::*)>(std::string("qclass"), [](const dnsdist::DNSPacketOverlay& overlay) { return overlay.d_qclass; });
   luaCtx.registerMember<dnsheader(dnsdist::DNSPacketOverlay::*)>(std::string("dh"), [](const dnsdist::DNSPacketOverlay& overlay) { return overlay.d_header; });
@@ -62,5 +62,17 @@ void setupLuaBindingsDNSParser(LuaContext& luaCtx)
   luaCtx.registerMember<uint16_t(dnsdist::DNSPacketOverlay::Record::*)>(std::string("contentLength"), [](const dnsdist::DNSPacketOverlay::Record& record) { return record.d_contentLength; });
   luaCtx.registerMember<uint16_t(dnsdist::DNSPacketOverlay::Record::*)>(std::string("contentOffset"), [](const dnsdist::DNSPacketOverlay::Record& record) { return record.d_contentOffset; });
 
+  luaCtx.writeFunction("parseARecord", [](const std::string& packet, const dnsdist::DNSPacketOverlay::Record& record) {
+    return dnsdist::RecordParsers::parseARecord(packet, record);
+  });
+  luaCtx.writeFunction("parseAAAARecord", [](const std::string& packet, const dnsdist::DNSPacketOverlay::Record& record) {
+    return dnsdist::RecordParsers::parseAAAARecord(packet, record);
+  });
+  luaCtx.writeFunction("parseAddressRecord", [](const std::string& packet, const dnsdist::DNSPacketOverlay::Record& record) {
+    return dnsdist::RecordParsers::parseAddressRecord(packet, record);
+  });
+  luaCtx.writeFunction("parseCNAMERecord", [](const std::string& packet, const dnsdist::DNSPacketOverlay::Record& record) {
+    return dnsdist::RecordParsers::parseCNAMERecord(packet, record);
+  });
 #endif /* DISABLE_DNSPACKET_BINDINGS */
 }

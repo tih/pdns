@@ -25,27 +25,37 @@ Native operation
 
 To add a domain, issue the following::
 
+    pdnsutil zone create example.com
+
+or, prior to version 5.0::
+
     pdnsutil create-zone example.com
 
-Records can now be added using ``pdnsutil add-record`` or ``pdnsutil edit-zone``.
+Records can now be added using ``pdnsutil rrset add`` or ``pdnsutil zone edit``
+(respectively ``pdnsutil add-record`` and ``pdnsutil edit-zone`` prior to
+version 5.0).
 
-Slave operation
-^^^^^^^^^^^^^^^
+Secondary operation
+^^^^^^^^^^^^^^^^^^^
 
-These backends are fully slave capable. To become a slave of the
-'example.com' domain, using 198.51.100.6 as the master execute this::
+These backends are fully secondary capable. To become a secondary of the
+'example.com' domain, using 198.51.100.6 as the primary execute this::
 
-   pdnsutil create-slave-zone example.com 198.51.100.6
+   pdnsutil zone create-secondary example.com 198.51.100.6
+
+or, prior to version 5.0::
+
+   pdnsutil create-secondary-zone example.com 198.51.100.6
 
 And wait a while for PowerDNS to pick up the addition - which happens
 within one minute (this is determined by the
-:ref:`setting-slave-cycle-interval`
+:ref:`setting-xfr-cycle-interval`
 setting). There is no need to inform PowerDNS that a new domain was
 added. Typical output is::
 
-  Apr 09 13:34:29 All slave domains are fresh
-  Apr 09 13:35:29 1 slave domain needs checking
-  Apr 09 13:35:29 Domain example.com is stale, master serial 1, our serial 0
+  Apr 09 13:34:29 All secondary domains are fresh
+  Apr 09 13:35:29 1 secondary domain needs checking
+  Apr 09 13:35:29 Domain example.com is stale, primary serial 1, our serial 0
   Apr 09 13:35:30 [gPgSQLBackend] Connected to database
   Apr 09 13:35:30 AXFR started for 'example.com'
   Apr 09 13:35:30 AXFR done for 'example.com'
@@ -56,37 +66,51 @@ will respond accordingly for queries within that zone.
 
 Periodically, PowerDNS schedules checks to see if domains are still
 fresh. The default
-:ref:`setting-slave-cycle-interval` is 60
+:ref:`setting-xfr-cycle-interval` is 60
 seconds, large installations may need to raise this value. Once a domain
 has been checked, it will not be checked before its SOA refresh timer
 has expired. Domains whose status is unknown get checked every 60
 seconds by default.
 
-PowerDNS has support for multiple masters per zone, and also port numbers for these masters::
+PowerDNS has support for multiple primaries per zone, and also port numbers for these primaries::
 
-   pdnsutil create-slave-zone example.com 198.51.100.6 2001:0DB8:15:4AF::4
-   pdnsutil create-slave-zone example.net 198.51.100.20:5301 '[2001:0DB8:11:6E::4]:54'
+   pdnsutil zone create secondary example.com 198.51.100.6 2001:0DB8:15:4AF::4
+   pdnsutil zone create secondary example.net 198.51.100.20:5301 '[2001:0DB8:11:6E::4]:54'
 
-Superslave operation
-^^^^^^^^^^^^^^^^^^^^
+or, prior to version 5.0::
 
-To configure a :ref:`supermaster <supermaster-operation>` with IP address 203.0.113.53 which lists this
-installation as 'autoslave.example.com', issue the following::
+   pdnsutil create-secondary-zone example.com 198.51.100.6 2001:0DB8:15:4AF::4
+   pdnsutil create-secondary-zone example.net 198.51.100.20:5301 '[2001:0DB8:11:6E::4]:54'
 
-    pdnsutil add-supermaster 203.0.113.53 autoslave.example.com internal
+Autoprimary operation
+^^^^^^^^^^^^^^^^^^^^^
+
+To configure a :ref:`autoprimary <autoprimary-operation>` with IP address 203.0.113.53 which lists this
+installation as 'autosecondary.example.com', issue the following::
+
+    pdnsutil autoprimary add 203.0.113.53 autosecondary.example.com internal
+
+or, prior to version 5.0::
+
+    pdnsutil add-autoprimary 203.0.113.53 autosecondary.example.com internal
 
 From now on, valid notifies from 203.0.113.53 for which the zone lists an NS record
-containing 'autoslave.example.com' will lead to the provisioning of a
-slave domain under the account 'internal'. See :ref:`supermaster-operation`
+containing 'autosecondary.example.com' will lead to the provisioning of a
+secondary domain under the account 'internal'. See :ref:`autoprimary-operation`
 for details.
 
-Master operation
-^^^^^^^^^^^^^^^^
+Primary operation
+^^^^^^^^^^^^^^^^^
 
-The generic SQL backend is fully master capable with automatic discovery
+The generic SQL backend is fully primary capable with automatic discovery
 of serial changes. Raising the serial number of a domain suffices to
 trigger PowerDNS to send out notifications. To configure a domain for
-master operation instead of the default native replication, issue::
+primary operation instead of the default native replication, issue::
+
+    pdnsutil zone create example.com
+    pdnsutil zone set-kind example.com MASTER
+
+or, prior to version 5.0::
 
     pdnsutil create-zone example.com
     pdnsutil set-kind example.com MASTER
@@ -101,12 +125,12 @@ setting "disabled" to ``1`` (for PostgreSQL: ``true``). By extension,
 when the SOA record for a domain is disabled, the entire domain is
 considered to be disabled.
 
-This value cannot be set with ``pdnsutil``.
+This value cannot be set with :doc:`pdnsutil <../manpages/pdnsutil.1>`.
 
 Effects: the record (or domain, respectively) will not be visible to DNS
 clients. The REST API will still see the record (or domain). Even if a
-domain is disabled, slaving still works. Slaving considers a disabled
-domain to have a serial of 0; this implies that a slaved domain will not
+domain is disabled, xfr still works. A secondary considers a disabled
+domain to have a serial of 0; this implies that a secondary domain will not
 stay disabled.
 
 .. _generic-sql-handling-dnssec-signed-zones:
@@ -123,11 +147,12 @@ Rules for filling out DNSSEC fields
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. note::
-   This section is only relevant for user who use SQL to change records and zones.
+   This section is only relevant for users who use SQL to change records and zones.
 
 Two additional fields in the 'records' table are important: 'auth' and
 'ordername'. These fields are set correctly on an incoming zone
-transfer, and also by running ``pdnsutil rectify-zone``.
+transfer, and also by running ``pdnsutil zone rectify`` (``pdnsutil
+rectify-zone`` prior to version 5.0).
 
 The 'auth' field should be set to '1' for data for which the zone itself
 is authoritative, which includes the SOA record and its own NS records.
@@ -152,8 +177,9 @@ www' as its ordername.
 
 In 'NSEC3' non-narrow mode, the ordername should contain a lowercase
 base32hex encoded representation of the salted & iterated hash of the
-full record name. ``pdnsutil hash-zone-record zone record`` can be used
-to calculate this hash.
+full record name. ``pdnsutil rrset hash zone record`` (``pdnsutil
+hash-zone-record zone record`` prior to version 5.0) can be used to calculate
+this hash.
 
 In addition, PowerDNS fully supports empty non-terminals. If you have a
 zone example.com, and a host a.b.c.example.com in it, rectify-zone (and
@@ -227,7 +253,8 @@ is!
 DNSSEC queries
 ^^^^^^^^^^^^^^
 
-These queries are used by e.g. ``pdnsutil rectify-zone``. Make sure to
+These queries are used by e.g. ``pdnsutil zone rectify`` (``pdnsutil
+rectify-zone`` prior to version 5.0). Make sure to
 read :ref:`rules-for-filling-out-dnssec-fields`
 if you wish to calculate ordername and auth without using pdns-rectify.
 
@@ -282,11 +309,12 @@ Domain and zone manipulation
    :doc:`domain metadata <../domainmetadata>` for a domain.
 -  ``get-domain-metadata-query``: Get a single piece of
    :doc:`domain metadata <../domainmetadata>`.
--  ``clear-domain-metadata-query``: Delete a single entry of domain
-   metadata.
--  ``clear-domain-all-metadata-query``: Remove all domain metadata for a
-   domain.
--  ``set-domain-metadata-query``: Add domain metadata for a zone.
+-  ``clear-domain-metadata-query``: Delete a single entry of
+   :doc:`domain metadata <../domainmetadata>`.
+-  ``clear-domain-all-metadata-query``: Remove all
+   :doc:`domain metadata <../domainmetadata>` for a domain.
+-  ``set-domain-metadata-query``: Add
+   :doc:`domain metadata <../domainmetadata>` for a zone.
 
 -  ``add-domain-key-query``: Called to a cryptokey to a domain.
 -  ``list-domain-keys-query``: Called to get all cryptokeys for a
@@ -300,37 +328,31 @@ Domain and zone manipulation
    a zone.
 -  ``remove-domain-key-query``: Called to remove a crypto key.
 
-Master/slave queries
-^^^^^^^^^^^^^^^^^^^^
+Primary/secondary queries
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-These queries are used to manipulate the master/slave information in the
+These queries are used to manipulate the primary/secondary information in the
 database. Most installations will have zero need to change the following
 queries.
 
-On masters
-~~~~~~~~~~
+On primaries
+~~~~~~~~~~~~
 
--  ``info-all-master-query``: Called to get data on all domains for
-   which the server is master.
--  ``update-serial-query`` Called to update the last notified serial of
-   a master domain.
+-  ``info-all-primary-query``: Called to get data on all domains for which the server is primary.
+-  ``update-serial-query`` Called to update the last notified serial of a primary domain.
 
-On slaves
-~~~~~~~~~
-
--  ``info-all-slaves-query``: Called to retrieve all slave domains.
--  ``update-lastcheck-query``: Called to update the last time a slave
-   domain was successfully checked for freshness.
--  ``update-master-query``: Called to update the master address of a
-   domain.
-
-On superslaves
+On secondaries
 ~~~~~~~~~~~~~~
 
--  ``supermaster-query``: Called to determine if a certain host is a
-   supermaster for a certain domain name.
--  ``supermaster-name-to-ips``: Called to the IP and account for a
-   supermaster.
+-  ``info-all-secondaries-query``: Called to retrieve all secondary domains.
+-  ``update-lastcheck-query``: Called to update the last time a secondary domain was successfully checked for freshness.
+-  ``update-primary-query``: Called to update the primary address of a domain.
+
+On autoprimary
+~~~~~~~~~~~~~~
+
+-  ``autoprimary-query``: Called to determine if a certain host is an autoprimary for a certain domain name.
+-  ``autoprimary-name-to-ips``: Called to the IP and account for an autoprimary.
 
 TSIG
 ^^^^
@@ -341,6 +363,8 @@ TSIG
 -  ``set-tsig-key-query``: Called to set the algorithm and secret for a
    named TSIG key.
 -  ``delete-tsig-key-query``: Called to delete a named TSIG key.
+-  ``delete-tsig-key-algorithm-query``: Called to delete a named TSIG key with
+   the given algorithm.
 
 Comment queries
 ^^^^^^^^^^^^^^^
@@ -350,7 +374,7 @@ For listing/modifying comments.
 -  ``list-comments-query``: Called to get all comments in a zone.
    Returns fields: domain_id, name, type, modified_at, account,
    comment.
--  ``insert-comment-query`` Called to create a single comment for a
+-  ``insert-comment-query``: Called to create a single comment for a
    specific RRSet. Given fields: domain_id, name, type, modified_at,
    account, comment
 -  ``delete-comment-rrset-query``: Called to delete all comments for a

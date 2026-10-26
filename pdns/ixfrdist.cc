@@ -21,6 +21,8 @@
  */
 #include "dns.hh"
 #include "dnsparser.hh"
+#include <exception>
+#include <stdexcept>
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -36,6 +38,8 @@
 #include <dirent.h>
 #include <queue>
 #include <condition_variable>
+#include <thread>
+#include <chrono>
 #include "ixfr.hh"
 #include "ixfrutils.hh"
 #include "axfr-retriever.hh"
@@ -45,15 +49,30 @@
 #include "misc.hh"
 #include "iputils.hh"
 #include "lock.hh"
+#include "communicator.hh"
+#include "query-local-address.hh"
 #include "logger.hh"
 #include "ixfrdist-stats.hh"
 #include "ixfrdist-web.hh"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
 #include <yaml-cpp/yaml.h>
+#pragma GCC diagnostic pop
+#include "auth-packetcache.hh"
+#include "auth-querycache.hh"
+#include "auth-zonecache.hh"
 
 /* BEGIN Needed because of deeper dependencies */
 #include "arguments.hh"
 #include "statbag.hh"
 StatBag S;
+// NOLINTNEXTLINE(readability-identifier-length)
+AuthPacketCache PC;
+// NOLINTNEXTLINE(readability-identifier-length)
+AuthQueryCache QC;
+AuthZoneCache g_zoneCache;
+bool g_logDNSQueries{false};
+bool g_views{false};
 
 ArgvMap &arg()
 {
@@ -62,7 +81,9 @@ ArgvMap &arg()
 }
 /* END Needed because of deeper dependencies */
 
-// Allows reading/writing ComboAddresses and DNSNames in YAML-cpp
+bool g_slogStructured{false};
+
+// Allows reading/writing ComboAddresses and ZoneNames in YAML-cpp
 namespace YAML {
 template<>
 struct convert<ComboAddress> {
@@ -85,16 +106,16 @@ struct convert<ComboAddress> {
 };
 
 template<>
-struct convert<DNSName> {
-  static Node encode(const DNSName& rhs) {
+struct convert<ZoneName> {
+  static Node encode(const ZoneName& rhs) {
     return Node(rhs.toStringRootDot());
   }
-  static bool decode(const Node& node, DNSName& rhs) {
+  static bool decode(const Node& node, ZoneName& rhs) {
     if (!node.IsScalar()) {
       return false;
     }
     try {
-      rhs = DNSName(node.as<string>());
+      rhs = ZoneName(node.as<string>());
       return true;
     } catch(const runtime_error &e) {
       return false;
@@ -143,19 +164,23 @@ struct ixfrinfo_t {
 
 // Why a struct? This way we can add more options to a domain in the future
 struct ixfrdistdomain_t {
-  set<ComboAddress> masters; // A set so we can do multiple master addresses in the future
+  set<ComboAddress> primaries; // A set so we can do multiple primary addresses in the future
+  std::set<ComboAddress> notify; // Set of addresses to forward NOTIFY to
   uint32_t maxSOARefresh{0}; // Cap SOA refresh value to the given value in seconds
 };
 
 // This contains the configuration for each domain
-static map<DNSName, ixfrdistdomain_t> g_domainConfigs;
+static map<ZoneName, ixfrdistdomain_t> g_domainConfigs;
 
 // Map domains and their data
-static LockGuarded<std::map<DNSName, std::shared_ptr<ixfrinfo_t>>> g_soas;
+static LockGuarded<std::map<ZoneName, std::shared_ptr<ixfrinfo_t>>> g_soas;
 
-// Queue of received NOTIFYs, already verified against their master IPs
+// Queue of received NOTIFYs, already verified against their primary IPs
 // Lazily implemented as a set
-static LockGuarded<std::set<DNSName>> g_notifiesReceived;
+static LockGuarded<std::set<ZoneName>> g_notifiesReceived;
+
+// Queue of outgoing NOTIFY
+static LockGuarded<NotificationQueue> g_notificationQueue;
 
 // Condition variable for TCP handling
 static std::condition_variable g_tcpHandlerCV;
@@ -192,27 +217,25 @@ static void usage(po::options_description &desc) {
   cerr << desc << "\n";
 }
 
-// The compiler does not like using rfc1982LessThan in std::sort directly
-static bool sortSOA(uint32_t i, uint32_t j) {
-  return rfc1982LessThan(i, j);
-}
-
-static void cleanUpDomain(const DNSName& domain, const uint16_t& keep, const string& workdir) {
+static void cleanUpDomain(const ZoneName& domain, const uint16_t& keep, const string& workdir) {
   string dir = workdir + "/" + domain.toString();
-  DIR *dp;
-  dp = opendir(dir.c_str());
-  if (dp == nullptr) {
+  vector<uint32_t> zoneVersions;
+  auto directoryError = pdns::visit_directory(dir, [&zoneVersions]([[maybe_unused]] ino_t inodeNumber, const std::string_view& name) {
+    if (name != "." && name != "..") {
+      try {
+        auto version = pdns::checked_stoi<uint32_t>(std::string(name));
+        zoneVersions.push_back(version);
+      }
+      catch (...) {
+      }
+    }
+    return true;
+  });
+
+  if (directoryError) {
     return;
   }
-  vector<uint32_t> zoneVersions;
-  struct dirent *d;
-  while ((d = readdir(dp)) != nullptr) {
-    if(!strcmp(d->d_name, ".") || !strcmp(d->d_name, "..")) {
-      continue;
-    }
-    zoneVersions.push_back(std::stoi(d->d_name));
-  }
-  closedir(dp);
+
   g_log<<Logger::Info<<"Found "<<zoneVersions.size()<<" versions of "<<domain<<", asked to keep "<<keep<<", ";
   if (zoneVersions.size() <= keep) {
     g_log<<Logger::Info<<"not cleaning up"<<endl;
@@ -221,7 +244,7 @@ static void cleanUpDomain(const DNSName& domain, const uint16_t& keep, const str
   g_log<<Logger::Info<<"cleaning up the oldest "<<zoneVersions.size() - keep<<endl;
 
   // Sort the versions
-  std::sort(zoneVersions.begin(), zoneVersions.end(), sortSOA);
+  std::sort(zoneVersions.begin(), zoneVersions.end(), rfc1982LessThan<uint32_t>);
 
   // And delete all the old ones
   {
@@ -265,12 +288,12 @@ static void makeIXFRDiff(const records_t& from, const records_t& to, std::shared
 }
 
 /* you can _never_ alter the content of the resulting shared pointer */
-static std::shared_ptr<ixfrinfo_t> getCurrentZoneInfo(const DNSName& domain)
+static std::shared_ptr<ixfrinfo_t> getCurrentZoneInfo(const ZoneName& domain)
 {
   return (*g_soas.lock())[domain];
 }
 
-static void updateCurrentZoneInfo(const DNSName& domain, std::shared_ptr<ixfrinfo_t>& newInfo)
+static void updateCurrentZoneInfo(const ZoneName& domain, std::shared_ptr<ixfrinfo_t>& newInfo)
 {
   auto soas = g_soas.lock();
   (*soas)[domain] = newInfo;
@@ -278,20 +301,124 @@ static void updateCurrentZoneInfo(const DNSName& domain, std::shared_ptr<ixfrinf
   // FIXME: also report zone size?
 }
 
+static void sendNotification(int sock, const ZoneName& domain, const ComboAddress& remote, uint16_t notificationId)
+{
+  std::vector<std::string> meta;
+  std::vector<uint8_t> packet;
+  DNSPacketWriter packetWriter(packet, domain.operator const DNSName&(), QType::SOA, 1, Opcode::Notify);
+  packetWriter.getHeader()->id = notificationId;
+  packetWriter.getHeader()->aa = true;
+
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  if (sendto(sock, packet.data(), packet.size(), 0, reinterpret_cast<const struct sockaddr*>(&remote), remote.getSocklen()) < 0) {
+    throw std::runtime_error("Unable to send notify to " + remote.toStringWithPort() + ": " + stringerror());
+  }
+}
+
+static void communicatorReceiveNotificationAnswers(const int sock4, const int sock6)
+{
+  std::set<int> fds = {sock4};
+  if (sock6 > 0) {
+    fds.insert(sock6);
+  }
+  ComboAddress from;
+  std::array<char, 1500> buffer{};
+  int sock{-1};
+
+  // receive incoming notification answers on the nonblocking sockets and take them off the list
+  while (waitForMultiData(fds, 0, 0, &sock) > 0) {
+    socklen_t fromlen = sizeof(from);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto size = recvfrom(sock, buffer.data(), buffer.size(), 0, reinterpret_cast<struct sockaddr*>(&from), &fromlen);
+    if (size < 0) {
+      break;
+    }
+    DNSPacket packet(nullptr, true); // no structured logging in ixfrdist yet
+    packet.setRemote(&from);
+
+    if (packet.parse(buffer.data(), (size_t)size) < 0) {
+      g_log << Logger::Warning << "Unable to parse SOA notification answer from " << packet.getRemote() << endl;
+      continue;
+    }
+
+    if (packet.d.rcode != 0) {
+      g_log << Logger::Warning << "Received unsuccessful notification report for '" << packet.qdomain << "' from " << from.toStringWithPort() << ", error: " << RCode::to_s(packet.d.rcode) << endl;
+    }
+
+    if (g_notificationQueue.lock()->removeIf(from, packet.d.id, ZoneName(packet.qdomain))) {
+      g_log << Logger::Notice << "Removed from notification list: '" << packet.qdomain << "' to " << from.toStringWithPort() << " " << (packet.d.rcode != 0 ? RCode::to_s(packet.d.rcode) : "(was acknowledged)") << endl;
+    }
+    else {
+      g_log << Logger::Warning << "Received spurious notify answer for '" << packet.qdomain << "' from " << from.toStringWithPort() << endl;
+    }
+  }
+}
+
+static void communicatorSendNotifications(const int sock4, const int sock6)
+{
+  ZoneName domain;
+  string destinationIp;
+  uint16_t notificationId = 0;
+  bool purged{false};
+
+  while (g_notificationQueue.lock()->getOne(domain, destinationIp, &notificationId, purged)) {
+    if (!purged) {
+      ComboAddress remote(destinationIp, 53); // default to 53
+      if (remote.sin4.sin_family == AF_INET) {
+        sendNotification(sock4, domain, remote, notificationId);
+      } else if (sock6 > 0) {
+        sendNotification(sock6, domain, remote, notificationId);
+      } else {
+        g_log << Logger::Warning << "Unable to notify " << destinationIp << " for " << domain << " as v6 support is not enabled" << std::endl;
+      }
+    } else {
+      g_log << Logger::Warning << "Notification for " << domain << " to " << destinationIp << " failed after retries" << std::endl;
+    }
+  }
+}
+
+static void communicatorThread()
+{
+  setThreadName("ixfrdist/communicator");
+  auto sock4 = makeQuerySocket(pdns::getQueryLocalAddress(AF_INET, 0).d_address, true);
+  auto sock6 = makeQuerySocket(pdns::getQueryLocalAddress(AF_INET6, 0).d_address, true);
+
+  if (sock4 < 0) {
+    throw std::runtime_error("Unable to create local query socket");
+  }
+  // sock6 can be negative if there is no v6 support, but this is handled later while sending notifications
+
+  while (true) {
+    if (g_exiting) {
+      g_log << Logger::Notice << "Communicator thread stopped" << std::endl;
+      break;
+    }
+    communicatorReceiveNotificationAnswers(sock4, sock6);
+    communicatorSendNotifications(sock4, sock6);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+  if (sock4 >= 0) {
+    closesocket(sock4);
+  }
+  if (sock6 >= 0) {
+    closesocket(sock6);
+  }
+}
+
 static void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& axfrTimeout, const uint16_t& soaRetry, const uint32_t axfrMaxRecords) { // NOLINT(readability-function-cognitive-complexity) 13400 https://github.com/PowerDNS/pdns/issues/13400 Habbie:  ixfrdist: reduce complexity
   setThreadName("ixfrdist/update");
-  std::map<DNSName, time_t> lastCheck;
+  std::map<ZoneName, time_t> lastCheck;
 
   // Initialize the serials we have
   for (const auto &domainConfig : g_domainConfigs) {
-    DNSName domain = domainConfig.first;
+    ZoneName domain = domainConfig.first;
     lastCheck[domain] = 0;
     string dir = workdir + "/" + domain.toString();
     try {
       g_log<<Logger::Info<<"Trying to initially load domain "<<domain<<" from disk"<<endl;
       auto serial = getSerialFromDir(dir);
       shared_ptr<const SOARecordContent> soa;
-      uint32_t soaTTL;
+      uint32_t soaTTL{0};
       {
         string fname = workdir + "/" + domain.toString() + "/" + std::to_string(serial);
         loadSOAFromDisk(domain, fname, soa, soaTTL);
@@ -337,7 +464,7 @@ static void updateThread(const string& workdir, const uint16_t& keep, const uint
         break;
       }
 
-      DNSName domain = domainConfig.first;
+      ZoneName domain = domainConfig.first;
       shared_ptr<const SOARecordContent> current_soa;
       const auto& zoneInfo = getCurrentZoneInfo(domain);
       if (zoneInfo != nullptr) {
@@ -360,34 +487,40 @@ static void updateThread(const string& workdir, const uint16_t& keep, const uint
         continue;
       }
 
-      // TODO Keep track of 'down' masters
-      set<ComboAddress>::const_iterator it(domainConfig.second.masters.begin());
-      std::advance(it, dns_random(domainConfig.second.masters.size()));
-      ComboAddress master = *it;
+      // TODO Keep track of 'down' primaries
+      set<ComboAddress>::const_iterator it(domainConfig.second.primaries.begin());
+      std::advance(it, dns_random(domainConfig.second.primaries.size()));
+      ComboAddress primary = *it;
 
       string dir = workdir + "/" + domain.toString();
-      g_log<<Logger::Info<<"Attempting to retrieve SOA Serial update for '"<<domain<<"' from '"<<master.toStringWithPort()<<"'"<<endl;
+      g_log << Logger::Info << "Attempting to retrieve SOA Serial update for '" << domain << "' from '" << primary.toStringWithPort() << "'" << endl;
       shared_ptr<const SOARecordContent> sr;
       try {
         zoneLastCheck = now;
         g_stats.incrementSOAChecks(domain);
-        auto newSerial = getSerialFromMaster(master, domain, sr); // TODO TSIG
+        auto newSerial = getSerialFromPrimary(nullptr /* no structured logging */, primary, domain, sr); // TODO TSIG
         if(current_soa != nullptr) {
-          g_log<<Logger::Info<<"Got SOA Serial for "<<domain<<" from "<<master.toStringWithPort()<<": "<< newSerial<<", had Serial: "<<current_soa->d_st.serial;
-          if (newSerial == current_soa->d_st.serial) {
-            g_log<<Logger::Info<<", not updating."<<endl;
+          g_log << Logger::Info << "Got SOA Serial for " << domain << " from " << primary.toStringWithPort() << ": " << newSerial << ", had Serial: " << current_soa->d_st.serial;
+          if (rfc1982LessThanOrEqual(newSerial, current_soa->d_st.serial)) {
+            g_log<<Logger::Info<<", not updating"<<endl;
+            if (rfc1982LessThan(newSerial, current_soa->d_st.serial)) {
+              g_log<<Logger::Info<<", new serial is smaller than the existing serial."<<endl;
+            } else {
+              g_log<<Logger::Info<<", new serial is the same as the existing serial."<<endl;
+            }
+            g_log<<Logger::Info<<"."<<endl;
             continue;
           }
           g_log<<Logger::Info<<", will update."<<endl;
         }
       } catch (runtime_error &e) {
-        g_log<<Logger::Warning<<"Unable to get SOA serial update for '"<<domain<<"' from master "<<master.toStringWithPort()<<": "<<e.what()<<endl;
+        g_log << Logger::Warning << "Unable to get SOA serial update for '" << domain << "' from primary " << primary.toStringWithPort() << ": " << e.what() << endl;
         g_stats.incrementSOAChecksFailed(domain);
         continue;
       }
       // Now get the full zone!
       g_log<<Logger::Info<<"Attempting to receive full zonedata for '"<<domain<<"'"<<endl;
-      ComboAddress local = master.isIPv4() ? ComboAddress("0.0.0.0") : ComboAddress("::");
+      ComboAddress local = primary.isIPv4() ? ComboAddress("0.0.0.0") : ComboAddress("::");
       TSIGTriplet tt;
 
       // The *new* SOA
@@ -395,7 +528,7 @@ static void updateThread(const string& workdir, const uint16_t& keep, const uint
       uint32_t soaTTL = 0;
       records_t records;
       try {
-        AXFRRetriever axfr(master, domain, tt, &local);
+        AXFRRetriever axfr(nullptr /* no structured logging */, primary, domain, tt, &local);
         uint32_t nrecords=0;
         Resolver::res_t nop;
         vector<DNSRecord> chunk;
@@ -411,7 +544,7 @@ static void updateThread(const string& workdir, const uint16_t& keep, const uint
             dr.d_name.makeUsRelative(domain);
             records.insert(dr);
             nrecords++;
-            if (dr.d_type == QType::SOA) {
+            if (dr.d_type == QType::SOA && dr.d_name.isRoot()) {
               soa = getRR<SOARecordContent>(dr);
               soaTTL = dr.d_ttl;
             }
@@ -465,13 +598,13 @@ static void updateThread(const string& workdir, const uint16_t& keep, const uint
 
         g_log<<Logger::Debug<<"Zone "<<domain<<" previously contained "<<(oldZoneInfo ? oldZoneInfo->latestAXFR.size() : 0)<<" entries, "<<records.size()<<" now"<<endl;
         ixfrInfo->latestAXFR = std::move(records);
-        ixfrInfo->soa = soa;
+        ixfrInfo->soa = std::move(soa);
         ixfrInfo->soaTTL = soaTTL;
         updateCurrentZoneInfo(domain, ixfrInfo);
       } catch (PDNSException &e) {
         g_stats.incrementAXFRFailures(domain);
         g_log<<Logger::Warning<<"Could not save zone '"<<domain<<"' to disk: "<<e.reason<<endl;
-      } catch (runtime_error &e) {
+      } catch (std::exception &e) {
         g_stats.incrementAXFRFailures(domain);
         g_log<<Logger::Warning<<"Could not save zone '"<<domain<<"' to disk: "<<e.what()<<endl;
       }
@@ -492,31 +625,37 @@ enum class ResponseType {
 };
 
 static ResponseType maybeHandleNotify(const MOADNSParser& mdp, const ComboAddress& saddr, const string& logPrefix="") {
-  if (mdp.d_header.opcode != Opcode::Notify) { // NOLINT(bugprone-narrowing-conversions, cppcoreguidelines-narrowing-conversions) opcode is 4 bits, this is not a dangerous conversion
-    return ResponseType::Unknown;
-  }
+  assert(mdp.d_header.opcode == Opcode::Notify);
 
   g_log<<Logger::Info<<logPrefix<<"NOTIFY for "<<mdp.d_qname<<"|"<<QType(mdp.d_qtype).toString()<<" "<< Opcode::to_s(mdp.d_header.opcode) <<" from "<<saddr.toStringWithPort()<<endl;
 
-  auto found = g_domainConfigs.find(mdp.d_qname);
+  ZoneName zonename(mdp.d_qname);
+  auto found = g_domainConfigs.find(zonename);
   if (found == g_domainConfigs.end()) {
     g_log<<Logger::Info<<("Domain name '" + mdp.d_qname.toLogString() + "' is not configured for notification")<<endl;
     return ResponseType::RefusedQuery;
   }
 
-  auto masters = found->second.masters;
+  auto primaries = found->second.primaries;
 
-  bool masterFound = false;
+  bool primaryFound = false;
 
-  for(const auto &master : masters) {
-    if (ComboAddress::addressOnlyEqual()(saddr, master)) {
-      masterFound = true;
+  for (const auto& primary : primaries) {
+    if (ComboAddress::addressOnlyEqual()(saddr, primary)) {
+      primaryFound = true;
       break;
     }
   }
 
-  if (masterFound) {
-    g_notifiesReceived.lock()->insert(mdp.d_qname);
+  if (primaryFound) {
+    g_notifiesReceived.lock()->insert(zonename);
+
+    if (!found->second.notify.empty()) {
+      for (const auto& address : found->second.notify) {
+        g_log << Logger::Debug << logPrefix << "Queuing notification for " << mdp.d_qname << " to " << address.toStringWithPort() << std::endl;
+        g_notificationQueue.lock()->add(zonename, address);
+      }
+    }
     return ResponseType::EmptyNoError;
   }
 
@@ -546,12 +685,13 @@ static ResponseType checkQuery(const MOADNSParser& mdp, const ComboAddress& sadd
     }
 
     {
-      if (g_domainConfigs.find(mdp.d_qname) == g_domainConfigs.end()) {
+      ZoneName zonename(mdp.d_qname);
+      if (g_domainConfigs.find(zonename) == g_domainConfigs.end()) {
         info_msg.push_back("Domain name '" + mdp.d_qname.toLogString() + "' is not configured for distribution");
         ret = ResponseType::RefusedQuery;
       }
       else {
-        const auto zoneInfo = getCurrentZoneInfo(mdp.d_qname);
+        const auto zoneInfo = getCurrentZoneInfo(zonename);
         if (zoneInfo == nullptr) {
           info_msg.emplace_back("Domain has not been transferred yet");
           ret = ResponseType::RefusedQuery;
@@ -601,7 +741,7 @@ static bool makeEmptyNoErrorPacket(const MOADNSParser& mdp, vector<uint8_t>& pac
  */
 static bool makeSOAPacket(const MOADNSParser& mdp, vector<uint8_t>& packet) {
 
-  auto zoneInfo = getCurrentZoneInfo(mdp.d_qname);
+  auto zoneInfo = getCurrentZoneInfo(ZoneName(mdp.d_qname));
   if (zoneInfo == nullptr) {
     return false;
   }
@@ -675,12 +815,13 @@ static bool sendPacketOverTCP(int fd, const std::vector<uint8_t>& packet)
   return true;
 }
 
-static bool addRecordToWriter(DNSPacketWriter& pw, const DNSName& zoneName, const DNSRecord& record, bool compress)
+static bool addRecordToWriter(DNSPacketWriter& pwr, const DNSName& zoneName, const DNSRecord& record, bool compress, bool ignoreLimit=false)
 {
-  pw.startRecord(record.d_name + zoneName, record.d_type, record.d_ttl, QClass::IN, DNSResourceRecord::ANSWER, compress);
-  record.getContent()->toPacket(pw);
-  if (pw.size() > 16384) {
-    pw.rollback();
+  pwr.startRecord(record.d_name + zoneName, record.d_type, record.d_ttl, QClass::IN, DNSResourceRecord::ANSWER, compress);
+  record.getContent()->toPacket(pwr);
+  uint32_t maxsize = ignoreLimit ? 65535 : 16384;
+  if (pwr.size() > maxsize) {
+    pwr.rollback();
     return false;
   }
   return true;
@@ -690,6 +831,7 @@ template <typename T> static bool sendRecordsOverTCP(int fd, const MOADNSParser&
 {
   vector<uint8_t> packet;
 
+  bool wasRolledBack = false;
   for (auto it = records.cbegin(); it != records.cend();) {
     bool recordsAdded = false;
     packet.clear();
@@ -704,14 +846,21 @@ template <typename T> static bool sendRecordsOverTCP(int fd, const MOADNSParser&
         continue;
       }
 
-      if (addRecordToWriter(pw, mdp.d_qname, *it, g_compress)) {
+      if (addRecordToWriter(pw, mdp.d_qname, *it, g_compress, wasRolledBack && !recordsAdded)) {
         recordsAdded = true;
+        wasRolledBack = false;
         it++;
       }
       else {
+        if (wasRolledBack) {
+          // We did a rollback in the previous loop, and the large single record won't
+          // fit in the new packet by itself. Should be impossible, but here we are.
+          return false;
+        }
         if (recordsAdded) {
           pw.commit();
           sendPacketOverTCP(fd, packet);
+          wasRolledBack = true;
         }
         if (it == records.cbegin()) {
           /* something is wrong */
@@ -738,9 +887,10 @@ static bool handleAXFR(int fd, const MOADNSParser& mdp) {
      until we release it.
   */
 
-  g_stats.incrementAXFRinQueries(mdp.d_qname);
+  ZoneName zonename(mdp.d_qname);
+  g_stats.incrementAXFRinQueries(zonename);
 
-  auto zoneInfo = getCurrentZoneInfo(mdp.d_qname);
+  auto zoneInfo = getCurrentZoneInfo(zonename);
   if (zoneInfo == nullptr) {
     return false;
   }
@@ -778,16 +928,17 @@ static bool handleIXFR(int fd, const MOADNSParser& mdp, const shared_ptr<const S
      until we release it.
   */
 
-  g_stats.incrementIXFRinQueries(mdp.d_qname);
+  ZoneName zonename(mdp.d_qname);
+  g_stats.incrementIXFRinQueries(zonename);
 
-  auto zoneInfo = getCurrentZoneInfo(mdp.d_qname);
+  auto zoneInfo = getCurrentZoneInfo(zonename);
   if (zoneInfo == nullptr) {
     return false;
   }
 
   uint32_t ourLatestSerial = zoneInfo->soa->d_st.serial;
 
-  if (rfc1982LessThan(ourLatestSerial, clientSOA->d_st.serial) || ourLatestSerial == clientSOA->d_st.serial) {
+  if (rfc1982LessThanOrEqual(ourLatestSerial, clientSOA->d_st.serial)) {
     /* RFC 1995 Section 2
      *    If an IXFR query with the same or newer version number than that of
      *    the server is received, it is replied to with a single SOA record of
@@ -917,7 +1068,7 @@ try
 
   ResponseType respt = ResponseType::Unknown;
 
-  if (allowedByACL(saddr, true)) {
+  if (mdp.d_header.opcode == Opcode::Notify && allowedByACL(saddr, true)) {
     respt = maybeHandleNotify(mdp, saddr);
   }
   else if (!allowedByACL(saddr)) {
@@ -941,12 +1092,12 @@ try
      * Let's not complicate this with IXFR over UDP (and looking if we need to truncate etc).
      * Just send the current SOA and let the client try over TCP
      */
-    g_stats.incrementSOAinQueries(mdp.d_qname); // FIXME: this also counts IXFR queries (but the response is the same as to a SOA query)
+    g_stats.incrementSOAinQueries(ZoneName(mdp.d_qname)); // FIXME: this also counts IXFR queries (but the response is the same as to a SOA query)
     makeSOAPacket(mdp, packet);
   } else if (respt == ResponseType::EmptyNoError) {
     makeEmptyNoErrorPacket(mdp, packet);
   } else if (respt == ResponseType::RefusedQuery) {
-    g_stats.incrementUnknownDomainInQueries(mdp.d_qname);
+    g_stats.incrementUnknownDomainInQueries(ZoneName(mdp.d_qname));
     makeRefusedPacket(mdp, packet);
   } else if (respt == ResponseType::RefusedOpcode) {
     g_stats.incrementNotImplemented(mdp.d_header.opcode);
@@ -991,7 +1142,7 @@ static void handleTCPRequest(int fd, boost::any&) {
   }
 
   {
-    std::lock_guard<std::mutex> lg(g_tcpRequestFDsMutex);
+    auto lock = std::scoped_lock(g_tcpRequestFDsMutex);
     g_tcpRequestFDs.push({cfd, saddr});
   }
   g_tcpHandlerCV.notify_one();
@@ -1039,7 +1190,7 @@ static void tcpWorker(int tid) {
       ResponseType respt = ResponseType::Unknown;
 
       // this code is duplicated from the UDP path
-      if (allowedByACL(saddr, true)) {
+      if (mdp.d_header.opcode == Opcode::Notify && allowedByACL(saddr, true)) {
         respt = maybeHandleNotify(mdp, saddr);
       }
       else if (!allowedByACL(saddr)) {
@@ -1090,8 +1241,8 @@ static void tcpWorker(int tid) {
         for (auto &answer : mdp.d_answers) {
           // from dnsparser.hh:
           // typedef vector<pair<DNSRecord, uint16_t > > answers_t;
-          if (answer.first.d_type == QType::SOA && answer.first.d_place == DNSResourceRecord::AUTHORITY) {
-            clientSOA = getRR<SOARecordContent>(answer.first);
+          if (answer.d_type == QType::SOA && answer.d_place == DNSResourceRecord::AUTHORITY) {
+            clientSOA = getRR<SOARecordContent>(answer);
             if (clientSOA != nullptr) {
               break;
             }
@@ -1257,13 +1408,13 @@ static bool parseAndCheckConfig(const string& configpath, YAML::Node& config) {
           retval = false;
           continue;
         }
-        domain["domain"].as<DNSName>();
+        domain["domain"].as<ZoneName>();
       } catch (const runtime_error &e) {
         g_log<<Logger::Error<<"Unable to read domain '"<<domain["domain"].as<string>()<<"': "<<e.what()<<endl;
       }
       try {
         if (!domain["master"]) {
-          g_log<<Logger::Error<<"Domain '"<<domain["domain"].as<string>()<<"' has no master configured!"<<endl;
+          g_log << Logger::Error << "Domain '" << domain["domain"].as<string>() << "' has no primary configured!" << endl;
           retval = false;
           continue;
         }
@@ -1273,7 +1424,7 @@ static bool parseAndCheckConfig(const string& configpath, YAML::Node& config) {
 
         g_notifySources.addMask(notifySource);
       } catch (const runtime_error &e) {
-        g_log<<Logger::Error<<"Unable to read domain '"<<domain["domain"].as<string>()<<"' master address: "<<e.what()<<endl;
+        g_log << Logger::Error << "Unable to read domain '" << domain["domain"].as<string>() << "' primary address: " << e.what() << endl;
         retval = false;
       }
       if (domain["max-soa-refresh"]) {
@@ -1353,6 +1504,7 @@ struct IXFRDistConfiguration
   bool shouldExit{false};
 };
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** argv, FDMultiplexer& fdm)
 {
   IXFRDistConfiguration configuration;
@@ -1421,11 +1573,33 @@ static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** 
     for (auto const &domain : config["domains"]) {
       set<ComboAddress> s;
       s.insert(domain["master"].as<ComboAddress>());
-      g_domainConfigs[domain["domain"].as<DNSName>()].masters = s;
+      g_domainConfigs[domain["domain"].as<ZoneName>()].primaries = s;
       if (domain["max-soa-refresh"].IsDefined()) {
-        g_domainConfigs[domain["domain"].as<DNSName>()].maxSOARefresh = domain["max-soa-refresh"].as<uint32_t>();
+        g_domainConfigs[domain["domain"].as<ZoneName>()].maxSOARefresh = domain["max-soa-refresh"].as<uint32_t>();
       }
-      g_stats.registerDomain(domain["domain"].as<DNSName>());
+      if (domain["notify"].IsDefined()) {
+        auto& listset = g_domainConfigs[domain["domain"].as<ZoneName>()].notify;
+        if (domain["notify"].IsScalar()) {
+          auto remote = domain["notify"].as<std::string>();
+          try {
+            listset.emplace(remote, 53);
+          }
+          catch (PDNSException& e) {
+            g_log << Logger::Error << "Unparseable IP in notify directive " << remote << ". Error: " << e.reason << endl;
+          }
+        } else if (domain["notify"].IsSequence()) {
+          for (const auto& entry: domain["notify"]) {
+            auto remote = entry.as<std::string>();
+            try {
+              listset.emplace(remote, 53);
+            }
+            catch (PDNSException& e) {
+              g_log << Logger::Error << "Unparseable IP in notify directive " << remote << ". Error: " << e.reason << endl;
+            }
+          }
+        }
+      }
+      g_stats.registerDomain(domain["domain"].as<ZoneName>());
     }
 
     for (const auto &addr : config["acl"].as<vector<string>>()) {
@@ -1464,6 +1638,11 @@ static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** 
           int s = SSocket(addr.sin4.sin_family, stype, 0);
           setNonBlocking(s);
           setReuseAddr(s);
+          if (addr.isIPv6()) {
+            int one = 1;
+            (void)setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
+          }
+
           SBind(s, addr);
           if (stype == SOCK_STREAM) {
             SListen(s, 30); // TODO make this configurable
@@ -1485,15 +1664,16 @@ static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** 
     }
 
     if (config["gid"].IsDefined()) {
+      bool gidParsed = false;
       auto gid = config["gid"].as<string>();
       try {
         configuration.gid = pdns::checked_stoi<gid_t>(gid);
+        gidParsed = true;
       }
       catch (const std::exception& e) {
-        g_log<<Logger::Error<<"Can not parse gid "<<gid<<endl;
-        had_error = true;
+        configuration.gid = 0;
       }
-      if (configuration.gid != 0) {
+      if (!gidParsed) {
         //NOLINTNEXTLINE(concurrency-mt-unsafe): only one thread at this point
         const struct group *gr = getgrnam(gid.c_str());
         if (gr == nullptr) {
@@ -1534,15 +1714,16 @@ static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** 
     }
 
     if (config["uid"].IsDefined()) {
+      bool uidParsed = false;
       auto uid = config["uid"].as<string>();
       try {
         configuration.uid = pdns::checked_stoi<uid_t>(uid);
+        uidParsed = true;
       }
       catch (const std::exception& e) {
-        g_log<<Logger::Error<<"Can not parse uid "<<uid<<endl;
-        had_error = true;
+        configuration.uid = 0;
       }
-      if (configuration.uid != 0) {
+      if (!uidParsed) {
         //NOLINTNEXTLINE(concurrency-mt-unsafe): only one thread at this point
         const struct passwd *pw = getpwnam(uid.c_str());
         if (pw == nullptr) {
@@ -1550,8 +1731,11 @@ static std::optional<IXFRDistConfiguration> parseConfiguration(int argc, char** 
           had_error = true;
         } else {
           configuration.uid = pw->pw_uid;
+          uidParsed = true;
         }
         //NOLINTNEXTLINE(concurrency-mt-unsafe): only one thread at this point
+      }
+      if (uidParsed) {
         configuration.userInfo = getpwuid(configuration.uid);
       }
     }
@@ -1637,11 +1821,6 @@ int main(int argc, char** argv) {
     }
 
     if (configuration->uid != 0) {
-      g_log<<Logger::Notice<<"Dropping effective user-id to "<<configuration->uid<<endl;
-      if (setuid(configuration->uid) < 0) {
-        g_log<<Logger::Error<<"Could not set user id to "<<configuration->uid<<": "<<stringerror()<<endl;
-        had_error = true;
-      }
       if (configuration->userInfo == nullptr) {
         if (setgroups(0, nullptr) < 0) {
           g_log<<Logger::Error<<"Unable to drop supplementary gids: "<<stringerror()<<endl;
@@ -1652,6 +1831,12 @@ int main(int argc, char** argv) {
           g_log<<Logger::Error<<"Unable to set supplementary groups: "<<stringerror()<<endl;
           had_error = true;
         }
+      }
+
+      g_log<<Logger::Notice<<"Dropping effective user-id to "<<configuration->uid<<endl;
+      if (setuid(configuration->uid) < 0) {
+        g_log<<Logger::Error<<"Could not set user id to "<<configuration->uid<<": "<<stringerror()<<endl;
+        had_error = true;
       }
     }
 
@@ -1674,6 +1859,7 @@ int main(int argc, char** argv) {
                    configuration->axfrTimeout,
                    configuration->failedSOARetry,
                    configuration->axfrMaxRecords);
+    std::thread communicator(communicatorThread);
 
     vector<std::thread> tcpHandlers;
     tcpHandlers.reserve(configuration->tcpInThreads);
@@ -1701,6 +1887,7 @@ int main(int argc, char** argv) {
     g_log<<Logger::Debug<<"Waiting for all threads to stop"<<endl;
     g_tcpHandlerCV.notify_all();
     ut.join();
+    communicator.join();
     for (auto &t : tcpHandlers) {
       t.join();
     }

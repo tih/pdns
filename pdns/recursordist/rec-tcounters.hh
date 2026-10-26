@@ -37,7 +37,6 @@ namespace rec
 // Simple counters
 enum class Counter : uint8_t
 {
-  syncresqueries,
   outgoingtimeouts,
   outgoing4timeouts,
   outgoing6timeouts,
@@ -60,6 +59,7 @@ enum class Counter : uint8_t
   sourceDisallowedNotify, // when this is increased, qcounter is also
   zoneDisallowedNotify, // when this is increased, qcounter is also
   policyDrops,
+  tcpOverflow,
   tcpClientOverflow,
   clientParseError,
   serverParseError,
@@ -78,7 +78,6 @@ enum class Counter : uint8_t
   ednsPingMismatches,
   noPingOutQueries,
   noEdnsOutQueries,
-  packetCacheHits,
   noPacketError,
   ignoredCount,
   emptyQueriesCount,
@@ -96,6 +95,18 @@ enum class Counter : uint8_t
   maintenanceCalls,
   nodCount,
   udrCount,
+  maxChainLength,
+  maxChainWeight,
+  chainLimits,
+  ecsMissingCount,
+  cookieMalformed,
+  cookieMatched,
+  cookieMismatchedOverTCP,
+  cookieMismatchedOverUDP,
+  cookieNotInReply,
+  cookieRetry,
+  cookieProbeSupported,
+  cookieProbeUnsupported,
 
   numberOfCounters
 };
@@ -178,7 +189,7 @@ struct Counters
 
     void addToRollingAvg(double value, uint64_t rollsize)
     {
-      add((1.0 - 1.0 / static_cast<double>(rollsize)) * avg + value / static_cast<double>(rollsize));
+      add(((1.0 - 1.0 / static_cast<double>(rollsize)) * avg) + (value / static_cast<double>(rollsize)));
     }
   };
   // And an array of weighted averaged values
@@ -193,11 +204,11 @@ struct Counters
       }
       return *this;
     }
-    static const size_t numberoOfRCodes = 16;
-    std::array<uint64_t, numberoOfRCodes> rcodeCounters;
+    static const size_t numberOfRCodes = 16;
+    std::array<uint64_t, numberOfRCodes> rcodeCounters{};
   };
   // An RCodes histogram
-  RCodeCounters auth{};
+  RCodeCounters auth;
 
   std::array<pdns::Histogram, static_cast<size_t>(Histogram::numberOfCounters)> histograms = {
     pdns::Histogram{"answers", {1000, 10000, 100000, 1000000}},
@@ -209,7 +220,7 @@ struct Counters
     pdns::Histogram{"cumul-authanswers-", 1000, 13}};
 
   // Response stats
-  RecResponseStats responseStats{};
+  RecResponseStats responseStats;
 
   // DNSSEC stats
   struct DNSSECCounters
@@ -225,7 +236,7 @@ struct Counters
     {
       return counts.at(static_cast<size_t>(index));
     }
-    std::array<uint64_t, static_cast<size_t>(vState::BogusInvalidDNSKEYProtocol) + 1> counts;
+    std::array<uint64_t, static_cast<size_t>(vState::BogusInvalidDNSKEYProtocol) + 1> counts{};
   };
   std::array<DNSSECCounters, static_cast<size_t>(DNSSECHistogram::numberOfCounters)> dnssecCounters{};
 
@@ -243,9 +254,9 @@ struct Counters
     {
       return counts.at(static_cast<size_t>(index));
     }
-    std::array<uint64_t, static_cast<size_t>(DNSFilterEngine::PolicyKind::Custom) + 1> counts;
+    std::array<uint64_t, static_cast<size_t>(DNSFilterEngine::PolicyKind::Custom) + 1> counts{};
   };
-  PolicyCounters policyCounters{};
+  PolicyCounters policyCounters;
 
   // Policy hits by name
   struct PolicyNameCounters
@@ -261,27 +272,16 @@ struct Counters
   };
   PolicyNameCounters policyNameHits;
 
-  Counters()
-  {
-    for (auto& elem : uint64Count) {
-      elem = 0;
-    }
-    // doubleWAvg has a default constructor that initializes
-    for (auto& elem : auth.rcodeCounters) {
-      elem = 0;
-    }
-    // Histogram has a constructor that initializes
-    // RecResponseStats has a default constructor that initializes
-    for (auto& histogram : dnssecCounters) {
-      for (auto& elem : histogram.counts) {
-        elem = 0;
-      }
-    }
-    for (auto& elem : policyCounters.counts) {
-      elem = 0;
-    }
-    // PolicyNameCounters has a default constuctor that initializes
-  }
+  Counters() = default;
+  // {
+  //   // uint64Count field has initializer
+  //   // doubleWAvg has a default constructor that initializes
+  //   // auth.RCodeCounters field is initialized
+  //   // Histogram has a constructor that initializes
+  //   // RecResponseStats has a default constructor that initializes
+  //   // dnssecCounters field is initialized
+  //   // PolicyNameCounters has a default constructor that initializes
+  // }
 
   // Merge a set of counters into an existing set of counters. For simple counters, that will be additions
   // for averages, we should take the weights into account. Histograms need to sum all individual counts.
@@ -321,7 +321,7 @@ struct Counters
   }
 
   // We only have a single PolicyHistogram indexed PolicyCounters, so no need to select a specific one
-  PolicyCounters& at(PolicyHistogram)
+  PolicyCounters& at(PolicyHistogram /* unused */)
   {
     return policyCounters;
   }
