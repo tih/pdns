@@ -1443,6 +1443,11 @@ int main(int argc, char** argv)
            setupLogger->info(Logr::Info, "Configuration OK", "path", Logging::Loggable(cmdLine.config)));
       doExitNicely();
     }
+#ifdef __NetBSD__
+    if(cmdLine.beSupervised) {
+      daemon(0, 0);
+    }
+#endif
 
     SLOG(infolog("dnsdist %s comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it according to the terms of the GPL version 2", VERSION),
          setupLogger->info(Logr::Info, "dnsdist " VERSION " comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it according to the terms of the GPL version 2"));
