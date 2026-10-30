@@ -68,6 +68,12 @@
 #    endif
 #endif
 
+#ifndef HAVE_EXPLICIT_MEMSET
+#    if defined(__NetBSD__)
+#        define HAVE_EXPLICIT_MEMSET 1
+#    endif
+#endif
+
 #ifdef __aarch64__
 #    ifndef __ARM_FEATURE_CRYPTO
 #        define __ARM_FEATURE_CRYPTO 1
@@ -186,7 +192,7 @@ AES_KEYGEN(BlockVec block_vec, const int rc)
     uint8x16_t a = vaeseq_u8(vreinterpretq_u8_u64(block_vec), vmovq_n_u8(0));
     // Shuffle for the key expansion rotation.
     static const uint8_t aes_keygen_shuffle[16] = {
-        4, 1, 14, 11, 1, 14, 11, 4, 12, 9, 6, 3, 9, 6, 3, 12,
+        4, 1, 14, 11, 1, 14, 11, 4, 12, 9, 6, 3, 9, 6, 3, 12
     };
     const BlockVec b = vreinterpretq_u64_u8(vqtbl1q_u8(a, vld1q_u8(aes_keygen_shuffle)));
     // Combine with round constant.
@@ -655,6 +661,8 @@ hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len)
             c -= '0';
         } else if (c >= 'a' && c <= 'f') {
             c -= 'a' - 10;
+        } else if (c >= 'A' && c <= 'F') {
+            c -= 'A' - 10;
         } else {
             return 0U;
         }
@@ -662,6 +670,8 @@ hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len)
             b -= '0';
         } else if (b >= 'a' && b <= 'f') {
             b -= 'a' - 10;
+        } else if (b >= 'A' && b <= 'F') {
+            b -= 'A' - 10;
         } else {
             return 0U;
         }
@@ -679,6 +689,8 @@ ipcrypt_zeroize(void *pnt, size_t len)
 {
 #ifdef HAVE_EXPLICIT_BZERO
     explicit_bzero(pnt, len);
+#elif defined(HAVE_EXPLICIT_MEMSET)
+    explicit_memset(pnt, 0, len);
 #elif defined(_MSC_VER)
     SecureZeroMemory(pnt, len);
 #elif defined(__STDC_LIB_EXT1__)
@@ -706,7 +718,8 @@ ipcrypt_zeroize(void *pnt, size_t len)
 int
 ipcrypt_key_from_hex(uint8_t *key, size_t key_len, const char *hex, size_t hex_len)
 {
-    if (hex_len != 2 * IPCRYPT_KEYBYTES && hex_len != 2 * IPCRYPT_NDX_KEYBYTES) {
+    if ((key_len != IPCRYPT_KEYBYTES && key_len != IPCRYPT_NDX_KEYBYTES) ||
+        hex_len != key_len * 2U) {
         return -1;
     }
     if (hex2bin(key, key_len, hex, hex_len) != key_len) {
@@ -1383,7 +1396,9 @@ ipcrypt_nd_encrypt_ip_str(const IPCrypt *ipcrypt, char encrypted_ip_str[IPCRYPT_
 
     COMPILER_ASSERT(IPCRYPT_NDIP_STR_BYTES == IPCRYPT_NDIP_BYTES * 2 + 1);
     // Convert to 16-byte IP.
-    ipcrypt_str_to_ip16(ip16, ip_str);
+    if (ipcrypt_str_to_ip16(ip16, ip_str) != 0) {
+        return 0;
+    }
     // Perform non-deterministic encryption.
     ipcrypt_nd_encrypt_ip16(ipcrypt, ndip, ip16, random);
     // Convert the 24-byte ndip to a hex string.
@@ -1468,7 +1483,9 @@ ipcrypt_ndx_encrypt_ip_str(const IPCryptNDX *ipcrypt,
 
     COMPILER_ASSERT(IPCRYPT_NDX_NDIP_STR_BYTES == IPCRYPT_NDX_NDIP_BYTES * 2 + 1);
     // Convert to 16-byte IP.
-    ipcrypt_str_to_ip16(ip16, ip_str);
+    if (ipcrypt_str_to_ip16(ip16, ip_str) != 0) {
+        return 0;
+    }
     // Perform non-deterministic encryption.
     ipcrypt_ndx_encrypt_ip16(ipcrypt, ndip, ip16, random);
     // Convert the 32-byte ndip to a hex string.
