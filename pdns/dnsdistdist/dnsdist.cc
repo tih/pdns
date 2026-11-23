@@ -1444,7 +1444,7 @@ int main(int argc, char** argv)
       doExitNicely();
     }
 #ifdef __NetBSD__
-    if(!cmdLine.beSupervised) {
+    if(cmdLine.beSupervised) {
       daemon(0, 0);
     }
 #endif
